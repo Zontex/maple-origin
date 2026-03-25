@@ -88,16 +88,17 @@ ClickManager.doUpdate = function (msPerTick: number, camera: CameraInterface) {
     });
   }
 
-  // click event
-  for (const button of buttons) {
-    if (clickedOnThisUpdate && !clickedOnLastUpdate) {
-      // Try handling clicks on dragable menus first
-      for (const menu of this.dragableMenus) {
-        if (menu.onMouseDown && menu.onMouseDown(mousePoint.x, mousePoint.y)) {
-          break;
-        }
+  // Handle clicks on draggable menus (once per click, outside button loop)
+  if (clickedOnThisUpdate && !clickedOnLastUpdate) {
+    for (const menu of this.dragableMenus) {
+      if (menu.onMouseDown && menu.onMouseDown(mousePoint.x, mousePoint.y)) {
+        break;
       }
     }
+  }
+
+  // click event
+  for (const button of buttons) {
 
     if (this.activeButton === button) {
       const originallyClickedButton = GUIUtil.pointInRectangle(

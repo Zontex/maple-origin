@@ -475,9 +475,12 @@ export default class UIQuestDialog {
 
     const dt = this.scriptDialogType;
 
-    // Use Quest-style buttons for all script dialogs (correct MapleStory look)
-    const nextBtn = this.questNode?.BtOK?.nChildren;   // "Accept" style — used for Next/OK/Accept/Yes
-    const prevBtn = this.questNode?.BtNo?.nChildren;    // "Decline" style — used for Prev/Decline/No
+    // Use Quest-style buttons for script dialogs
+    // "Accept" for accept/decline dialogs, "OK" (UtilDlgEx) for ok/next/prev
+    const okBtn = this.utilDlgExNode?.BtOK?.nChildren;  // "OK" style
+    const acceptBtn = this.questNode?.BtOK?.nChildren;   // "Accept" style
+    const prevBtn = this.questNode?.BtNo?.nChildren;     // "Decline" style
+    const nextBtn = okBtn; // Default single-button uses "OK"
 
     // Single-button dialogs (next, prev, ok) ALL send mode=1 when clicked.
     // The button label is cosmetic — the single action always advances the script.
@@ -500,11 +503,11 @@ export default class UIQuestDialog {
         break;
       case 'acceptDecline':
         // Two buttons: Accept (mode=1, type=1) + Decline (mode=0, type=1)
-        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, nextBtn, () => cb(1, 1, -1));
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, acceptBtn, () => cb(1, 1, -1));
         this.addButton(this.x + DIALOG_WIDTH - 120, bottomY, prevBtn, () => cb(0, 1, -1));
         break;
       case 'yesNo':
-        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, nextBtn, () => cb(1, 1, -1));
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, acceptBtn, () => cb(1, 1, -1));
         this.addButton(this.x + DIALOG_WIDTH - 120, bottomY, prevBtn, () => cb(0, 1, -1));
         break;
       case 'simple':
