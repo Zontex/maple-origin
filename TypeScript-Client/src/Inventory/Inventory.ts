@@ -23,7 +23,8 @@ class Inventory {
     this.mesos = opts.mesos || 0;
   }
 
-  async addToInventory(itemId: number, quantity: number) {
+  async addToInventory(itemId: number | string, quantity: number) {
+    itemId = typeof itemId === 'string' ? parseInt(itemId, 10) : itemId;
     console.log("Adding to inventory", itemId, quantity);
     if (MapleInventory.isMeso(itemId.toString())) {
       this.mesos += quantity;

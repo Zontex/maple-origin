@@ -74,21 +74,14 @@ const getWzNameFromInventoryId = (id: string): WzInventoryType => {
 };
 
 const getInventoryTypeFromItemId = (id: number): MapleInventoryType => {
-  const idAsString = id.toString();
-
-  /// maybe ????????????????????????
-  if (idAsString[0] === "5") {
-    return MapleInventoryType.SETUP;
-  } else {
-    const secondDigit = idAsString[1];
-    const secondDigitToWzInventoryType: Record<string, MapleInventoryType> = {
-      5: MapleInventoryType.CASH,
-      2: MapleInventoryType.USE,
-      3: MapleInventoryType.EQUIPPED,
-      4: MapleInventoryType.ETC,
-    };
-
-    return secondDigitToWzInventoryType[secondDigit];
+  const category = Math.floor(id / 1000000);
+  switch (category) {
+    case 1: return MapleInventoryType.EQUIP;
+    case 2: return MapleInventoryType.USE;
+    case 3: return MapleInventoryType.SETUP;
+    case 4: return MapleInventoryType.ETC;
+    case 5: return MapleInventoryType.CASH;
+    default: return MapleInventoryType.UNDEFINED;
   }
 };
 

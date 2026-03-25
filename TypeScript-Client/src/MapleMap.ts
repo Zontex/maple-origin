@@ -15,6 +15,10 @@ import MapleCharacter from "./MapleCharacter";
 import DropItemSprite from "./DropItem/DropItemSprite";
 import GameCanvas from "./GameCanvas";
 import UINpcTalk from './UI/UINpcTalk';
+import UIQuestDialog from './UI/UIQuestDialog';
+import QuestScriptEngine from './Quest/QuestScriptEngine';
+import NpcScriptEngine from './NpcScriptEngine';
+import QuestData from './Quest/QuestData';
 
 export interface MapleMap {
   id: number | string;
@@ -30,6 +34,10 @@ export interface MapleMap {
   names: any;
   npcs: any;
   npcDialog: UINpcTalk;
+  questDialog: UIQuestDialog;
+  scriptEngine: QuestScriptEngine;
+  npcScriptEngine: NpcScriptEngine;
+  mapId: number;
   monsters: any;
   itemDrops: any;
   PlayerCharacter: any;
@@ -41,6 +49,7 @@ export interface MapleMap {
   getLocationAboveFoothold: (footholdId: any) => any;
   getHorizontalFootHolds: () => any;
   getLocationAboveRandomFoothold: () => any;
+  getCenterFootholdLocation: () => any;
   loadBoundaries: (wzNode: any, footholds: any) => any;
   getNearbyTownMapId: () => any;
   loadBackgrounds: (wzNode: any) => Promise<any>;
@@ -72,6 +81,9 @@ const MapleMap = {} as MapleMap;
 const minLoadTimeInSeconds = 1;
 
 MapleMap.load = async function (id: number | string) {
+  // Clear respawn timers from previous map
+  this.clearRespawnTimers?.();
+
   const startTime = new Date().getTime();
   this.doneLoading = false;
 
@@ -114,9 +126,7 @@ MapleMap.load = async function (id: number | string) {
 
   const endTime = new Date().getTime();
   console.log(`MapleMap.load ${id} took ${endTime - startTime}ms`);
-  setTimeout(() => {
-    this.doneLoading = true;
-  }, minLoadTimeInSeconds * 500 - (endTime - startTime));
+  this.doneLoading = true;
 
   this.itemDrops = [];
 
@@ -125,6 +135,11 @@ MapleMap.load = async function (id: number | string) {
     x: 300,
     y: 200,
   });
+
+  this.questDialog = await UIQuestDialog.fromOpts();
+  this.scriptEngine = new QuestScriptEngine();
+  this.npcScriptEngine = new NpcScriptEngine();
+  this.mapId = id as number;
 };
 
 MapleMap.addItemDrop = function (itemDrop) {
@@ -177,6 +192,42 @@ MapleMap.getLocationAboveRandomFoothold = function () {
   ];
 
   return this.getLocationAboveFoothold(randomFootholdId);
+};
+
+MapleMap.getCenterFootholdLocation = function () {
+  const centerX = Math.floor((this.boundaries.left + this.boundaries.right) / 2);
+  const horizontalFhs: any[] = Object.values(this.footholds).filter(
+    (fh: any) => fh.x1 <= centerX && fh.x2 >= centerX
+  );
+
+  if (horizontalFhs.length > 0) {
+    // Pick the foothold closest to center that the player can stand on
+    const fh = horizontalFhs[0];
+    const t = (centerX - fh.x1) / (fh.x2 - fh.x1 || 1);
+    const y = fh.y1 + t * (fh.y2 - fh.y1);
+    return { x: centerX, y };
+  }
+
+  // Fallback: find longest horizontal foothold (likely a main platform)
+  const allFhs: any[] = Object.values(this.footholds);
+  let bestFh: any = null;
+  let bestLen = 0;
+  for (const fh of allFhs) {
+    const len = Math.abs(fh.x2 - fh.x1);
+    if (len > bestLen) {
+      bestLen = len;
+      bestFh = fh;
+    }
+  }
+
+  if (bestFh) {
+    const x = (bestFh.x1 + bestFh.x2) / 2;
+    const t = (x - bestFh.x1) / (bestFh.x2 - bestFh.x1 || 1);
+    const y = bestFh.y1 + t * (bestFh.y2 - bestFh.y1);
+    return { x, y };
+  }
+
+  return { x: centerX, y: (this.boundaries.top + this.boundaries.bottom) / 2 };
 };
 
 MapleMap.loadBackgrounds = async function (wzNode) {
@@ -288,15 +339,26 @@ MapleMap.spawnMonster = async function (opts = {}) {
   this.monsters.push(mob);
 };
 
+// Store original spawn definitions for respawning
+let monsterSpawnDefs: any[] = [];
+let respawnTimers: any[] = [];
+const RESPAWN_DELAY = 7000; // 7 seconds, similar to v83
+
+MapleMap.clearRespawnTimers = function () {
+  for (const timer of respawnTimers) clearTimeout(timer);
+  respawnTimers = [];
+  monsterSpawnDefs = [];
+};
+
 let currentMonsters: Monster[] = [];
 MapleMap.loadMonsters = async function (wzNode) {
   footholds = this.footholds;
+  monsterSpawnDefs = [];
 
   for (const mobNode of wzNode.nChildren.filter(
     (n: any) => n.type.nValue === "m"
   )) {
-    console.log("mobNode", mobNode);
-    await this.spawnMonster({
+    const spawnDef = {
       oId: null,
       id: mobNode.id.nValue,
       x: mobNode.x.nValue,
@@ -306,7 +368,9 @@ MapleMap.loadMonsters = async function (wzNode) {
       minX: mobNode.rx0.nValue,
       maxX: mobNode.rx1.nValue,
       map: this,
-    });
+    };
+    monsterSpawnDefs.push(spawnDef);
+    await this.spawnMonster(spawnDef);
   }
   currentMonsters = this.monsters;
 };
@@ -410,7 +474,24 @@ MapleMap.update = function (msPerTick) {
     return;
   }
 
-  // Remove destroyed monsters.
+  // Remove destroyed monsters and schedule respawns
+  const mapRef = this;
+  for (const mob of this.monsters) {
+    if (mob.destroyed && !mob.respawnScheduled) {
+      mob.respawnScheduled = true;
+      // Find the matching spawn definition to respawn from
+      const spawnDef = monsterSpawnDefs.find((s: any) => s.id === mob.id);
+      if (spawnDef) {
+        const timer = setTimeout(async () => {
+          // Only respawn if we're still on the same map
+          if (mapRef.mapId === spawnDef.map?.mapId) {
+            await mapRef.spawnMonster({ ...spawnDef });
+          }
+        }, RESPAWN_DELAY);
+        respawnTimers.push(timer);
+      }
+    }
+  }
   this.monsters = this.monsters.filter((m: Monster) => !m.destroyed);
 
   this.backgrounds.forEach((bg: Background) => bg.update(msPerTick));
@@ -463,14 +544,23 @@ MapleMap.render = function (
   this.portals.forEach(draw);
   this.backgrounds.filter((bg: Background) => !!bg.front).forEach(draw);
 
-  // Draw level-up bubbles for characters.
-  const drawLevelUp = (c: MapleCharacter) => {
-    const levelUpFrame = c.levelUpFrames[c.levelUpFrame];
+  // Draw character effects (level-up, quest clear, quest start, EXP gain)
+  const drawEffect = (c: MapleCharacter, frames: any, frameIndex: number) => {
+    const frame = frames?.[frameIndex];
+    if (!frame || !frame.nGetImage) return;
+    const img = frame.nGetImage();
+    if (!img || (img instanceof HTMLImageElement && !img.complete)) return;
+    const ox = frame.origin?.nX ?? 0;
+    const oy = frame.origin?.nY ?? 0;
     canvas.drawImage({
-      img: levelUpFrame.nGetImage(),
-      dx: c.pos.x - levelUpFrame.origin.nX - camera.x,
-      dy: c.pos.y - levelUpFrame.origin.nY - camera.y,
+      img,
+      dx: c.pos.x - ox - camera.x,
+      dy: c.pos.y - oy - camera.y,
     });
+  };
+
+  const drawLevelUp = (c: MapleCharacter) => {
+    drawEffect(c, c.levelUpFrames, c.levelUpFrame);
   };
   this.characters
     .filter((c: MapleCharacter) => !!c.levelingUp)
@@ -481,6 +571,15 @@ MapleMap.render = function (
     if (this.PlayerCharacter.levelingUp) {
       drawLevelUp(this.PlayerCharacter);
     }
+    if (this.PlayerCharacter.questClearActive) {
+      drawEffect(this.PlayerCharacter, this.PlayerCharacter.questClearFrames, this.PlayerCharacter.questClearFrame);
+    }
+    if (this.PlayerCharacter.questStartActive) {
+      drawEffect(this.PlayerCharacter, this.PlayerCharacter.questStartFrames, this.PlayerCharacter.questStartFrame);
+    }
+    if (this.PlayerCharacter.incExpActive) {
+      drawEffect(this.PlayerCharacter, this.PlayerCharacter.incExpFrames, this.PlayerCharacter.incExpFrame);
+    }
   }
 
   this.itemDrops.forEach((drop: DropItemSprite) => {
@@ -488,8 +587,6 @@ MapleMap.render = function (
   });
 
   Object.values(this.footholds).forEach(draw);
-
-  this.npcDialog.draw(canvas, camera, lag, msPerTick, tdelta);
 };
 
 // --- New: Simple click handler for NPCs ---
@@ -501,8 +598,10 @@ MapleMap.handleClick = function (
   camera: CameraInterface
 ) {
   const rect = canvasElement.getBoundingClientRect();
-  const mouseX = event.clientX - rect.left;
-  const mouseY = event.clientY - rect.top;
+  const scaleX = rect.width / (canvasElement as HTMLCanvasElement).width;
+  const scaleY = rect.height / (canvasElement as HTMLCanvasElement).height;
+  const mouseX = (event.clientX - rect.left) / scaleX;
+  const mouseY = (event.clientY - rect.top) / scaleY;
   console.log("Click detected at:", mouseX, mouseY);
 
   this.npcs.forEach(async (npc: any) => {
@@ -530,12 +629,241 @@ MapleMap.handleClick = function (
           npc.lastDialogTime = npc.dialogTimer;
         });
       } else {
-        await this.npcDialog.changeText(npc.id, null, npc.strings.name, 'Hello');
-        this.npcDialog.setIsHidden(false);
+        // Close all open UI menus when interacting with NPC
+        const mapState = (window as any).MapStateInstance;
+        mapState?.closeAllMenus?.();
+
+        // Check for quest dialog
+        const questManager = (window as any).charecter?.questManager;
+        const character = (window as any).charecter;
+        const quests = questManager?.getQuestsForNpc(npc.id);
+
+        // Check for script-based quests first
+        const npcQuestIds = QuestData.npcToQuests.get(npc.id) || [];
+        let scriptHandled = false;
+
+        for (const questId of npcQuestIds) {
+          const reqs = QuestData.requirements.get(questId);
+          if (!reqs) continue;
+          const hasScript = reqs.start.startscript || reqs.complete.endscript;
+          if (!hasScript) continue;
+
+          const state = questManager?.getQuestState(questId);
+
+          // Determine phase: if not started and this NPC starts it, run start()
+          // If started and this NPC completes it, run end()
+          let phase: 'start' | 'end' | null = null;
+          if (state === 0 && reqs.start.npc === npc.id) {
+            phase = 'start';
+          } else if (state === 1 && reqs.complete.npc === npc.id) {
+            phase = 'end';
+          } else if (state === 1 && reqs.start.npc === npc.id) {
+            // Start NPC clicked while in-progress — run start() for in-progress dialog
+            phase = 'start';
+          }
+
+          if (phase && await this.scriptEngine.hasScript(questId)) {
+            const questName = QuestData.quests.get(questId)?.name || '';
+            const dialog = this.questDialog;
+            const engine = this.scriptEngine;
+
+            await engine.begin({
+              questId,
+              phase,
+              character,
+              onShowDialog: (pending) => {
+                dialog.showScriptDialog({
+                  npcId: npc.id,
+                  npcName: npc.strings.name || 'NPC',
+                  questName,
+                  questId,
+                  text: pending.text,
+                  dialogType: pending.type,
+                  onAction: (mode, type, selection) => {
+                    if (mode === -1) {
+                      dialog.hide();
+                    } else {
+                      engine.advance(mode, type, selection);
+                    }
+                  },
+                });
+              },
+              onDispose: () => {
+                dialog.hide();
+              },
+            });
+
+            scriptHandled = true;
+            break;
+          }
+        }
+
+        if (!scriptHandled) {
+          const npcHasScript = await this.npcScriptEngine.hasScript(npc.id);
+          const hasQuests = questManager && quests &&
+            (quests.available.length > 0 || quests.inProgress.length > 0 || quests.completable.length > 0);
+
+          if (hasQuests) {
+            // Build quest listing selections like the original game
+            const selections: any[] = [];
+            let idx = 0;
+
+            // Completable quests (list3 header)
+            for (let i = 0; i < quests.completable.length; i++) {
+              const questId = quests.completable[i];
+              const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
+              selections.push({
+                index: idx,
+                label: questName,
+                headerType: i === 0 ? 'completable' : undefined,
+                questId,
+                questPhase: 'complete',
+              });
+              idx++;
+            }
+
+            // In-progress quests (list0 header)
+            for (let i = 0; i < quests.inProgress.length; i++) {
+              const questId = quests.inProgress[i];
+              const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
+              selections.push({
+                index: idx,
+                label: questName,
+                headerType: i === 0 ? 'inProgress' : undefined,
+                questId,
+                questPhase: 'inProgress',
+              });
+              idx++;
+            }
+
+            // Available quests (list1 header)
+            for (let i = 0; i < quests.available.length; i++) {
+              const questId = quests.available[i];
+              const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
+              selections.push({
+                index: idx,
+                label: questName,
+                headerType: i === 0 ? 'available' : undefined,
+                questId,
+                questPhase: 'start',
+              });
+              idx++;
+            }
+
+            // Add "ETC" section for NPC conversation if NPC has a script
+            if (npcHasScript) {
+              selections.push({
+                index: idx,
+                label: 'What else?',
+                headerType: 'etc',
+                questId: null,
+                questPhase: 'talk',
+              });
+              idx++;
+            }
+
+            // Show combined NPC dialog with quest selections
+            const dialog = this.questDialog;
+            const npcName = npc.strings.name || 'NPC';
+            const mapObj = this;
+            await dialog.showScriptDialog({
+              npcId: npc.id,
+              npcName,
+              questName: '',
+              text: '',
+              dialogType: 'simple',
+              selections,
+              onAction: async (mode: number, type: number, selIdx: number) => {
+                dialog.hide();
+                if (mode === -1) return;
+                const sel = selections[selIdx];
+                if (!sel) return;
+                const { questId, questPhase } = sel;
+                if (questPhase === 'talk') {
+                  // Run the NPC script for normal conversation
+                  await mapObj.tryNpcScript(npc);
+                  return;
+                }
+                if (questPhase === 'complete') {
+                  await dialog.show({
+                    questId,
+                    npcId: npc.id,
+                    npcName,
+                    phase: 'complete',
+                    onCompleted: () => { questManager.completeQuest(questId); },
+                  });
+                } else if (questPhase === 'start') {
+                  await dialog.show({
+                    questId,
+                    npcId: npc.id,
+                    npcName,
+                    phase: 'start',
+                    onAccepted: () => { questManager.startQuest(questId); },
+                  });
+                } else {
+                  await dialog.show({
+                    questId,
+                    npcId: npc.id,
+                    npcName,
+                    phase: 'inProgress',
+                  });
+                }
+              },
+            });
+          } else {
+            await this.tryNpcScript(npc);
+          }
+        }
       }
     }
   });
 };
 
+
+// Try running an NPC script; falls back to generic "Hello" dialog
+MapleMap.tryNpcScript = async function (npc: any) {
+  const engine = this.npcScriptEngine;
+  const hasScript = await engine.hasScript(npc.id);
+
+  if (!hasScript) {
+    await this.npcDialog.changeText(npc.id, null, npc.strings.name, 'Hello');
+    this.npcDialog.setIsHidden(false);
+    return;
+  }
+
+  const character = (window as any).charecter;
+  const dialog = this.questDialog;
+
+  await engine.begin({
+    npcId: npc.id,
+    character,
+    onShowDialog: (pending: any) => {
+      dialog.showScriptDialog({
+        npcId: npc.id,
+        npcName: npc.strings.name || 'NPC',
+        questName: '',
+        text: pending.text,
+        dialogType: pending.type,
+        selections: pending.selections,
+        onAction: (mode: number, type: number, selection: number) => {
+          if (mode === -1) {
+            dialog.hide();
+          } else {
+            engine.advance(mode, type, selection);
+          }
+        },
+      });
+    },
+    onDispose: () => {
+      dialog.hide();
+    },
+    changeMap: async (mapId: number, portalName?: string) => {
+      const mapState = (window as any).MapStateInstance;
+      if (mapState?.changeMap) {
+        await mapState.changeMap(mapId);
+      }
+    },
+  });
+};
 
 export default MapleMap;

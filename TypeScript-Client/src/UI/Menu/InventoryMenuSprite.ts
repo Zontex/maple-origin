@@ -9,6 +9,8 @@ import { Position } from "../../Effects/DamageIndicator";
 import GameCanvas from "../../GameCanvas";
 import DropItemSprite from "../../DropItem/DropItemSprite";
 import UIMesoDropDialog from "../UIMesoDropDialog";
+import QuestData from "../../Quest/QuestData";
+import PLAY_AUDIO from "../../Audio/PlayAudio";
 
 class InventoryMenuSprite extends DragableMenu {
   opts: any;
@@ -28,6 +30,10 @@ class InventoryMenuSprite extends DragableMenu {
   // Reference to GameCanvas for mouse position tracking
   GameCanvas: GameCanvas;
   mesoDropDialog: UIMesoDropDialog | null = null;
+  // Double-click tracking
+  lastClickSlot: number = -1;
+  lastClickTime: number = 0;
+  consumeSound: any = null;
 
   static async fromOpts(opts: any) {
     const object = new InventoryMenuSprite(opts);
@@ -65,6 +71,13 @@ class InventoryMenuSprite extends DragableMenu {
 
     // Load the full composite background image.
     await this.loadBackground();
+
+    // Load consume sound effect
+    try {
+      const itemSoundNode = await WZManager.get('Sound.wz/Item.img/02000000');
+      const useNode = itemSoundNode?.nGet?.('Use') || (itemSoundNode as any)?.Use;
+      if (useNode?.nGetAudio) this.consumeSound = useNode.nGetAudio();
+    } catch (e) { /* sound optional */ }
 
     // Load the meso drop dialog (auto-centers on screen)
     this.mesoDropDialog = await UIMesoDropDialog.fromOpts({
@@ -549,6 +562,20 @@ class InventoryMenuSprite extends DragableMenu {
           // Check if there's an item in this slot
           if (slotIndex < items.length && items[slotIndex]) {
             const item = items[slotIndex];
+            const now = Date.now();
+
+            // Double-click detection — consume item
+            if (slotIndex === this.lastClickSlot && now - this.lastClickTime < 400) {
+              this.lastClickSlot = -1;
+              this.lastClickTime = 0;
+              if (this.currentTab === MapleInventoryType.USE) {
+                this.consumeItem(item, slotIndex);
+              }
+              return true;
+            }
+
+            this.lastClickSlot = slotIndex;
+            this.lastClickTime = now;
             this.handleItemDrag(item, slotIndex);
             return true;
           }
@@ -559,157 +586,105 @@ class InventoryMenuSprite extends DragableMenu {
     return false;
   }
   
+  // Canvas-based drag state — drawn during render, no DOM elements
+  draggingItem: any = null;
+  draggingSlotIndex: number = -1;
+  draggingIcon: HTMLImageElement | null = null;
+  isDragging: boolean = false;
+
   // Handle dragging an item out of the inventory
   handleItemDrag(item: any, slotIndex: number) {
-    // Set a flag to indicate we're dragging an item (prevents inventory window from moving)
     ClickManager.isDraggingItem = true;
-    
-    // Create a floating icon that follows the mouse
-    const dragIcon = document.createElement('div');
-    dragIcon.id = 'item-drag-icon';
-    dragIcon.style.position = 'absolute';
-    dragIcon.style.pointerEvents = 'none';
-    dragIcon.style.zIndex = '2000';
-    
-    // Add animation styles to make the drag feel more responsive
-    dragIcon.style.transition = 'transform 0.05s ease-out';
-    dragIcon.style.transform = 'scale(1.1)'; // Slightly larger than normal
-    dragIcon.style.cursor = 'grabbing';
-    dragIcon.style.opacity = '0.9';
-    dragIcon.style.filter = 'drop-shadow(2px 2px 2px rgba(0,0,0,0.3))'; // Add shadow
-    
-    // Set the icon background or content
-    if (item.node && item.node.iconRaw) {
-      // Try to use the item's icon if available
-      try {
-        const icon = item.node.iconRaw.nGetImage();
-        if (icon && icon.src) {
-          dragIcon.style.backgroundImage = `url(${icon.src})`;
-          dragIcon.style.backgroundSize = 'contain';
-          dragIcon.style.backgroundRepeat = 'no-repeat';
-          dragIcon.style.backgroundPosition = 'center';
-          dragIcon.style.width = `${icon.width}px`;
-          dragIcon.style.height = `${icon.height}px`;
-        }
-      } catch (e) {
-        console.warn(`Failed to get iconRaw image for item ${item.itemId}`);
-        // Create a generic item icon instead of showing text
-        dragIcon.style.backgroundImage = 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAwElEQVR42u2X0Q2AIAxEOwpjMIoj6GY6gmOwIXyYQIBaBQymJI0JfPBeAiQkAGNMKkBKqBRQK2AKlwBdYwcgYfN0KAEE2O2jDRMy7D+QGbBpGIGTMQvDVYkRkAQwj8KBzHbdw/RXCZBx+ZKfKwHGpUtASIEUEBGz5v+m0H1d0c6rEkNEe7O7BJhSmDBh5wIGAwOJ0JWSHfnVAQ/6tqsLp5ZdQXsqqO+4hj+mcAVE0iBUASzRgCACGZiES0BagAfq5QU8cbl/jCEqXQAAAABJRU5ErkJggg==")';
-        dragIcon.style.backgroundSize = 'contain';
-        dragIcon.style.backgroundRepeat = 'no-repeat';
-        dragIcon.style.backgroundPosition = 'center';
-        dragIcon.style.width = '30px';
-        dragIcon.style.height = '30px';
-      }
-    } else {
-      // Fallback if no icon is available - use a generic item icon
-      dragIcon.style.backgroundImage = 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAwElEQVR42u2X0Q2AIAxEOwpjMIoj6GY6gmOwIXyYQIBaBQymJI0JfPBeAiQkAGNMKkBKqBRQK2AKlwBdYwcgYfN0KAEE2O2jDRMy7D+QGbBpGIGTMQvDVYkRkAQwj8KBzHbdw/RXCZBx+ZKfKwHGpUtASIEUEBGz5v+m0H1d0c6rEkNEe7O7BJhSmDBh5wIGAwOJ0JWSHfnVAQ/6tqsLp5ZdQXsqqO+4hj+mcAVE0iBUASzRgCACGZiES0BagAfq5QU8cbl/jCEqXQAAAABJRU5ErkJggg==")';
-      dragIcon.style.backgroundSize = 'contain';
-      dragIcon.style.backgroundRepeat = 'no-repeat';
-      dragIcon.style.backgroundPosition = 'center';
-      dragIcon.style.width = '30px';
-      dragIcon.style.height = '30px';
-    }
-    
-    // Add to body to make it visible
-    document.body.appendChild(dragIcon);
-    
-    // Update icon position on mouse move
-    const onMouseMove = (e: MouseEvent) => {
-      // Get icon dimensions, with fallbacks to prevent NaN errors
-      const width = parseInt(dragIcon.style.width) || 30;
-      const height = parseInt(dragIcon.style.height) || 30;
-      
-      // Calculate the position so icon follows cursor with its center
-      const left = e.clientX - (width / 2);
-      const top = e.clientY - (height / 2);
-      
-      // Apply position with smooth transition
-      dragIcon.style.left = `${left}px`;
-      dragIcon.style.top = `${top}px`;
-      
-      // Subtle rotation effect for more dynamic feel
-      const rotateAmount = Math.sin(Date.now() / 300) * 3; // Small oscillation
-      dragIcon.style.transform = `scale(1.1) rotate(${rotateAmount}deg)`;
-    };
-    
-    // Handle mouse up - remove icon and check if outside inventory
-    const onMouseUp = (e: MouseEvent) => {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-      
-      // Reset the dragging flag to allow inventory movement again
-      ClickManager.isDraggingItem = false;
-      
-      // Check if mouse is outside inventory window
-      const rect = document.getElementById('game-wrapper')?.getBoundingClientRect();
-      const inventoryRect = {
-        x: this.x,
-        y: this.y,
-        width: 300, // Hardcoded fallback width
-        height: 400 // Hardcoded fallback height
-      };
-      
-      // Try to get actual dimensions if possible
-      try {
-        const rect = this.getRect({} as CameraInterface);
-        inventoryRect.width = rect.width;
-        inventoryRect.height = rect.height;
-      } catch (e) {
-        console.error("Error getting inventory dimensions:", e);
-      }
-      
-      const isOutsideInventory = 
-        e.clientX < this.x || 
-        e.clientX > this.x + inventoryRect.width || 
-        e.clientY < this.y || 
-        e.clientY > this.y + inventoryRect.height;
-      
-      if (isOutsideInventory) {
-        // Show drop dialog
-        this.showItemDropDialog(item, slotIndex);
-      }
-      
-      // Remove the drag icon
-      if (document.body.contains(dragIcon)) {
-        document.body.removeChild(dragIcon);
-      }
-    };
-    
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-    
-    // Trigger initial position with a safer access
+    this.isDragging = true;
+    this.draggingItem = item;
+    this.draggingSlotIndex = slotIndex;
+    const startX = this.GameCanvas.mouseX;
+    const startY = this.GameCanvas.mouseY;
+    this.dragStartX = startX;
+    this.dragStartY = startY;
+
+    // Get item icon for canvas rendering
     try {
-      // Use the current cursor position from GameCanvas or fallback to a position
-      // relative to the inventory item slot
-      if (this.GameCanvas && (this.GameCanvas.mouseX || this.GameCanvas.mouseY)) {
-        onMouseMove({
-          clientX: this.GameCanvas.mouseX || 0,
-          clientY: this.GameCanvas.mouseY || 0
-        } as MouseEvent);
-      } else {
-        // If GameCanvas position not available, position near the item in the inventory
-        const slotColumns = 4;
-        const slotSize = 30;
-        const slotPadding = 4;
-        const slotStartX = this.x + 14;
-        const slotStartY = this.y + 55;
-        
-        const col = slotIndex % slotColumns;
-        const row = Math.floor(slotIndex / slotColumns);
-        
-        const slotX = slotStartX + col * (slotSize + slotPadding) + slotSize/2;
-        const slotY = slotStartY + row * (slotSize + slotPadding) + slotSize/2;
-        
-        onMouseMove({
-          clientX: slotX,
-          clientY: slotY
-        } as MouseEvent);
+      if (item.node?.iconRaw) {
+        this.draggingIcon = item.node.iconRaw.nGetImage();
       }
     } catch (e) {
-      console.error("Error setting initial mouse position:", e);
+      this.draggingIcon = null;
     }
+
+    // Listen for mouse up on the canvas element
+    const gameEl = document.getElementById('game') as HTMLCanvasElement;
+    const onMouseUp = () => {
+      gameEl?.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('mouseup', onMouseUp);
+
+      if (!this.isDragging) return;
+      this.isDragging = false;
+      ClickManager.isDraggingItem = false;
+
+      const mouseX = this.GameCanvas.mouseX;
+      const mouseY = this.GameCanvas.mouseY;
+
+      // Only consider it a drag-drop if mouse moved at least 10px from start
+      const dragDist = Math.sqrt((mouseX - startX) ** 2 + (mouseY - startY) ** 2);
+      if (dragDist < 10) {
+        // Was just a click, not a drag — do nothing (double-click handled separately)
+        this.draggingItem = null;
+        this.draggingIcon = null;
+        this.draggingSlotIndex = -1;
+        return;
+      }
+
+      // Check if mouse is outside inventory window (in canvas coords)
+      let invW = 172, invH = 290;
+      try {
+        const rect = this.getRect({} as CameraInterface);
+        invW = rect.width;
+        invH = rect.height;
+      } catch (e) {}
+
+      const isOutside =
+        mouseX < this.x || mouseX > this.x + invW ||
+        mouseY < this.y || mouseY > this.y + invH;
+
+      if (isOutside) {
+        this.showItemDropDialog(item, slotIndex);
+      }
+
+      this.draggingItem = null;
+      this.draggingIcon = null;
+      this.draggingSlotIndex = -1;
+    };
+
+    if (gameEl) gameEl.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('mouseup', onMouseUp);
+  }
+
+  dragStartX: number = 0;
+  dragStartY: number = 0;
+
+  // Draw the dragged item icon at cursor position (called from draw method)
+  drawDragIcon(canvas: GameCanvas) {
+    if (!this.isDragging || !this.draggingIcon) return;
+
+    const mouseX = canvas.mouseX;
+    const mouseY = canvas.mouseY;
+
+    // Only show drag icon after mouse has moved enough (avoids flicker on click)
+    const dist = Math.sqrt((mouseX - this.dragStartX) ** 2 + (mouseY - this.dragStartY) ** 2);
+    if (dist < 10) return;
+
+    const img = this.draggingIcon;
+
+    // Draw semi-transparent icon centered on cursor
+    canvas.context.save();
+    canvas.context.globalAlpha = 0.8;
+    canvas.drawImage({
+      img,
+      dx: mouseX - Math.floor(img.width / 2),
+      dy: mouseY - Math.floor(img.height / 2),
+    });
+    canvas.context.restore();
   }
 
   async drawText(canvas: GameCanvas) {
@@ -772,245 +747,107 @@ class InventoryMenuSprite extends DragableMenu {
     });
   }
   
-  // Show dialog for dropping items
-  showItemDropDialog(item: any, slotIndex: number) {
-    // Check if a dialog is already open
-    if (document.getElementById('maple-drop-dialog')) {
+  // Consume a use-tab item (double-click)
+  consumeItem(item: any, slotIndex: number) {
+    if (!item || !this.charecter) return;
+
+    // Access spec via WZ node — try both property access and nGet
+    const spec = item.node?.spec || item.node?.nGet?.('spec');
+    if (!spec || (!spec.nChildren && !spec.hp && !spec.mp)) {
+      console.log(`[Inventory] Item #${item.itemId} has no spec — cannot consume`);
       return;
     }
-    
-    // Create a div to overlay the entire page
-    const overlay = document.createElement('div');
-    overlay.id = 'maple-drop-overlay';
-    overlay.style.position = 'fixed';
-    overlay.style.top = '0';
-    overlay.style.left = '0';
-    overlay.style.width = '100%';
-    overlay.style.height = '100%';
-    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.2)'; // More transparent
-    overlay.style.zIndex = '1000';
-    overlay.style.display = 'flex';
-    overlay.style.justifyContent = 'center';
-    overlay.style.alignItems = 'center';
-    
-    // Create the dialog box
-    const dialogBox = document.createElement('div');
-    dialogBox.id = 'maple-drop-dialog';
-    dialogBox.style.width = '250px';
-    dialogBox.style.padding = '10px';
-    dialogBox.style.backgroundColor = '#EBE2CA';
-    dialogBox.style.border = '2px solid #A67C52';
-    dialogBox.style.borderRadius = '5px';
-    dialogBox.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
-    dialogBox.style.display = 'flex';
-    dialogBox.style.flexDirection = 'column';
-    dialogBox.style.alignItems = 'center';
-    dialogBox.style.position = 'relative';
-    
-    // Add title with item name if available
-    const title = document.createElement('div');
-    title.textContent = item.name || `Drop Item ${item.itemId}`;
-    title.style.width = '100%';
-    title.style.color = '#4A2511';
-    title.style.fontWeight = 'bold';
-    title.style.marginBottom = '10px';
-    title.style.textAlign = 'center';
-    title.style.fontSize = '14px';
-    dialogBox.appendChild(title);
-    
-    // Add close button
-    const closeButton = document.createElement('div');
-    closeButton.innerHTML = '&times;';
-    closeButton.style.position = 'absolute';
-    closeButton.style.top = '5px';
-    closeButton.style.right = '10px';
-    closeButton.style.cursor = 'pointer';
-    closeButton.style.fontSize = '18px';
-    closeButton.style.color = '#4A2511';
-    closeButton.style.fontWeight = 'bold';
-    closeButton.onclick = () => {
-      document.body.removeChild(overlay);
-    };
-    dialogBox.appendChild(closeButton);
-    
-    // Create icon container
-    const iconContainer = document.createElement('div');
-    iconContainer.style.width = '40px';
-    iconContainer.style.height = '40px';
-    iconContainer.style.marginBottom = '10px';
-    iconContainer.style.display = 'flex';
-    iconContainer.style.justifyContent = 'center';
-    iconContainer.style.alignItems = 'center';
-    
-    // Try to display item icon
-    if (item.node && item.node.iconRaw) {
-      try {
-        const icon = item.node.iconRaw.nGetImage();
-        if (icon && icon.src) {
-          const iconImg = document.createElement('div');
-          iconImg.style.backgroundImage = `url(${icon.src})`;
-          iconImg.style.backgroundSize = 'contain';
-          iconImg.style.backgroundRepeat = 'no-repeat';
-          iconImg.style.backgroundPosition = 'center';
-          iconImg.style.width = '36px';
-          iconImg.style.height = '36px';
-          iconContainer.appendChild(iconImg);
+
+    // Read spec values from WZ node children
+    let hpRecover = 0;
+    let mpRecover = 0;
+    let hpPercent = 0;
+    let mpPercent = 0;
+
+    if (spec.nChildren) {
+      for (const prop of spec.nChildren) {
+        switch (prop.nName) {
+          case 'hp': hpRecover = parseInt(prop.nValue) || 0; break;
+          case 'mp': mpRecover = parseInt(prop.nValue) || 0; break;
+          case 'hpR': hpPercent = parseInt(prop.nValue) || 0; break;
+          case 'mpR': mpPercent = parseInt(prop.nValue) || 0; break;
         }
-      } catch (e) {
-        const fallbackIcon = document.createElement('div');
-        fallbackIcon.textContent = item.itemId.toString();
-        fallbackIcon.style.backgroundColor = '#555';
-        fallbackIcon.style.color = '#fff';
-        fallbackIcon.style.width = '36px';
-        fallbackIcon.style.height = '36px';
-        fallbackIcon.style.display = 'flex';
-        fallbackIcon.style.justifyContent = 'center';
-        fallbackIcon.style.alignItems = 'center';
-        fallbackIcon.style.fontSize = '10px';
-        iconContainer.appendChild(fallbackIcon);
       }
-    }
-    
-    dialogBox.appendChild(iconContainer);
-    
-    // Add message
-    const message = document.createElement('div');
-    
-    // Check if item is stackable (has quantity)
-    const maxQuantity = item.quantity || 1;
-    
-    if (maxQuantity > 1) {
-      message.textContent = `How many do you want to drop? (Max: ${maxQuantity})`;
     } else {
-      message.textContent = 'Do you want to drop this item?';
+      // Direct property access fallback
+      hpRecover = parseInt(spec.hp?.nValue ?? spec.hp ?? 0) || 0;
+      mpRecover = parseInt(spec.mp?.nValue ?? spec.mp ?? 0) || 0;
+      hpPercent = parseInt(spec.hpR?.nValue ?? spec.hpR ?? 0) || 0;
+      mpPercent = parseInt(spec.mpR?.nValue ?? spec.mpR ?? 0) || 0;
     }
-    
-    message.style.width = '100%';
-    message.style.color = '#4A2511';
-    message.style.marginBottom = '10px';
-    message.style.textAlign = 'center';
-    message.style.fontSize = '12px';
-    dialogBox.appendChild(message);
-    
-    // Add input field for stackable items
-    let input: HTMLInputElement | null = null;
-    
-    if (maxQuantity > 1) {
-      const inputContainer = document.createElement('div');
-      inputContainer.style.display = 'flex';
-      inputContainer.style.alignItems = 'center';
-      inputContainer.style.marginBottom = '15px';
-      
-      input = document.createElement('input');
-      input.type = 'number';
-      input.value = '1';
-      input.min = '1';
-      input.max = maxQuantity.toString();
-      input.style.width = '150px';
-      input.style.padding = '5px';
-      input.style.border = '1px solid #A67C52';
-      input.style.borderRadius = '3px';
-      input.style.backgroundColor = '#F5F0E0';
-      input.style.color = '#4A2511';
-      input.style.fontSize = '12px';
-      input.style.textAlign = 'right';
-      inputContainer.appendChild(input);
-      
-      dialogBox.appendChild(inputContainer);
-      
-      // Add max button for stackable items
-      const maxButton = document.createElement('button');
-      maxButton.textContent = 'Max';
-      maxButton.style.padding = '3px 10px';
-      maxButton.style.backgroundColor = '#D0A870';
-      maxButton.style.border = '1px solid #A67C52';
-      maxButton.style.borderRadius = '3px';
-      maxButton.style.color = '#4A2511';
-      maxButton.style.marginBottom = '15px';
-      maxButton.style.cursor = 'pointer';
-      maxButton.style.fontSize = '12px';
-      maxButton.onclick = () => {
-        if (input) input.value = maxQuantity.toString();
-      };
-      dialogBox.appendChild(maxButton);
+
+    // Apply percentage-based recovery
+    if (hpPercent > 0) {
+      hpRecover += Math.floor(this.charecter.maxHp * hpPercent / 100);
     }
-    
-    // Add buttons container
-    const buttonsContainer = document.createElement('div');
-    buttonsContainer.style.display = 'flex';
-    buttonsContainer.style.justifyContent = 'space-between';
-    buttonsContainer.style.width = '100%';
-    
-    // Add OK button
-    const okButton = document.createElement('button');
-    okButton.textContent = 'OK';
-    okButton.style.padding = '5px 20px';
-    okButton.style.backgroundColor = '#D0A870';
-    okButton.style.border = '1px solid #A67C52';
-    okButton.style.borderRadius = '3px';
-    okButton.style.color = '#4A2511';
-    okButton.style.cursor = 'pointer';
-    okButton.style.fontSize = '12px';
-    okButton.onclick = () => {
-      // Get drop quantity
-      let dropQuantity = 1;
-      
-      if (input) {
-        dropQuantity = parseInt(input.value);
-        
-        if (dropQuantity <= 0 || isNaN(dropQuantity)) {
-          message.textContent = 'Please enter a valid amount!';
-          message.style.color = '#CC0000';
+    if (mpPercent > 0) {
+      mpRecover += Math.floor(this.charecter.maxMp * mpPercent / 100);
+    }
+
+    // Apply recovery (clamped to max)
+    if (hpRecover > 0) {
+      this.charecter.hp = Math.min(this.charecter.hp + hpRecover, this.charecter.maxHp);
+    }
+    if (mpRecover > 0) {
+      this.charecter.mp = Math.min(this.charecter.mp + mpRecover, this.charecter.maxMp);
+    }
+
+    console.log(`[Inventory] Consumed item #${item.itemId}: +${hpRecover} HP, +${mpRecover} MP`);
+
+    // Play consumption sound
+    if (this.consumeSound) {
+      PLAY_AUDIO(this.consumeSound, 0.5, true);
+    }
+
+    // Remove one from inventory
+    const inventoryArray = this.charecter.inventory.use || [];
+    const actualItem = inventoryArray.find((i: any) => i && i.itemId === item.itemId);
+    if (actualItem) {
+      if ((actualItem.quantity || 1) <= 1) {
+        const idx = inventoryArray.indexOf(actualItem);
+        if (idx !== -1) inventoryArray.splice(idx, 1);
+      } else {
+        actualItem.quantity--;
+      }
+    }
+  }
+
+  // Drop items — single items drop immediately, stackable items show quantity dialog
+  showItemDropDialog(item: any, slotIndex: number) {
+    // Block dropping quest items
+    const questManager = this.charecter?.questManager;
+    if (questManager) {
+      for (const [, active] of questManager.activeQuests) {
+        const reqs = QuestData.requirements.get(active.questId);
+        if (reqs?.complete?.items?.some((i: any) => i.id === item.itemId)) {
+          console.log(`[Quest] Cannot drop quest item #${item.itemId}`);
           return;
         }
-        
-        if (dropQuantity > maxQuantity) {
-          message.textContent = `You only have ${maxQuantity} of this item!`;
-          message.style.color = '#CC0000';
+        if (reqs?.start?.items?.some((i: any) => i.id === item.itemId)) {
+          console.log(`[Quest] Cannot drop quest item #${item.itemId}`);
           return;
         }
       }
-      
-      document.body.removeChild(overlay);
-      this.dropItem(item, dropQuantity, slotIndex);
-    };
-    buttonsContainer.appendChild(okButton);
-    
-    // Add Cancel button
-    const cancelButton = document.createElement('button');
-    cancelButton.textContent = 'Cancel';
-    cancelButton.style.padding = '5px 20px';
-    cancelButton.style.backgroundColor = '#D0A870';
-    cancelButton.style.border = '1px solid #A67C52';
-    cancelButton.style.borderRadius = '3px';
-    cancelButton.style.color = '#4A2511';
-    cancelButton.style.cursor = 'pointer';
-    cancelButton.style.fontSize = '12px';
-    cancelButton.onclick = () => {
-      document.body.removeChild(overlay);
-    };
-    buttonsContainer.appendChild(cancelButton);
-    
-    dialogBox.appendChild(buttonsContainer);
-    
-    // Add dialog to overlay
-    overlay.appendChild(dialogBox);
-    
-    // Add overlay to document
-    document.body.appendChild(overlay);
-    
-    // Focus the input field if it exists
-    if (input) {
-      input.focus();
-      input.select();
-      
-      // Submit on Enter key
-      input.addEventListener('keypress', (event) => {
-        if (event.key === 'Enter') {
-          okButton.click();
-        }
-      });
     }
+
+    const maxQuantity = item.quantity || 1;
+
+    if (maxQuantity <= 1) {
+      // Single item — drop immediately, no dialog
+      this.dropItem(item, 1, slotIndex);
+      return;
+    }
+
+    // Stackable item — show quantity dialog
+    if (!this.mesoDropDialog || !this.mesoDropDialog.isHidden) return;
+    this.mesoDropDialog.show(maxQuantity, (quantity: number) => {
+      this.dropItem(item, quantity, slotIndex);
+    }, 'item', item.name || '');
   }
 
   destroy() {
@@ -1033,6 +870,9 @@ class InventoryMenuSprite extends DragableMenu {
     this.buttons.forEach((obj) => {
       obj.draw(canvas, camera, lag, msPerTick, tdelta);
     });
+
+    // Draw dragged item icon at cursor
+    this.drawDragIcon(canvas);
 
     // Draw meso drop dialog on top
     if (this.mesoDropDialog) {

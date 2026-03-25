@@ -165,7 +165,7 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
       y: 540 + startUIPosition.y,
       width: 530,
       color: "#000000",
-      background: "#ffffff",
+      background: "transparent",
       height: 13,
     });
     this.chat.addSubmitListener(() => {
@@ -475,212 +475,94 @@ UIMap.showPlayerChatBalloon = function(message, character = null) {
       }
     };
     
-    // Add draw method for chat balloon
-    player.drawChatBalloon = function(canvas, camera) {
+    // Add draw method for chat balloon (proper 9-patch with clip)
+    player.drawChatBalloon = function(canvas: any, camera: any) {
       if (!this.chatBalloon || !this.chatMessage || !this.showChatBalloon) return;
-      
-      // Check if the text is too long and wrap it
-      const maxWidth = 160; // Maximum width in pixels
+
+      const fontSize = 12;
+      const lineH = 14;
+      const maxTextW = 140;
+      const padX = 8, padY = 4;
+
+      // Word-wrap
       const words = this.chatMessage.split(' ');
-      const lines = [];
-      let currentLine = '';
-  
-      for (const word of words) {
-        const testLine = currentLine ? `${currentLine} ${word}` : word;
-        const testOpts = { text: testLine, fontSize: 12 };
-        const testWidth = canvas.measureText(testOpts).width;
-        
-        if (testWidth > maxWidth) {
-          lines.push(currentLine);
-          currentLine = word;
+      const lines: string[] = [];
+      let cur = '';
+      for (const w of words) {
+        const test = cur ? `${cur} ${w}` : w;
+        if (canvas.measureText({ text: test, fontSize }).width > maxTextW && cur) {
+          lines.push(cur);
+          cur = w;
         } else {
-          currentLine = testLine;
+          cur = test;
         }
       }
-      
-      if (currentLine) {
-        lines.push(currentLine);
-      }
-  
-      // Calculate balloon dimensions based on wrapped text
-      const textHeight = 16; // approximate line height
-      const totalTextHeight = textHeight * lines.length;
-      const paddingX = 12;
-      const paddingY = 8;
-      
-      // Find the widest line for the balloon width
-      let maxLineWidth = 0;
-      for (const line of lines) {
-        const lineOpts = { text: line, fontSize: 12 };
-        const lineWidth = canvas.measureText(lineOpts).width;
-        maxLineWidth = Math.max(maxLineWidth, lineWidth);
-      }
-  
-      // The total balloon size is text size + padding
-      const cornerSize = 6;
-      const minWidth = 100;
-      const minHeight = 40;
-      
-      // Add extra padding to ensure corners don't get cut off
-      const balloonW = Math.max(maxLineWidth + paddingX * 2 + cornerSize * 2, minWidth); 
-      const balloonH = Math.max(totalTextHeight + paddingY * 2 + cornerSize * 2, minHeight);
-  
-      // Convert character world coordinates to screen coordinates
+      if (cur) lines.push(cur);
+
+      let textW = 0;
+      for (const l of lines) textW = Math.max(textW, canvas.measureText({ text: l, fontSize }).width);
+      const textH = lines.length * lineH;
+
+      const { nw, ne, sw, se, n, s, w, e, c, arrow } = this.chatBalloon;
+      const nwW = nw.width, nwH = nw.height;
+      const neW = ne.width;
+      const swH = sw.height;
+      const seW = se.width;
+      const innerW = Math.max(textW + padX * 2, 60);
+      const innerH = Math.max(textH + padY * 2, 20);
+      const totalW = nwW + innerW + neW;
+      const totalH = nwH + innerH + swH;
+
       const playerScreenX = this.pos.x - camera.x;
       const playerScreenY = this.pos.y - camera.y;
-      
-      // Position balloon above player
-      const balloonCenterX = playerScreenX;
-      const balloonX = Math.max(20, Math.min(canvas.width - balloonW - 20, balloonCenterX - balloonW / 2));
-      // Position balloon at a fixed offset above the player rather than absolute position
-      const offsetY = 120; // Distance above player head
-      const balloonY = Math.max(20, Math.min(canvas.height - balloonH - 20, playerScreenY - offsetY));
-  
-      // Draw corners
-      canvas.drawImage({
-        img: this.chatBalloon.nw,
-        dx: balloonX,
-        dy: balloonY,
-      });
-      canvas.drawImage({
-        img: this.chatBalloon.ne,
-        dx: balloonX + balloonW - cornerSize,
-        dy: balloonY,
-      });
-      canvas.drawImage({
-        img: this.chatBalloon.sw,
-        dx: balloonX,
-        dy: balloonY + balloonH - cornerSize,
-      });
-      canvas.drawImage({
-        img: this.chatBalloon.se,
-        dx: balloonX + balloonW - cornerSize,
-        dy: balloonY + balloonH - cornerSize,
-      });
-  
-      // Draw top edge
-      let tileX = balloonX + cornerSize;
-      const tileY_top = balloonY;
-      const nImg = this.chatBalloon.n;
-      const nImgW = nImg.width;
-      while (tileX < balloonX + balloonW - cornerSize) {
-        const drawW = Math.min(nImgW, balloonX + balloonW - cornerSize - tileX);
-        canvas.drawImage({
-          img: nImg,
-          sx: 0,
-          sy: 0,
-          sWidth: drawW,
-          sHeight: nImg.height,
-          dx: tileX,
-          dy: tileY_top,
-          dWidth: drawW,
-          dHeight: nImg.height,
-        });
-        tileX += drawW;
-      }
-  
-      // Draw bottom edge
-      const sImg = this.chatBalloon.s;
-      const sImgW = sImg.width;
-      tileX = balloonX + cornerSize;
-      const tileY_bottom = balloonY + balloonH - sImg.height; 
-      while (tileX < balloonX + balloonW - cornerSize) {
-        const drawW = Math.min(sImgW, balloonX + balloonW - cornerSize - tileX);
-        canvas.drawImage({
-          img: sImg,
-          sx: 0,
-          sy: 0,
-          dx: tileX,
-          dy: tileY_bottom,
-        });
-        tileX += drawW;
-      }
-  
-      // Draw left edge
-      const wImg = this.chatBalloon.w;
-      const wImgH = wImg.height;
-      let tileY = balloonY + cornerSize;
-      while (tileY < balloonY + balloonH - cornerSize) {
-        const drawH = Math.min(wImgH, balloonY + balloonH - cornerSize - tileY);
-        canvas.drawImage({
-          img: wImg,
-          sx: 0,
-          sy: 0,
-          dx: balloonX,
-          dy: tileY,
-        });
-        tileY += drawH;
-      }
-  
-      // Draw right edge
-      const eImg = this.chatBalloon.e;
-      const eImgH = eImg.height;
-      tileY = balloonY + cornerSize;
-      const rightX = balloonX + balloonW - eImg.width;
-      while (tileY < balloonY + balloonH - cornerSize) {
-        const drawH = Math.min(eImgH, balloonY + balloonH - cornerSize - tileY);
-        canvas.drawImage({
-          img: eImg,
-          sx: 0,
-          sy: 0,
-          dx: rightX,
-          dy: tileY,
-        });
-        tileY += drawH;
-      }
-  
-      // Draw center fill
-      const cImg = this.chatBalloon.c;
-      const centerX = balloonX + cornerSize;
-      const centerY = balloonY + cornerSize;
-      const centerW = balloonW - cornerSize * 2;
-      const centerH = balloonH - cornerSize * 2;
-      const cImgW = cImg.width;
-      const cImgH = cImg.height;
-      
-      let fillY = centerY;
-      while (fillY < centerY + centerH) {
-        let fillX = centerX;
-        const rowH = Math.min(cImgH, centerY + centerH - fillY);
-        while (fillX < centerX + centerW) {
-          const colW = Math.min(cImgW, centerX + centerW - fillX);
-          canvas.drawImage({
-            img: cImg,
-            sx: 0,
-            sy: 0,
-            dx: fillX,
-            dy: fillY,
-          });
-          fillX += colW;
-        }
-        fillY += rowH;
-      }
-  
-      // Draw arrow
-      const arrowImg = this.chatBalloon.arrow;
-      const arrowW = arrowImg.width;
-      const arrowH = arrowImg.height;
-      // Make sure arrow is ALWAYS centered above the player, regardless of balloon position
-      const arrowX = playerScreenX - arrowW / 2;
-      const arrowY = balloonY + balloonH - 1;
-      canvas.drawImage({
-        img: arrowImg,
-        dx: arrowX,
-        dy: arrowY,
-      });
-  
-      // Draw text lines
-      const lineStartY = balloonY + paddingY + 2;
-      lines.forEach((line, index) => {
-        canvas.drawText({
-          text: line,
-          x: balloonX + balloonW / 2,
-          y: lineStartY + (index * textHeight),
-          color: "#000000",
-          align: "center",
-          fontSize: 12,
-          fontWeight: "normal",
-        });
+      const bx = Math.round(playerScreenX - totalW / 2);
+      const by = Math.round(playerScreenY - totalH - 75);
+
+      const ctx = canvas.context;
+      ctx.save();
+
+      // Corners
+      canvas.drawImage({ img: nw, dx: bx, dy: by });
+      canvas.drawImage({ img: ne, dx: bx + totalW - neW, dy: by });
+      canvas.drawImage({ img: sw, dx: bx, dy: by + totalH - sw.height });
+      canvas.drawImage({ img: se, dx: bx + totalW - seW, dy: by + totalH - se.height });
+
+      // Top edge
+      ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by, innerW, nwH); ctx.clip();
+      for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += n.width) canvas.drawImage({ img: n, dx: tx, dy: by });
+      ctx.restore();
+
+      // Bottom edge
+      ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by + totalH - s.height, innerW, s.height); ctx.clip();
+      for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += s.width) canvas.drawImage({ img: s, dx: tx, dy: by + totalH - s.height });
+      ctx.restore();
+
+      // Left edge
+      ctx.save(); ctx.beginPath(); ctx.rect(bx, by + nwH, w.width, innerH); ctx.clip();
+      for (let ty = by + nwH; ty < by + nwH + innerH; ty += w.height) canvas.drawImage({ img: w, dx: bx, dy: ty });
+      ctx.restore();
+
+      // Right edge
+      ctx.save(); ctx.beginPath(); ctx.rect(bx + totalW - e.width, by + nwH, e.width, innerH); ctx.clip();
+      for (let ty = by + nwH; ty < by + nwH + innerH; ty += e.height) canvas.drawImage({ img: e, dx: bx + totalW - e.width, dy: ty });
+      ctx.restore();
+
+      // Center
+      ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by + nwH, innerW, innerH); ctx.clip();
+      for (let fy = by + nwH; fy < by + nwH + innerH; fy += c.height)
+        for (let fx = bx + nwW; fx < bx + nwW + innerW; fx += c.width)
+          canvas.drawImage({ img: c, dx: fx, dy: fy });
+      ctx.restore();
+
+      // Arrow
+      canvas.drawImage({ img: arrow, dx: Math.round(playerScreenX - arrow.width / 2), dy: by + totalH - 1 });
+
+      ctx.restore();
+
+      // Text
+      const textStartY = by + nwH + padY;
+      lines.forEach((line: string, i: number) => {
+        canvas.drawText({ text: line, x: bx + totalW / 2, y: textStartY + i * lineH, color: '#000000', align: 'center', fontSize, fontWeight: 'normal' });
       });
     };
   }

@@ -1,0 +1,822 @@
+import WZManager from '../wz-utils/WZManager';
+import GameCanvas from '../GameCanvas';
+import { CameraInterface } from '../Camera';
+import { MapleStanceButton } from './MapleStanceButton';
+import ClickManager from './ClickManager';
+import QuestData, { QuestDialogue, ensureItemNames, resolveItemCodes } from '../Quest/QuestData';
+import type { ScriptDialogType } from '../Quest/QuestScriptEngine';
+import type { SelectionOption } from '../NpcScriptEngine';
+import config from '../Config';
+
+// UtilDlgEx known dimensions
+const DIALOG_WIDTH = 529;
+const TOP_H = 28;
+const FILL_H = 20;
+const BOTTOM_H = 58;
+const LEFT_PADDING = 20;
+const TEXT_LEFT = 166;
+const TEXT_RIGHT_PAD = 20;
+const TEXT_MAX_W = DIALOG_WIDTH - TEXT_LEFT - TEXT_RIGHT_PAD;
+const LINE_H = 16;
+const TEXT_TOP_OFFSET = 48;
+
+// Max lines of text that fit in the dialog before we need to paginate
+const MAX_TEXT_LINES = 12;
+
+type DialogPhase = 'start' | 'complete' | 'inProgress';
+
+export default class UIQuestDialog {
+  private utilDlgExNode: any = null;
+  private questNode: any = null;
+  private topImg: any = null;
+  private fillImg: any = null;
+  private bottomImg: any = null;
+  private nameTagImg: any = null;
+  private speakerImg: any = null;
+  private basicNode: any = null;  // Basic.img — generic OK/Cancel/Yes/No buttons
+  private listInProgressImg: HTMLImageElement | null = null;   // list0: "QUEST IN PROGRESS" (123x15)
+  private listAvailableImg: HTMLImageElement | null = null;    // list1: "QUEST AVAILABLE" (105x18)
+  private listEtcImg: HTMLImageElement | null = null;          // list2: etc bullet (19x12)
+  private listCompletableImg: HTMLImageElement | null = null;  // list3: "QUEST THAT CAN BE COMPLETED" (179x14)
+  // QuestIcon reward labels
+  private rewardIcon: HTMLImageElement | null = null;     // QuestIcon/4/0: "REWARD!!"
+  private expIcon: HTMLImageElement | null = null;        // QuestIcon/8/0: "EXP"
+  private mesoIcon: HTMLImageElement | null = null;       // QuestIcon/7/0: "meso"
+  private fameIcon: HTMLImageElement | null = null;       // QuestIcon/6/0: "fame"
+  private itemIconCache: Map<number, HTMLImageElement | null> = new Map();
+  private questIconCache: Map<string, HTMLImageElement | null> = new Map();
+  isHidden: boolean = true;
+
+  private buttons: MapleStanceButton[] = [];
+  private questId: number = 0;
+  private npcId: number = 0;
+  private npcName: string = '';
+  private phase: DialogPhase = 'start';
+  private fillCount: number = 6;
+  private x: number = 0;
+  private y: number = 0;
+
+  // All text pages (long text is split across pages)
+  private pages: string[][] = []; // array of pages, each page is array of lines
+  private currentPage: number = 0;
+  private isLastPageShown: boolean = false;
+  private accepted: boolean = false;
+
+  private onQuestAccepted: (() => void) | null = null;
+  private onQuestCompleted: (() => void) | null = null;
+
+  // Script mode
+  private scriptMode: boolean = false;
+  private scriptDialogType: ScriptDialogType = 'next';
+  private scriptOnAction: ((mode: number, type: number, selection: number) => void) | null = null;
+  private scriptQuestName: string = '';
+  private selections: SelectionOption[] = [];
+  private selectionRects: { index: number; x: number; y: number; w: number; h: number }[] = [];
+  private hoveredSelection: number = -1;
+
+  // Temp canvas for text measurement
+  private measureCanvas: GameCanvas | null = null;
+
+  static async fromOpts() {
+    const dialog = new UIQuestDialog();
+    await dialog.load();
+    return dialog;
+  }
+
+  async load() {
+    this.utilDlgExNode = await WZManager.get('UI.wz/UIWindow.img/UtilDlgEx');
+    this.questNode = await WZManager.get('UI.wz/UIWindow.img/Quest');
+    this.basicNode = await WZManager.get('UI.wz/Basic.img');
+
+    this.topImg = this.utilDlgExNode.t;
+    this.fillImg = this.utilDlgExNode.c;
+    this.bottomImg = this.utilDlgExNode.s;
+    this.nameTagImg = this.utilDlgExNode.bar;
+
+    // Load quest list header images from UtilDlgEx
+    this.listInProgressImg = this.utilDlgExNode?.list0?.nGetImage?.() || null;
+    this.listAvailableImg = this.utilDlgExNode?.list1?.nGetImage?.() || null;
+    this.listEtcImg = this.utilDlgExNode?.list2?.nGetImage?.() || null;
+    this.listCompletableImg = this.utilDlgExNode?.list3?.nGetImage?.() || null;
+
+    // Load reward icons from QuestIcon — each is an imgdir with canvas children
+    this.rewardIcon = await this.loadQuestIcon('4');  // REWARD!!
+    this.expIcon = await this.loadQuestIcon('8');     // EXP
+    this.mesoIcon = await this.loadQuestIcon('7');    // meso
+    this.fameIcon = await this.loadQuestIcon('6');    // fame
+
+    // Cache quest icons for inline rendering (used by #f codes in scripts)
+    for (const id of ['3', '4', '5', '6', '7', '8', '9']) {
+      const img = await this.loadQuestIcon(id);
+      if (img) this.questIconCache.set(id, img);
+    }
+  }
+
+  private async loadItemIcon(itemId: number): Promise<HTMLImageElement | null> {
+    if (this.itemIconCache.has(itemId)) return this.itemIconCache.get(itemId) || null;
+    try {
+      const padded = `${itemId}`.padStart(8, '0');
+      const category = Math.floor(itemId / 1000000);
+
+      let node: any = null;
+      if (category === 1) {
+        // Equips are in Character.wz/<subfolder>/<paddedId>.img/info/icon
+        const equipType = Math.floor(itemId / 10000);
+        const subfolders: Record<number, string> = {
+          100: 'Cap', 101: 'Accessory', 102: 'Accessory', 103: 'Accessory',
+          104: 'Coat', 105: 'Longcoat', 106: 'Pants', 107: 'Shoes',
+          108: 'Glove', 109: 'Shield', 110: 'Cape', 111: 'Ring',
+          112: 'Ring', 113: 'Accessory', 114: 'Accessory',
+          130: 'Weapon', 131: 'Weapon', 132: 'Weapon', 133: 'Weapon',
+          137: 'Weapon', 138: 'Weapon', 139: 'Weapon', 140: 'Weapon',
+          141: 'Weapon', 142: 'Weapon', 143: 'Weapon', 144: 'Weapon',
+          145: 'Weapon', 146: 'Weapon', 147: 'Weapon', 148: 'Weapon',
+          149: 'Weapon', 170: 'Weapon',
+          190: 'TamingMob', 191: 'TamingMob', 192: 'TamingMob', 193: 'TamingMob',
+        };
+        const subfolder = subfolders[equipType] || 'Accessory';
+        node = await WZManager.get(`Character.wz/${subfolder}/${padded}.img/info/icon`);
+      } else {
+        // Non-equips: Item.wz/<category>/<prefix>.img/<paddedId>/info/icon
+        const prefix = padded.substring(0, 4);
+        const categoryDir = category === 2 ? 'Consume' : category === 3 ? 'Install' : category === 4 ? 'Etc' : 'Cash';
+        node = await WZManager.get(`Item.wz/${categoryDir}/${prefix}.img/${padded}/info/icon`);
+      }
+
+      const img = node?.nGetImage?.() || null;
+      this.itemIconCache.set(itemId, img);
+      return img;
+    } catch {
+      this.itemIconCache.set(itemId, null);
+      return null;
+    }
+  }
+
+  private async preloadRewardIcons() {
+    if (!this.questId) return;
+    const rewards = QuestData.rewards.get(this.questId);
+    const reward = this.phase === 'complete' ? (rewards?.complete || rewards?.start) : (rewards?.start || rewards?.complete);
+    if (reward?.items) {
+      await Promise.all(reward.items.map(item => this.loadItemIcon(item.id)));
+    }
+  }
+
+  private async loadQuestIcon(id: string): Promise<HTMLImageElement | null> {
+    try {
+      const node: any = await WZManager.get(`UI.wz/UIWindow.img/QuestIcon/${id}`);
+      // The imgdir contains canvas children numbered 0, 1, etc. — get the first frame
+      const frame = node?.nGet?.('0') || node?.[0];
+      if (frame?.nGetImage) return frame.nGetImage();
+      if (node?.nGetImage) return node.nGetImage();
+      return null;
+    } catch { return null; }
+  }
+
+  async show(opts: {
+    questId: number;
+    npcId: number;
+    npcName: string;
+    phase: DialogPhase;
+    onAccepted?: () => void;
+    onCompleted?: () => void;
+  }) {
+    this.questId = opts.questId;
+    this.npcId = opts.npcId;
+    this.npcName = opts.npcName;
+    this.phase = opts.phase;
+    this.onQuestAccepted = opts.onAccepted || null;
+    this.onQuestCompleted = opts.onCompleted || null;
+    this.currentPage = 0;
+    this.accepted = false;
+
+    // Load NPC sprite
+    const strId = `${this.npcId}`.padStart(7, '0');
+    let npcFile: any = await WZManager.get(`Npc.wz/${strId}.img`);
+    if (npcFile?.info?.link) {
+      const linkId = npcFile.info.link.nValue;
+      npcFile = await WZManager.get(`Npc.wz/${`${linkId}`.padStart(7, '0')}.img`);
+    }
+    this.speakerImg = npcFile?.stand?.[0]?.nGetImage?.() || null;
+
+    // Ensure item names are loaded for #t format codes
+    await ensureItemNames();
+
+    // Build pages from dialogue text
+    this.buildPages();
+
+    // Preload item icons for reward display
+    await this.preloadRewardIcons();
+
+    this.recalcLayout();
+    this.isHidden = false;
+  }
+
+  async showScriptDialog(opts: {
+    npcId: number;
+    npcName: string;
+    questName: string;
+    questId?: number;
+    text: string;
+    dialogType: ScriptDialogType;
+    selections?: SelectionOption[];
+    onAction: (mode: number, type: number, selection: number) => void;
+  }) {
+    this.scriptMode = true;
+    this.scriptDialogType = opts.dialogType;
+    this.scriptOnAction = opts.onAction;
+    this.scriptQuestName = opts.questName;
+    if (opts.questId) this.questId = opts.questId;
+    this.selections = opts.selections || [];
+    this.accepted = false;
+
+    // Load NPC sprite if different
+    if (opts.npcId !== this.npcId || !this.speakerImg) {
+      this.npcId = opts.npcId;
+      this.npcName = opts.npcName;
+      const strId = `${opts.npcId}`.padStart(7, '0');
+      let npcFile: any = await WZManager.get(`Npc.wz/${strId}.img`);
+      if (npcFile?.info?.link) {
+        const linkId = npcFile.info.link.nValue;
+        npcFile = await WZManager.get(`Npc.wz/${`${linkId}`.padStart(7, '0')}.img`);
+      }
+      this.speakerImg = npcFile?.stand?.[0]?.nGetImage?.() || null;
+    }
+
+    // Preload item icons referenced in text via \x01ITEM:id\x02 markers
+    const itemMatches = opts.text.matchAll(/\x01ITEM:(\d+)\x02/g);
+    for (const m of itemMatches) {
+      await this.loadItemIcon(parseInt(m[1]));
+    }
+
+    // Word-wrap the script text into pages
+    const allLines = this.wrapText(opts.text, TEXT_MAX_W);
+    this.pages = [];
+    for (let i = 0; i < allLines.length; i += MAX_TEXT_LINES) {
+      this.pages.push(allLines.slice(i, i + MAX_TEXT_LINES));
+    }
+    if (this.pages.length === 0) this.pages = [['']];
+    this.currentPage = 0;
+
+    this.recalcLayout();
+    this.isHidden = false;
+  }
+
+  private buildPages() {
+    const questDialogues = QuestData.dialogues.get(this.questId);
+    const questInfo = QuestData.quests.get(this.questId);
+
+    // Get all dialogue messages
+    let allMessages: string[] = [];
+
+    if (this.phase === 'start') {
+      if (questDialogues?.start?.messages?.length) {
+        allMessages = [...questDialogues.start.messages];
+      } else if (questInfo?.startText) {
+        allMessages = [questInfo.startText];
+      } else {
+        allMessages = ['Would you like to help me?'];
+      }
+    } else if (this.phase === 'complete') {
+      if (questDialogues?.complete?.messages?.length) {
+        allMessages = [...questDialogues.complete.messages];
+      } else if (questInfo?.completionText) {
+        allMessages = [questInfo.completionText];
+      } else {
+        allMessages = ['Thank you for your help!'];
+      }
+    } else if (this.phase === 'inProgress') {
+      const stopText = questDialogues?.start?.stop?.npc;
+      if (stopText?.length) {
+        allMessages = [...stopText];
+      } else if (questInfo?.inProgressText) {
+        allMessages = [questInfo.inProgressText];
+      } else {
+        allMessages = ['Please come back when you are done.'];
+      }
+    }
+
+    // Resolve deferred #t and #c item codes now that item names are loaded
+    const character = (window as any).charecter;
+    allMessages = allMessages.map(msg => resolveItemCodes(msg, character?.questManager));
+
+    // Word-wrap all messages into lines, then paginate
+    const allLines: string[] = [];
+    for (const msg of allMessages) {
+      const wrapped = this.wrapText(msg, TEXT_MAX_W);
+      allLines.push(...wrapped);
+      // Add blank line between messages
+      if (allMessages.length > 1) allLines.push('');
+    }
+
+    // Split into pages of MAX_TEXT_LINES each
+    this.pages = [];
+    for (let i = 0; i < allLines.length; i += MAX_TEXT_LINES) {
+      this.pages.push(allLines.slice(i, i + MAX_TEXT_LINES));
+    }
+
+    if (this.pages.length === 0) {
+      this.pages = [['']];
+    }
+
+    this.currentPage = 0;
+  }
+
+  private recalcLayout() {
+    // fillCount based on NPC sprite height AND text height
+    const currentLines = this.pages[this.currentPage]?.length || 1;
+    const textH = TEXT_TOP_OFFSET + currentLines * LINE_H;
+
+    this.fillCount = 6;
+    if (this.speakerImg) {
+      const nameTagH = this.nameTagImg?.nGetImage?.()?.height || 19;
+      const spriteNeeded = this.speakerImg.height + nameTagH + 5;
+      while (this.fillCount * FILL_H < spriteNeeded) {
+        this.fillCount++;
+      }
+    }
+    // Account for selection options height (including header images)
+    let headersH = 0;
+    for (const sel of this.selections) {
+      if (sel.headerType) headersH += 22; // ~18px image + 4px gap
+    }
+    const selectionsH = this.selections.length > 0 ? this.selections.length * LINE_H + 8 + headersH : 0;
+    // Account for rewards section height in static quest dialogs
+    let rewardsH = 0;
+    if (!this.scriptMode && this.questId && this.isLastPage && !this.accepted) {
+      const rewards = QuestData.rewards.get(this.questId);
+      const reward = this.phase === 'complete' ? (rewards?.complete || rewards?.start) : (rewards?.start || rewards?.complete);
+      if (reward && (reward.exp || reward.meso || reward.fame || (reward.items && reward.items.length > 0))) {
+        rewardsH += 30; // gap + REWARD icon
+        if (reward.exp) rewardsH += LINE_H + 2;
+        if (reward.meso) rewardsH += LINE_H + 2;
+        if (reward.fame) rewardsH += LINE_H + 2;
+        if (reward.items) rewardsH += reward.items.length * 34; // ~32px icon height + 2px gap
+      }
+    }
+    const totalTextH = textH + selectionsH + rewardsH;
+    // Also ensure text fits
+    while (this.fillCount * FILL_H < totalTextH) {
+      this.fillCount++;
+    }
+
+    const totalH = TOP_H + FILL_H * this.fillCount + BOTTOM_H;
+    this.x = Math.floor((config.width - DIALOG_WIDTH) / 2);
+    this.y = Math.floor((config.height - totalH) / 2);
+
+    this.createButtons();
+  }
+
+  private get isLastPage(): boolean {
+    return this.currentPage >= this.pages.length - 1;
+  }
+
+  private createButtons() {
+    this.buttons.forEach(btn => ClickManager.removeButton(btn));
+    this.buttons = [];
+
+    const bottomY = this.y + TOP_H + FILL_H * this.fillCount + 33;
+
+    // Script mode — buttons based on scriptDialogType
+    if (this.scriptMode) {
+      this.createScriptButtons(bottomY);
+      return;
+    }
+
+    if (this.accepted) {
+      this.addButton(this.x + 9, bottomY, this.utilDlgExNode?.BtClose?.nChildren, () => this.hide());
+      return;
+    }
+
+    if (this.phase === 'inProgress') {
+      this.addButton(this.x + 9, bottomY, this.utilDlgExNode?.BtClose?.nChildren, () => this.hide());
+      return;
+    }
+
+    if (!this.isLastPage) {
+      this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
+        this.questNode?.BtOK?.nChildren, () => {
+          this.currentPage++;
+          this.recalcLayout();
+        });
+      if (this.currentPage > 0) {
+        this.addButton(this.x + DIALOG_WIDTH - 120, bottomY,
+          this.questNode?.BtNo?.nChildren, () => {
+            this.currentPage = Math.max(0, this.currentPage - 1);
+            this.recalcLayout();
+          });
+      }
+    } else {
+      if (this.phase === 'start') {
+        this.addButton(this.x + DIALOG_WIDTH - 120, bottomY,
+          this.questNode?.BtOK?.nChildren, () => {
+            if (this.onQuestAccepted) this.onQuestAccepted();
+            this.accepted = true;
+            const questDialogues = QuestData.dialogues.get(this.questId);
+            const qmRef = (window as any).charecter?.questManager;
+            if (questDialogues?.start?.yes?.length) {
+              const yesText = resolveItemCodes(questDialogues.start.yes.join(' '), qmRef);
+              this.pages = [this.wrapText(yesText, TEXT_MAX_W)];
+            } else {
+              const questInfo = QuestData.quests.get(this.questId);
+              const ipText = resolveItemCodes(questInfo?.inProgressText || 'Quest accepted!', qmRef);
+              this.pages = [this.wrapText(ipText, TEXT_MAX_W)];
+            }
+            this.currentPage = 0;
+            this.recalcLayout();
+          });
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
+          this.questNode?.BtNo?.nChildren, () => {
+            const questDialogues = QuestData.dialogues.get(this.questId);
+            if (questDialogues?.start?.no?.length) {
+              this.accepted = true;
+              const noText = resolveItemCodes(questDialogues.start.no.join(' '), (window as any).charecter?.questManager);
+              this.pages = [this.wrapText(noText, TEXT_MAX_W)];
+              this.currentPage = 0;
+              this.recalcLayout();
+            } else {
+              this.hide();
+            }
+          });
+      } else if (this.phase === 'complete') {
+        // GMS: last page shows rewards with OK button — click completes and closes
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
+          this.utilDlgExNode?.BtOK?.nChildren, () => {
+            if (this.onQuestCompleted) this.onQuestCompleted();
+            this.hide();
+          });
+      }
+    }
+  }
+
+  private createScriptButtons(bottomY: number) {
+    const cb = this.scriptOnAction;
+    if (!cb) return;
+
+    const dt = this.scriptDialogType;
+
+    // Use Quest-style buttons for all script dialogs (correct MapleStory look)
+    const nextBtn = this.questNode?.BtOK?.nChildren;   // "Accept" style — used for Next/OK/Accept/Yes
+    const prevBtn = this.questNode?.BtNo?.nChildren;    // "Decline" style — used for Prev/Decline/No
+
+    // Single-button dialogs (next, prev, ok) ALL send mode=1 when clicked.
+    // The button label is cosmetic — the single action always advances the script.
+    // Only multi-button dialogs (nextPrev, acceptDecline, yesNo) have a mode=0 button.
+    switch (dt) {
+      case 'next':
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, nextBtn, () => cb(1, 0, -1));
+        break;
+      case 'prev':
+        // Single button — advances script (mode=1), NOT go-back
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, nextBtn, () => cb(1, 0, -1));
+        break;
+      case 'nextPrev':
+        // Two buttons: Next (mode=1) + Prev (mode=0)
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, nextBtn, () => cb(1, 0, -1));
+        this.addButton(this.x + DIALOG_WIDTH - 120, bottomY, prevBtn, () => cb(0, 0, -1));
+        break;
+      case 'ok':
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, nextBtn, () => cb(1, 0, -1));
+        break;
+      case 'acceptDecline':
+        // Two buttons: Accept (mode=1, type=1) + Decline (mode=0, type=1)
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, nextBtn, () => cb(1, 1, -1));
+        this.addButton(this.x + DIALOG_WIDTH - 120, bottomY, prevBtn, () => cb(0, 1, -1));
+        break;
+      case 'yesNo':
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, nextBtn, () => cb(1, 1, -1));
+        this.addButton(this.x + DIALOG_WIDTH - 120, bottomY, prevBtn, () => cb(0, 1, -1));
+        break;
+      case 'simple':
+        // Selection options are rendered as clickable text in draw(), not as WZ buttons
+        // No next/prev buttons for simple selection dialogs
+        break;
+    }
+
+    // Always add close/ESC button
+    this.addButton(this.x + 9, bottomY,
+      this.utilDlgExNode?.BtClose?.nChildren, () => cb(-1, 0, -1));
+  }
+
+  private addButton(x: number, y: number, img: any, onClick: () => void) {
+    const btn = new MapleStanceButton(null, {
+      x, y,
+      img: img || this.utilDlgExNode?.BtClose?.nChildren,
+      isRelativeToCamera: true,
+      isPartOfUI: true,
+      onClick,
+    });
+    this.buttons.push(btn);
+    ClickManager.addButton(btn);
+  }
+
+  hide() {
+    this.buttons.forEach(btn => ClickManager.removeButton(btn));
+    this.buttons = [];
+    this.isHidden = true;
+    this.onQuestAccepted = null;
+    this.onQuestCompleted = null;
+    this.scriptMode = false;
+    this.scriptOnAction = null;
+    this.selections = [];
+    this.selectionRects = [];
+    this.hoveredSelection = -1;
+  }
+
+  // Handle click on selection options — returns true if a selection was clicked
+  handleClick(canvasX: number, canvasY: number): boolean {
+    if (this.isHidden || this.selectionRects.length === 0) return false;
+    for (const rect of this.selectionRects) {
+      if (canvasX >= rect.x && canvasX <= rect.x + rect.w &&
+          canvasY >= rect.y && canvasY <= rect.y + rect.h) {
+        this.scriptOnAction?.(1, 4, rect.index);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Update hover state for selection options
+  handleMouseMove(canvasX: number, canvasY: number) {
+    if (this.isHidden || this.selectionRects.length === 0) {
+      this.hoveredSelection = -1;
+      return;
+    }
+    this.hoveredSelection = -1;
+    for (const rect of this.selectionRects) {
+      if (canvasX >= rect.x && canvasX <= rect.x + rect.w &&
+          canvasY >= rect.y && canvasY <= rect.y + rect.h) {
+        this.hoveredSelection = rect.index;
+        break;
+      }
+    }
+  }
+
+  draw(canvas: GameCanvas, camera: CameraInterface, lag: number, msPerTick: number, tdelta: number) {
+    if (this.isHidden) return;
+
+    // Store canvas ref for text measurement
+    if (!this.measureCanvas) this.measureCanvas = canvas;
+
+    let y = this.y;
+
+    // Draw UtilDlgEx frame
+    canvas.drawImage({ img: this.topImg?.nGetImage(), dx: this.x, dy: y });
+    y += TOP_H;
+
+    for (let i = 0; i < this.fillCount; i++) {
+      canvas.drawImage({ img: this.fillImg?.nGetImage(), dx: this.x, dy: y });
+      y += FILL_H;
+    }
+
+    canvas.drawImage({ img: this.bottomImg?.nGetImage(), dx: this.x, dy: y });
+
+    // Draw NPC sprite + name tag
+    if (this.speakerImg) {
+      const nameTagImgEl = this.nameTagImg?.nGetImage();
+      const tagW = nameTagImgEl?.width || 121;
+      const spriteX = this.x + LEFT_PADDING + Math.floor(tagW / 2) - Math.floor(this.speakerImg.width / 2);
+      canvas.drawImage({ img: this.speakerImg, dx: spriteX, dy: this.y + TOP_H });
+
+      const midHeight = Math.floor((TOP_H + FILL_H * this.fillCount) / 2);
+      const finalHeight = Math.max(this.speakerImg.height, midHeight);
+      if (nameTagImgEl) {
+        canvas.drawImage({
+          img: nameTagImgEl,
+          dx: this.x + LEFT_PADDING,
+          dy: this.y + TOP_H + finalHeight,
+        });
+        canvas.drawText({
+          text: this.npcName,
+          color: '#FFFFFF',
+          x: this.x + LEFT_PADDING + Math.floor(tagW / 2),
+          y: this.y + TOP_H + finalHeight + 5,
+          align: 'center',
+        });
+      }
+    }
+
+    // Quest name header
+    const questName = this.scriptMode ? this.scriptQuestName : QuestData.quests.get(this.questId)?.name;
+    if (questName) {
+      canvas.drawText({
+        text: questName,
+        color: '#0066CC',
+        x: this.x + TEXT_LEFT,
+        y: this.y + 32,
+        fontSize: 13,
+        fontWeight: 'bold',
+      });
+    }
+
+    // Draw current page text (with inline image support for #v and #f codes)
+    const lines = this.pages[this.currentPage] || [];
+    let textY = this.y + TEXT_TOP_OFFSET;
+    for (const line of lines) {
+      // Parse inline image markers: \x01ITEM:id\x02 and \x01QICON:id\x02
+      const parts = line.split(/(\x01(?:ITEM|QICON):\d+\x02)/);
+      let lineX = this.x + TEXT_LEFT;
+      let lineH = LINE_H;
+      for (const part of parts) {
+        const itemMatch = part.match(/\x01ITEM:(\d+)\x02/);
+        const qiconMatch = part.match(/\x01QICON:(\d+)\x02/);
+        if (itemMatch) {
+          const itemId = parseInt(itemMatch[1]);
+          const icon = this.itemIconCache.get(itemId);
+          if (icon) {
+            canvas.drawImage({ img: icon, dx: lineX, dy: textY - 2 });
+            lineX += (icon.width || 32) + 2;
+            lineH = Math.max(lineH, (icon.height || 32) + 2);
+          }
+        } else if (qiconMatch) {
+          const qiconId = qiconMatch[1];
+          const icon = this.questIconCache?.get(qiconId);
+          if (icon) {
+            canvas.drawImage({ img: icon, dx: lineX, dy: textY - 2 });
+            lineX += (icon.width || 40) + 2;
+            lineH = Math.max(lineH, (icon.height || 17) + 2);
+          }
+        } else if (part) {
+          canvas.drawText({
+            text: part,
+            color: '#000000',
+            x: lineX,
+            y: textY,
+            fontSize: 12,
+          });
+          lineX += part.length * 7; // approximate width
+        }
+      }
+      textY += lineH;
+    }
+
+    // Draw quest rewards section (on last page of static quest dialogs only — scripts handle their own)
+    if (!this.scriptMode && this.questId && this.isLastPage && !this.accepted) {
+      const rewards = QuestData.rewards.get(this.questId);
+      // Show complete rewards if phase is complete, otherwise start rewards; fall back to whichever has data
+      const reward = this.phase === 'complete' ? (rewards?.complete || rewards?.start) : (rewards?.start || rewards?.complete);
+      const hasRewards = reward && (reward.exp || reward.meso || reward.fame || (reward.items && reward.items.length > 0));
+      if (hasRewards) {
+        textY += 8;
+        // Draw REWARD!! icon
+        if (this.rewardIcon) {
+          canvas.drawImage({ img: this.rewardIcon, dx: this.x + TEXT_LEFT, dy: textY });
+          textY += (this.rewardIcon.height || 16) + 6;
+        } else {
+          canvas.drawText({
+            text: 'REWARD!!',
+            color: '#CC4400',
+            x: this.x + TEXT_LEFT,
+            y: textY,
+            fontSize: 12,
+            fontWeight: 'bold',
+          });
+          textY += LINE_H + 4;
+        }
+        // Draw EXP reward
+        if (reward.exp) {
+          const iconX = this.x + TEXT_LEFT;
+          if (this.expIcon) {
+            canvas.drawImage({ img: this.expIcon, dx: iconX, dy: textY });
+          }
+          canvas.drawText({
+            text: `${reward.exp} exp`,
+            color: '#000000',
+            x: iconX + (this.expIcon?.width || 43) + 6,
+            y: textY + 1,
+            fontSize: 12,
+          });
+          textY += LINE_H + 2;
+        }
+        // Draw meso reward
+        if (reward.meso) {
+          const iconX = this.x + TEXT_LEFT;
+          if (this.mesoIcon) {
+            canvas.drawImage({ img: this.mesoIcon, dx: iconX, dy: textY });
+          }
+          canvas.drawText({
+            text: `${reward.meso} meso`,
+            color: '#000000',
+            x: iconX + (this.mesoIcon?.width || 49) + 6,
+            y: textY + 1,
+            fontSize: 12,
+          });
+          textY += LINE_H + 2;
+        }
+        // Draw fame reward
+        if (reward.fame) {
+          const iconX = this.x + TEXT_LEFT;
+          if (this.fameIcon) {
+            canvas.drawImage({ img: this.fameIcon, dx: iconX, dy: textY });
+          }
+          canvas.drawText({
+            text: `${reward.fame} fame`,
+            color: '#000000',
+            x: iconX + (this.fameIcon?.width || 48) + 6,
+            y: textY + 1,
+            fontSize: 12,
+          });
+          textY += LINE_H + 2;
+        }
+        // Draw item rewards with icons
+        if (reward.items) {
+          for (const item of reward.items) {
+            const iconX = this.x + TEXT_LEFT;
+            const itemIcon = this.itemIconCache.get(item.id);
+            if (itemIcon) {
+              canvas.drawImage({ img: itemIcon, dx: iconX, dy: textY });
+              canvas.drawText({
+                text: `x${item.count}`,
+                color: '#000000',
+                x: iconX + (itemIcon.width || 32) + 4,
+                y: textY + 10,
+                fontSize: 12,
+              });
+              textY += Math.max(itemIcon.height || 32, LINE_H) + 2;
+            } else {
+              canvas.drawText({
+                text: `${item.count} x item #${item.id}`,
+                color: '#000000',
+                x: iconX + 4,
+                y: textY + 1,
+                fontSize: 12,
+              });
+              textY += LINE_H + 2;
+            }
+          }
+        }
+      }
+    }
+
+    // Draw selection options for 'simple' dialog type
+    if (this.scriptMode && this.scriptDialogType === 'simple' && this.selections.length > 0) {
+      textY += 4; // small gap before selections
+      this.selectionRects = [];
+      for (const sel of this.selections) {
+        // Draw quest category header image if present
+        let headerImg: HTMLImageElement | null = null;
+        if (sel.headerType === 'completable') headerImg = this.listCompletableImg;
+        else if (sel.headerType === 'inProgress') headerImg = this.listInProgressImg;
+        else if (sel.headerType === 'available') headerImg = this.listAvailableImg;
+
+        if (headerImg) {
+          canvas.drawImage({ img: headerImg, dx: this.x + TEXT_LEFT, dy: textY });
+          textY += (headerImg.height || 18) + 4;
+        }
+
+        const selX = this.x + TEXT_LEFT;
+        const isHovered = this.hoveredSelection === sel.index;
+
+        // Draw "ETC" header for NPC script conversation options
+        if (sel.headerType === 'etc' && this.listEtcImg) {
+          canvas.drawImage({ img: this.listEtcImg, dx: selX, dy: textY });
+          textY += (this.listEtcImg.height || 12) + 4;
+        }
+
+        // Simple dot bullet before each selection
+        canvas.drawText({
+          text: `\u2022 ${sel.label}`,
+          color: isHovered ? '#0055CC' : '#0066FF',
+          x: selX + 4,
+          y: textY,
+          fontSize: 12,
+        });
+        this.selectionRects.push({
+          index: sel.index,
+          x: selX,
+          y: textY - 2,
+          w: TEXT_MAX_W,
+          h: LINE_H,
+        });
+        textY += LINE_H;
+      }
+    }
+
+    // Draw buttons
+    this.buttons.forEach(btn => btn.draw(canvas, camera, lag, msPerTick, tdelta));
+  }
+
+  private wrapText(text: string, maxWidth: number): string[] {
+    const lines: string[] = [];
+    if (!text) return [''];
+
+    const paragraphs = text.split('\n');
+    for (const para of paragraphs) {
+      if (!para.trim()) { lines.push(''); continue; }
+      const words = para.split(' ');
+      let current = '';
+      for (const word of words) {
+        const test = current ? `${current} ${word}` : word;
+        // Estimate width: ~7px per character at fontSize 12
+        const estWidth = test.length * 7;
+        if (estWidth > maxWidth && current) {
+          lines.push(current);
+          current = word;
+        } else {
+          current = test;
+        }
+      }
+      if (current) lines.push(current);
+    }
+    return lines.length > 0 ? lines : [''];
+  }
+}

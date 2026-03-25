@@ -95,13 +95,22 @@ Systems
 ├── Audio/               → BGM and SFX
 ├── Effects/             → Damage numbers
 
+Quest System
+├── Quest/QuestData.ts       → Parses Quest.wz (QuestInfo, Check, Act, Say), name lookups, format codes
+├── Quest/QuestManager.ts    → Player quest state, mob kill tracking, forceStart/forceComplete
+├── Quest/QuestScriptEngine.ts → Executes backend quest scripts via new Function(), manages qm API, item name cache
+
+NPC Script System
+├── NpcScriptEngine.ts       → Executes backend NPC scripts (708 files) via new Function(), manages cm API
+
 UI (all rendered from WZ assets)
 ├── UI/UILogin.ts        → Login flow (4 substates)
 ├── UI/UIMap.ts          → In-game HUD (HP/MP/EXP bars)
 ├── UI/MapleButton.ts    → WZ sprite buttons
 ├── UI/UINpcTalk.ts      → NPC dialogue
+├── UI/UIQuestDialog.ts  → Quest dialog (static + script-driven modes)
 ├── UI/TaxiUI.ts         → Transportation dialog
-├── UI/Menu/             → Inventory, Stats windows (draggable)
+├── UI/Menu/             → Inventory, Stats, Quest Log windows (draggable)
 ├── UI/DebugDrag.ts      → F9 debug positioning tool
 
 Networking
@@ -163,6 +172,10 @@ Port of [Cosmic](https://github.com/P0nk/Cosmic) Java v83 emulator to TypeScript
 - `String.wz/Mob.img` — Monster names by ID
 - `String.wz/Npc.img` — NPC names by ID
 - `String.wz/Eqp.img` — Equipment names (nested structure)
+- `String.wz/Consume.img` — Consumable item names by ID (e.g., `2010000` → "Apple")
+- `String.wz/Etc.img` — ETC item names by ID
+- `String.wz/Ins.img` — Setup/Install item names by ID
+- `String.wz/Cash.img` — Cash item names by ID
 
 ## Character Rendering Pipeline
 1. `MapleCharacter.load()` loads body, head, hair, face, equipment from Character.wz
@@ -199,3 +212,186 @@ Port of [Cosmic](https://github.com/P0nk/Cosmic) Java v83 emulator to TypeScript
 - `MyCharacter.load()` is async — must await before rendering character sprites
 - WZ `charInfo2` image already contains stat labels (JOB, LV, STR, etc.) — only draw values, not labels
 - Login map backgrounds repeat vertically — the map extends well below y=-3000
+
+## Quest Script Engine
+Backend quest scripts (`backend/scripts/quest/*.js`, 253 files) are plain JavaScript that run client-side via `new Function()`. They are copied to `TypeScript-Client/public/scripts/quest/`.
+
+### Script Pattern
+All scripts follow this structure:
+```javascript
+var status = -1;
+function start(mode, type, selection) { /* dialog flow for quest start */ }
+function end(mode, type, selection) { /* dialog flow for quest completion */ }
+```
+- `status` tracks the current dialog page, persisted across calls
+- `mode`: 1 = forward/accept, 0 = back/decline, -1 = close
+- `type`: 0 = navigation, 1 = accept/decline or yes/no
+- Scripts are re-executed on each user interaction with the persisted `status`
+
+### Critical: Dialog Button Mode Rules
+- **Single-button dialogs (`sendNext`, `sendPrev`, `sendOk`) ALL send `mode=1`**. The button label is cosmetic — the single action always advances the script forward.
+- **Multi-button dialogs (`sendNextPrev`, `sendAcceptDecline`, `sendYesNo`)** have two buttons: forward (mode=1) and back (mode=0).
+- Getting this wrong causes scripts to loop forever or never reach reward-giving status values.
+
+### Critical: `sendX` + `dispose()` in Same Call
+Some scripts call `qm.sendNext("message")` followed by `qm.dispose()` in the same status block (e.g., Roger's Apple HP check). This means "show a final message, then close." Handle by showing the message as a one-shot OK dialog — the next user click closes it.
+
+### qm API Mapping
+| Script method | Maps to |
+|---|---|
+| `qm.sendNext/sendPrev/sendNextPrev/sendOk/sendAcceptDecline/sendYesNo` | UIQuestDialog with appropriate buttons |
+| `qm.gainItem(id, count)` | `inventory.addToInventory(id, count)` |
+| `qm.gainExp(amount)` | `character.addExp(amount)` |
+| `qm.forceStartQuest()` / `qm.forceCompleteQuest()` | QuestManager force methods (bypass checks) |
+| `qm.haveItem(id)` | `questManager.getItemCount(id) >= 1` |
+| `qm.getPlayer().getHp()` | `character.hp` (NOT `character.stats.hp`) |
+| `qm.getPlayer().updateHp(n)` | `character.hp = n` (NOT `character.stats.hp = n`) |
+| `qm.dispose()` | Close dialog |
+
+### Character Property Locations
+- HP/MP are on `character.hp`, `character.mp`, `character.maxHp`, `character.maxMp` (direct properties)
+- Stats (level, job, STR, DEX, etc.) are on `character.stats.level`, `character.stats.job`, etc.
+- Inventory is `character.inventory` with `.equip`, `.use`, `.etc`, `.setup`, `.cash` arrays
+
+### Item Inventory Type Mapping
+Use `Math.floor(itemId / 1000000)` to determine inventory tab:
+- 1 = Equip, 2 = Use, 3 = Setup, 4 = ETC, 5 = Cash
+- Do NOT use the second digit of the item ID — this was a bug that caused items to go to wrong tabs
+
+### Item Consumption
+- Double-click on Use tab items triggers consumption
+- Item `spec` data in WZ: `hp` (flat HP), `mp` (flat MP), `hpR` (% of maxHp), `mpR` (% of maxMp)
+- Sound effect: `Sound.wz/Item.img/02000000/Use`
+
+### Quest Item Rules
+- Quest items (items required by active quests) cannot be dropped from inventory
+- Check both `reqs.complete.items` and `reqs.start.items` for active quests
+
+### v83 Beginner Stats
+- Level 1 Beginner: HP=50, MaxHP=50, MP=5, MaxMP=5
+- Do NOT use lower values — many quest scripts check `getHp() >= 50`
+
+### NPC Dialog Auto-Close Menus
+When any NPC/quest dialog opens, all UI menus (inventory, stats, quest log) should be closed automatically via `MapStateInstance.closeAllMenus()`.
+
+## NPC Script Engine
+Backend NPC scripts (`backend/scripts/npc/*.js`, 708 files) run client-side via `new Function()`. They are copied to `TypeScript-Client/public/scripts/npc/`.
+
+### Script Pattern
+NPC scripts follow this structure:
+```javascript
+var status = 0;
+function start() { cm.sendNext("dialog text"); }
+function action(mode, type, selection) { /* dialog flow */ }
+```
+- `start()` is called first, then `action()` on each subsequent user interaction
+- `status` tracks the current dialog page
+- `mode`: 1 = forward, 0 = back, -1 = close
+- `selection`: index from `sendSimple` selection menus
+
+### cm API Mapping
+| Script method | Maps to |
+|---|---|
+| `cm.sendNext/sendPrev/sendNextPrev/sendOk/sendAcceptDecline/sendYesNo` | UIQuestDialog with appropriate buttons |
+| `cm.sendSimple(text)` | Selection dialog with `#L<n>#option#l` parsed into clickable options |
+| `cm.warp(mapId)` | `fadeToBlack()` + `changeMap(mapId)` |
+| `cm.gainItem(id, count)` | `inventory.addToInventory(id, count)` |
+| `cm.gainExp(amount)` | `character.addExp(amount, true)` (with IncEXP effect) |
+| `cm.gainMeso(amount)` | `character.inventory.mesos += amount` |
+| `cm.haveItem(id)` | `questManager.getItemCount(id) >= 1` |
+| `cm.getPlayer()` | Player object with getHp/getMp/getLevel/getJob/getName etc. |
+| `cm.dispose()` | Close dialog |
+
+### NPC Click Flow (MapleMap.handleClick)
+1. Check for quest scripts (QuestScriptEngine) — scripted quests with startscript/endscript
+2. Check for quest listings — if NPC has available/in-progress/completable quests, show combined dialog with category headers
+3. If NPC also has a script, add "ETC" section with conversation option in the quest listing
+4. If no quests, try NPC script (NpcScriptEngine) — `tryNpcScript(npc)`
+5. Fallback: generic "Hello" dialog (UINpcTalk)
+
+### sendSimple Selection Parsing
+`sendSimple` text contains `#L<index>#<label>#l` patterns for selectable options:
+- `parseSelections()` extracts these into `SelectionOption[]` with `index` and `label`
+- Remaining text becomes the dialog body
+- Selection clicks send `(mode=1, type=4, selection=index)` back to the script
+
+### Quest Listing in NPC Dialog
+When an NPC has quests, a combined dialog shows quest categories with WZ header images:
+- `UIWindow.img/UtilDlgEx/list0` (123x15) — "QUEST IN PROGRESS"
+- `UIWindow.img/UtilDlgEx/list1` (105x18) — "QUEST AVAILABLE"
+- `UIWindow.img/UtilDlgEx/list2` (19x12) — "ETC" (for NPC conversation option)
+- `UIWindow.img/UtilDlgEx/list3` (179x14) — "QUEST THAT CAN BE COMPLETED"
+- Quest names are clickable blue text with bullet dots (•)
+- Clicking a quest opens the appropriate quest start/complete/inProgress dialog
+- If NPC also has a script, "ETC" header + conversation link appears at the bottom
+
+### Quest Completion Dialog (GMS behavior)
+- Last page shows quest text + reward section (REWARD!! icon, EXP/meso/fame/item icons)
+- Button is `UtilDlgEx/BtOK` ("OK"), NOT `Quest/BtOK` ("ACCEPT")
+- Clicking OK completes the quest and closes immediately — no extra "Quest completed!" page
+
+### Quest Reward Display
+Reward icons loaded from `UIWindow.img/QuestIcon/`:
+- `QuestIcon/4/0` (73x16) — "REWARD!!" header
+- `QuestIcon/6/0` (48x16) — fame label
+- `QuestIcon/7/0` (49x16) — meso label
+- `QuestIcon/8/0` (43x17) — EXP label
+Item rewards render the actual item icon from `Item.wz/<category>/<prefix>.img/<paddedId>/info/icon` with "x<count>" text.
+
+### Inline Image Format Codes
+Quest/NPC scripts embed images in dialog text via format codes:
+- `#f<wzPath>#` — render WZ image inline (e.g., `#fUI/UIWindow.img/QuestIcon/4/0#` = REWARD icon)
+- `#v<itemId>#` — render item icon inline
+- `#t<itemId>#` — item name (resolved from `String.wz/Consume.img`, `Eqp.img`, `Etc.img`, etc.)
+- `#i<itemId>#` — render item icon inline (same as `#v`)
+- `#c<itemId>#` — current item count in player inventory
+These are parsed into `\x01ITEM:id\x02` and `\x01QICON:id\x02` markers by the strip functions, then rendered as actual images by UIQuestDialog's draw method.
+
+### Format Code Resolution Timing (Critical)
+- `#t` and `#c` codes are **deferred** — `stripFormatCodes()` in QuestData.ts preserves them as-is during construction (item names aren't loaded yet)
+- They are resolved at **display time** via `resolveItemCodes()` after `ensureItemNames()` has loaded the name cache
+- All display sites must call `resolveItemCodes()`: UIQuestDialog.buildPages(), accepted yes/no text, QuestLogMenuSprite description
+- `#i` and `#v` codes are converted to `\x01ITEM:id\x02` markers at strip time and rendered as images at draw time
+
+### Item Name Lookup
+`ensureItemNames()` in QuestData.ts loads names from `String.wz/{Consume,Eqp,Etc,Ins,Cash}.img` into a global cache using `extractItemNames()` which recursively walks nested structures (Etc.img has `Etc/<id>`, Eqp.img has `Eqp/Accessory/<id>`, `Eqp/Armor/<id>`, etc.). Called lazily from UIQuestDialog.show() and QuestScriptEngine.begin(). Access via `getItemNameSync(itemId)` or `resolveItemCodes(text, questManager)`.
+
+### String.wz Nested Structures
+- `Consume.img`, `Ins.img`, `Cash.img` — flat: `<itemId>` children directly
+- `Etc.img` — nested: `Etc/<itemId>`
+- `Eqp.img` — deeply nested: `Eqp/{Accessory,Armor,Cap,...}/<itemId>`
+- Must use recursive extraction — cannot assume flat structure
+
+### Item Icon Loading
+Item icons are at `Item.wz/<category>/<prefix>.img/<paddedId>/info/icon` where:
+- `paddedId` = item ID zero-padded to 8 digits (e.g., `02010000`)
+- `prefix` = first 4 digits of padded ID (e.g., `0201`)
+- `category` = `Math.floor(itemId / 1000000)`: 1=Equip, 2=Consume, 3=Install, 4=Etc, 5=Cash
+
+### addExp Effect Rules
+`character.addExp(exp, showEffect)`:
+- `showEffect = false` (default): silent EXP gain — used for mob kills
+- `showEffect = true`: plays IncEXP sound + animation — used only for quest/NPC rewards
+- Prevents the quest completion sound/animation from playing on every mob kill
+
+### Physics Reset on Map Change
+After warp/map change, physics state must be reset:
+- `pos.vx = 0`, `pos.vy = 0` — clear velocity
+- `pos.fh = null`, `pos.lf = null` — clear foothold references
+- `pos.isClimbing = false` — clear climbing state
+- Player lands naturally on the nearest foothold (like the original game)
+
+### Quest Reward Selection (prop system)
+In `Act.img/<questId>/1/item/<n>`, each item can have a `prop` field:
+- `prop > 0` → selectable item — player must choose ONE from all prop items
+- `prop = 0` or absent → always given (non-selectable)
+- `count = -1` → item removal (quest item cleanup, always applied)
+- `QuestIcon/3/0` (83x17) = "SELECT ITEM" header image for selection rewards
+- Currently NOT implemented — all items are shown as regular rewards and given together
+
+### Spawn Position on Map Change
+1. Try named portal (if `portalName` specified)
+2. Try any spawn portal (`type === 0`)
+3. Fall back to any portal regardless of type
+4. Fall back to center foothold (`getCenterFootholdLocation`)
+5. Fall back to map center coordinates

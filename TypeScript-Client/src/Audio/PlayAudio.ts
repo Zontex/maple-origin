@@ -14,19 +14,19 @@
 //   concurrentAudio.play();
 // }
 
-const playingAudios = new Set();
+const playingAudios = new Map<any, number>();
 
-function PLAY_AUDIO(audio: any, volume = 1) {
-  if (!playingAudios.has(audio)) {
+function PLAY_AUDIO(audio: any, volume = 1, allowOverlap = false) {
+  const now = Date.now();
+  const lastPlayed = playingAudios.get(audio) || 0;
+
+  // Allow overlap, but throttle the same sound to at most once per 50ms
+  // to prevent audio spam from rapid-fire calls in the same frame
+  if (allowOverlap || now - lastPlayed > 50) {
     const concurrentAudio = audio.cloneNode();
     concurrentAudio.volume = volume;
     concurrentAudio.play();
-
-    playingAudios.add(audio);
-
-    concurrentAudio.addEventListener("ended", () => {
-      playingAudios.delete(audio);
-    });
+    playingAudios.set(audio, now);
   }
 }
 

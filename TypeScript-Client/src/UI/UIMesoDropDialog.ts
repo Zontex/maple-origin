@@ -15,6 +15,13 @@ const CENTER_REPEATS = 2;
 // Total dialog height
 const DIALOG_H = NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS + NOTICE_BOTTOM_H;
 
+// Button sizes: BtOK2=41x18, BtCancel2=47x18
+const BTN_OK_W = 41;
+const BTN_CANCEL_W = 47;
+const BTN_GAP = 6;
+
+export type DropDialogMode = 'meso' | 'item';
+
 export default class UIMesoDropDialog {
   private basicImg: any = null;
   private noticeTopNode: any = null;
@@ -24,11 +31,14 @@ export default class UIMesoDropDialog {
   private buttons: MapleStanceButton[] = [];
   private canvas: GameCanvas;
   private onConfirm: ((amount: number) => void) | null = null;
-  private maxMesos: number = 0;
+  private maxAmount: number = 0;
   private errorMessage: string = '';
   private errorTimer: number = 0;
   private inputValue: string = '0';
   private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
+  private mode: DropDialogMode = 'meso';
+  private itemName: string = '';
+  private showInput: boolean = true;
 
   static async fromOpts(opts: { canvas: GameCanvas }) {
     const dialog = new UIMesoDropDialog(opts);
@@ -67,12 +77,17 @@ export default class UIMesoDropDialog {
     this.buttons.forEach(btn => ClickManager.removeButton(btn));
     this.buttons = [];
 
-    // Buttons go in the bottom section of Notice4
-    const btnY = this.y + NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS + 30;
-    const centerX = this.x + Math.floor(NOTICE_WIDTH / 2);
+    // Bottom piece starts here
+    const bottomY = this.y + NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS;
+    // Buttons centered in the bottom piece, below the input box
+    // The input box area is roughly at y+14 to y+32 in the bottom piece
+    // Buttons sit at roughly y+50 in the bottom piece
+    const btnY = bottomY + 50;
+    const totalBtnW = BTN_OK_W + BTN_GAP + BTN_CANCEL_W;
+    const btnStartX = this.x + Math.floor((NOTICE_WIDTH - totalBtnW) / 2);
 
     const okButton = new MapleStanceButton(null, {
-      x: centerX - 52,
+      x: btnStartX,
       y: btnY,
       isRelativeToCamera: true,
       isPartOfUI: true,
@@ -83,7 +98,7 @@ export default class UIMesoDropDialog {
     });
 
     const cancelButton = new MapleStanceButton(null, {
-      x: centerX + 5,
+      x: btnStartX + BTN_OK_W + BTN_GAP,
       y: btnY,
       isRelativeToCamera: true,
       isPartOfUI: true,
@@ -97,34 +112,38 @@ export default class UIMesoDropDialog {
     this.buttons.forEach(btn => ClickManager.addButton(btn));
   }
 
-  show(maxMesos: number, onConfirm: (amount: number) => void) {
+  show(maxAmount: number, onConfirm: (amount: number) => void, mode: DropDialogMode = 'meso', itemName: string = '') {
     this.isHidden = false;
-    this.maxMesos = maxMesos;
+    this.maxAmount = maxAmount;
     this.onConfirm = onConfirm;
+    this.mode = mode;
+    this.itemName = itemName;
     this.errorMessage = '';
     this.errorTimer = 0;
-    this.inputValue = '0';
+
+    // For single non-stackable items, no input needed
+    this.showInput = mode === 'meso' || maxAmount > 1;
+    this.inputValue = this.showInput ? '0' : '1';
 
     // Create buttons at current position (centered)
     this.createButtons();
 
-    // Capture keyboard input directly — no HTML elements needed
+    // Capture keyboard input directly
     this.keydownHandler = (e: KeyboardEvent) => {
       if (this.isHidden) return;
 
-      if (e.key >= '0' && e.key <= '9') {
+      if (this.showInput && e.key >= '0' && e.key <= '9') {
         if (this.inputValue === '0') {
           this.inputValue = e.key;
         } else {
           this.inputValue += e.key;
         }
-        // Cap the displayed value length
         if (this.inputValue.length > 10) {
           this.inputValue = this.inputValue.slice(0, 10);
         }
         e.preventDefault();
         e.stopPropagation();
-      } else if (e.key === 'Backspace') {
+      } else if (this.showInput && e.key === 'Backspace') {
         if (this.inputValue.length > 1) {
           this.inputValue = this.inputValue.slice(0, -1);
         } else {
@@ -164,8 +183,10 @@ export default class UIMesoDropDialog {
       this.errorTimer = 2000;
       return;
     }
-    if (amount > this.maxMesos) {
-      this.errorMessage = 'You don\'t have enough mesos!';
+    if (amount > this.maxAmount) {
+      this.errorMessage = this.mode === 'meso'
+        ? "You don't have enough mesos!"
+        : `You only have ${this.maxAmount}!`;
       this.errorTimer = 2000;
       return;
     }
@@ -202,53 +223,91 @@ export default class UIMesoDropDialog {
       y += NOTICE_CENTER_H;
     }
 
-    // Draw bottom piece (has space for input box and buttons)
+    // Draw bottom piece
     canvas.drawImage({ img: this.noticeBottomNode.nGetImage(), dx: x, dy: y });
 
-    // Draw dialog text in the top + center area
+    // Draw dialog text centered in the top + center area
     const textX = x + Math.floor(NOTICE_WIDTH / 2);
-    const textY = this.y + 5;
-    canvas.drawText({
-      text: 'How many mesos would you',
-      x: textX,
-      y: textY,
-      color: '#000000',
-      fontSize: 12,
-      fontFamily: 'Arial',
-      align: 'center',
-    });
-    canvas.drawText({
-      text: 'like to drop?',
-      x: textX,
-      y: textY + 14,
-      color: '#000000',
-      fontSize: 12,
-      fontFamily: 'Arial',
-      align: 'center',
-    });
+    const textAreaTop = this.y + NOTICE_TOP_H + 2;
 
-    // Draw the input value inside the white box area of Notice4 bottom piece
-    // The white box is roughly at x+18, y_bottom+14, width ~230, height ~18
-    const inputBoxY = this.y + NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS;
-    canvas.drawText({
-      text: this.inputValue,
-      x: x + NOTICE_WIDTH - 25,
-      y: inputBoxY + 16,
-      color: '#000000',
-      fontSize: 12,
-      fontFamily: 'Arial',
-      align: 'right',
-    });
+    if (this.mode === 'meso') {
+      canvas.drawText({
+        text: 'How many mesos would you',
+        x: textX,
+        y: textAreaTop,
+        color: '#000000',
+        fontSize: 12,
+        align: 'center',
+      });
+      canvas.drawText({
+        text: 'like to drop?',
+        x: textX,
+        y: textAreaTop + 16,
+        color: '#000000',
+        fontSize: 12,
+        align: 'center',
+      });
+    } else if (this.showInput) {
+      // Stackable item
+      canvas.drawText({
+        text: `How many would you`,
+        x: textX,
+        y: textAreaTop,
+        color: '#000000',
+        fontSize: 12,
+        align: 'center',
+      });
+      canvas.drawText({
+        text: `like to drop?`,
+        x: textX,
+        y: textAreaTop + 16,
+        color: '#000000',
+        fontSize: 12,
+        align: 'center',
+      });
+    } else {
+      // Single item confirmation
+      canvas.drawText({
+        text: 'Are you sure you want to',
+        x: textX,
+        y: textAreaTop,
+        color: '#000000',
+        fontSize: 12,
+        align: 'center',
+      });
+      canvas.drawText({
+        text: 'drop this item?',
+        x: textX,
+        y: textAreaTop + 16,
+        color: '#000000',
+        fontSize: 12,
+        align: 'center',
+      });
+    }
+
+    // Draw the input value inside the white box in the bottom piece
+    // The white box in the 's' piece is roughly at y+8 to y+28 from bottom piece top
+    if (this.showInput) {
+      const bottomPieceY = this.y + NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS;
+      canvas.drawText({
+        text: this.inputValue,
+        x: x + NOTICE_WIDTH - 20,
+        y: bottomPieceY + 10,
+        color: '#000000',
+        fontSize: 12,
+        align: 'right',
+      });
+    }
 
     // Draw error message if any
     if (this.errorMessage) {
+      const errorY = this.y + NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS + 10;
       canvas.drawText({
         text: this.errorMessage,
         x: textX,
-        y: inputBoxY + 10,
+        y: errorY,
         color: '#CC0000',
         fontSize: 11,
-        fontFamily: 'Arial',
         align: 'center',
       });
     }

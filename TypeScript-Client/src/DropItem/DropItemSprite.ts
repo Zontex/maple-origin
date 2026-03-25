@@ -26,7 +26,7 @@ class DropItemSprite {
   animationTime: number = 0; // Current time during animation
   isInPickupAnimation: boolean = false;
   pickupAnimationTime: number = 0;
-  pickAnimtionMaxTime: number = 250;
+  pickAnimtionMaxTime: number = 500;
   stance: any;
   frame: any;
   amount: number = 0;
@@ -200,13 +200,14 @@ class DropItemSprite {
       console.error("Invalid stance or missing nChildren in setFrame");
       return;
     }
-    
+
     // Prevent index out of bounds
     const f = !this.stance.nChildren[frame] ? 0 : frame;
-    
+
     try {
       const stanceFrame = this.stance.nChildren[f];
       this.stance = stance;
+      this.frame = stanceFrame;
       this.frameNumber = f;
       this.delay = carryOverDelay;
       this.nextDelay = stanceFrame.nGet("delay").nGet("nValue", 100);
@@ -278,10 +279,10 @@ class DropItemSprite {
       }
     }
 
-    // Handle pickup animation completion
+    // Handle pickup animation completion (time-based only)
     if (this.isInPickupAnimation) {
       this.pickupAnimationTime += msPerTick;
-      if (this.pickupAnimationTime >= this.pickAnimtionMaxTime || (this.pos && this.pos.vy >= 0)) {
+      if (this.pickupAnimationTime >= this.pickAnimtionMaxTime) {
         this.goToPlayerAnimationFinished();
       }
     }

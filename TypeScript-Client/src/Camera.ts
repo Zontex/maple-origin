@@ -58,9 +58,8 @@ const easeSpeed = 0.1;
 let targetX = 0;
 let targetY = 0;
 
-// only usefull when the game resolution is not 800x600
-// const bottomSafeGap = 0; // 800x600
-const bottomSafeGap = 200; // 1280x720
+// only useful when the game resolution is not 800x600
+const bottomSafeGap = 0; // 800x600
 Camera.setBoundaries = function ({
   left,
   right,

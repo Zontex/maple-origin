@@ -81,8 +81,13 @@ export default class UINpcTalk {
     this.width = this.top?.nGetImage().width;
     this.height = this.top?.nGetImage().height + this.fillCount * this.fill?.nGetImage().height + this.bottom?.nGetImage().height;
 
+    // Center on screen (800x600)
+    this.x = Math.floor(400 - this.width / 2);
+    this.y = Math.floor(300 - this.height / 2);
+    this.originalX = this.x;
+    this.originalY = this.y;
+
     this.loadButtons();
-    ClickManager.addDragableMenu(this);
   }
 
   loadButtons() {
@@ -211,6 +216,13 @@ export default class UINpcTalk {
 
     this.height = this.top?.nGetImage().height + this.fillCount * this.fill?.nGetImage().height + this.bottom?.nGetImage().height;
 
+    // Re-center on screen
+    this.x = Math.floor(400 - this.width / 2);
+    this.y = Math.floor(300 - this.height / 2);
+    this.originalX = this.x;
+    this.originalY = this.y;
+
     this.loadButtons();
   }
+
 }

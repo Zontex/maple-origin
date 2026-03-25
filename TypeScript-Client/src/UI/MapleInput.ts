@@ -39,16 +39,27 @@ class MapleInput {
     ];
     this.submitListeners = [...submitListeners];
 
-    input.style.left = `${x}px`;
-    input.style.top = `${y}px`;
-    input.style.width = `${width}px`;
-    input.style.height = `${height}px`;
+    // Scale DOM position to match CSS-scaled canvas
+    const gameEl = document.getElementById('game') as HTMLCanvasElement | null;
+    let scaleX = 1, scaleY = 1, offsetX = 0, offsetY = 0;
+    if (gameEl) {
+      const rect = gameEl.getBoundingClientRect();
+      scaleX = rect.width / gameEl.width;
+      scaleY = rect.height / gameEl.height;
+      offsetX = rect.left;
+      offsetY = rect.top;
+    }
+
+    input.style.left = `${offsetX + x * scaleX}px`;
+    input.style.top = `${offsetY + y * scaleY}px`;
+    input.style.width = `${width * scaleX}px`;
+    input.style.height = `${height * scaleY}px`;
     input.style.background = background;
     input.style.border = border;
     input.style.color = color;
-    input.style.fontSize = `${fontSize}px`;
+    input.style.fontSize = `${fontSize * scaleY}px`;
     input.style.cursor = cursor;
-    input.style.position = "absolute";
+    input.style.position = "fixed";
 
     // debug
     // input.style.border = "1px solid red";

@@ -111,22 +111,7 @@ class MySocket {
   }
   
   createConnectionStatusIndicator() {
-    // Create a status element to show connection state
-    this.connectionStatusElement = document.createElement('div');
-    this.connectionStatusElement.style.position = 'fixed';
-    this.connectionStatusElement.style.bottom = '10px';
-    this.connectionStatusElement.style.right = '10px';
-    this.connectionStatusElement.style.padding = '5px 10px';
-    this.connectionStatusElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-    this.connectionStatusElement.style.color = '#fff';
-    this.connectionStatusElement.style.fontFamily = 'Arial, sans-serif';
-    this.connectionStatusElement.style.fontSize = '14px';
-    this.connectionStatusElement.style.borderRadius = '5px';
-    this.connectionStatusElement.style.zIndex = '9999';
-    this.connectionStatusElement.innerText = 'Connecting...';
-    
-    document.body.appendChild(this.connectionStatusElement);
-    this.updateConnectionStatus('connecting');
+    // Connection status indicator disabled — no visible UI element
   }
   
   updateConnectionStatus(status: 'connecting' | 'connected' | 'disconnected' | 'error') {

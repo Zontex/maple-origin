@@ -120,45 +120,43 @@ class GameCanvas {
   }
 
   listenMouse() {
-    this.gameWrapper.addEventListener("mousemove", (e) => {
-      const rectangle = this.gameWrapper.getBoundingClientRect();
-      this.mouseX = (e.clientX - rectangle.left) / this.scaleX;
-      this.mouseY = (e.clientY - rectangle.top) / this.scaleY;
+    this.game.addEventListener("mousemove", (e) => {
+      const rect = this.game.getBoundingClientRect();
+      this.scaleX = rect.width / this.game.width;
+      this.scaleY = rect.height / this.game.height;
+      this.mouseX = (e.clientX - rect.left) / this.scaleX;
+      this.mouseY = (e.clientY - rect.top) / this.scaleY;
     });
-    this.gameWrapper.addEventListener("mousedown", (e) => {
+    this.game.addEventListener("mousedown", (e) => {
       if (e.which === 1) {
         this.clicked = true;
       } else if (e.which === 3) {
         this.rightClicked = true;
       }
     });
-    this.gameWrapper.addEventListener("mouseup", (e) => {
+    this.game.addEventListener("mouseup", (e) => {
       if (e.which === 1) {
         this.clicked = false;
       } else if (e.which === 3) {
         this.rightClicked = false;
       }
     });
-    this.gameWrapper.addEventListener("contextmenu", (e) => {
+    this.game.addEventListener("contextmenu", (e) => {
       e.preventDefault();
     });
-    this.gameWrapper.addEventListener("mouseout", (e: any) => {
-      const stillHoveringGameWrapper =
-        !!e.relatedTarget && e.relatedTarget.parentNode === this.gameWrapper;
-      if (!stillHoveringGameWrapper) {
-        this.clicked = false;
-        this.rightClicked = false;
-      }
+    this.game.addEventListener("mouseout", () => {
+      this.clicked = false;
+      this.rightClicked = false;
     });
     window.addEventListener("mousedown", (e) => {
       this.focusGame = e.target === this.game;
     });
-    this.gameWrapper.addEventListener("DOMMouseScroll", (e: any) => {
+    this.game.addEventListener("DOMMouseScroll", (e: any) => {
       // firefox
       this.scrolledUp = e.detail < 0;
       this.scrolledDown = e.detail > 0;
     });
-    this.gameWrapper.addEventListener("mousewheel", (e: any) => {
+    this.game.addEventListener("mousewheel", (e: any) => {
       // chrome
       this.scrolledUp = e.wheelDelta > 0;
       this.scrolledDown = e.wheelDelta < 0;

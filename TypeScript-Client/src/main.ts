@@ -24,7 +24,7 @@ const startGame = async () => {
     height: config.height,
     color: "#000000",
   });
-  gameWrapper!.style.cursor = "none";
+  // OS cursor hidden via CSS on #game element
   // SessionManager is for Cosmic (Java server) via websocat — disabled for Node.js server
   // if (config.websocketUrl) {
   //   await SessionManager.initialize(config.websocketUrl);

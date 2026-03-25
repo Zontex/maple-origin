@@ -17,7 +17,8 @@ body {
   font-weight: bold;
   line-height: 1;
 
-  background: #eaeaf4;
+  background: #000;
+  overflow: hidden;
 }
 
 main {
@@ -211,10 +212,20 @@ hr {
 .game-wrapper {
   position: relative;
   user-select: none;
-  min-height: -webkit-fill-available;
-  height: -webkit-fill-available;
-  width: -webkit-fill-available;
-  height: -webkit-fill-available;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #000;
+  cursor: none;
+}
+
+#game {
+  image-rendering: pixelated;
+  width: min(100vw, calc(100vh * 800 / 600));
+  height: min(100vh, calc(100vw * 600 / 800));
+  cursor: none;
 }
 
 #joyDiv {

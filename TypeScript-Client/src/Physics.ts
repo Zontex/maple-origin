@@ -61,6 +61,9 @@ class Physics {
   djump: any = null;
   isClimbing: boolean = false;
   walk_speed: number = default_walk_speed;
+  landingImpactVy: number = 0; // Records vy at moment of landing for fall damage
+  fallStartY: number = 0; // Y position when player left a foothold
+  fallDistance: number = 0; // Total Y distance fallen on landing
 
   constructor(x = 0, y = 0, walkSpeed = default_walk_speed) {
     this.x = x;
@@ -190,6 +193,9 @@ class Physics {
     if (!this.isMoveEnalbed) {
       return;
     }
+
+    // Track when player becomes airborne for fall damage calculation
+    const wasOnGround = !!this.fh;
 
     let mleft = this.left && !this.right;
     let mright = !this.left && this.right;
@@ -375,6 +381,7 @@ class Physics {
             } else {
               this.group = fh.group;
               this.layer = fh.layer;
+              this.landingImpactVy = vy; // Record impact velocity before capping
               if (vy > max_land_speed) vy = max_land_speed;
             }
             let dot = (vx * fx + vy * fy) / (fx * fx + fy * fy);
@@ -391,6 +398,15 @@ class Physics {
         this.vy = vy;
         this.fh = fh;
       }
+    }
+
+    // Fall damage tracking: record when leaving ground, compute distance on landing
+    if (wasOnGround && !this.fh) {
+      // Just became airborne — record starting Y
+      this.fallStartY = this.y;
+    } else if (!wasOnGround && this.fh) {
+      // Just landed — compute fall distance (positive = fell downward)
+      this.fallDistance = this.y - this.fallStartY;
     }
   }
 }

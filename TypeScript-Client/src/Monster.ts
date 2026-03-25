@@ -42,6 +42,7 @@ class Monster {
   name: string = "";
   DamageIndicator: any = null;
   destroyed: boolean = false;
+  respawnScheduled: boolean = false;
   height: number = 0;
   width: number = 0;
   x: number = 0;
@@ -231,6 +232,41 @@ async addDrops() {
         console.error(`Error creating drop for item ${monsterDropEntry.itemId}:`, err);
       }
     }
+    // Quest item drops — when player has active quests requiring items from this mob
+    const character = (window as any).charecter;
+    const questManager = character?.questManager;
+    if (questManager) {
+      const QuestData = (await import('./Quest/QuestData')).default;
+      for (const [questId, active] of questManager.activeQuests) {
+        const reqs = QuestData.requirements.get(questId);
+        if (!reqs?.complete.items) continue;
+        // Check if this quest requires killing this mob type
+        const requiresThisMob = reqs.complete.mobs?.some((m: any) => m.id === this.id);
+        // Drop quest items that haven't been fully collected yet
+        for (const item of reqs.complete.items) {
+          const currentCount = questManager.getItemCount(item.id);
+          if (currentCount >= item.count) continue;
+          // Drop with high probability (70%) if quest requires this mob, or low (15%) otherwise
+          const dropChance = requiresThisMob ? 0.7 : 0.15;
+          if (Math.random() < dropChance) {
+            try {
+              const offsetX = (monsterDropEntries.length) * dropSpacing;
+              const dropItem = await DropItemSprite.fromOpts({
+                id: item.id,
+                monster: {
+                  ...this,
+                  pos: { x: baseX + offsetX, y: baseY, vx: this.pos.vx / 2, vy: this.pos.vy }
+                },
+                amount: 1,
+              });
+              if (dropItem && !dropItem.destroyed) {
+                this.map.addItemDrop(dropItem);
+              }
+            } catch {}
+          }
+        }
+      }
+    }
   } catch (error) {
     console.error("Error in Monster.addDrops:", error);
   }
@@ -290,6 +326,8 @@ async addDrops() {
     // Award experience to the player who killed the monster
     if (responsibleMapleCharacter) {
       responsibleMapleCharacter.addExp(this.mobFile.info.exp.nValue);
+      // Track mob kill for quest progress
+      responsibleMapleCharacter.questManager?.onMobKill(this.id);
     }
   }
 

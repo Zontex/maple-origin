@@ -5,12 +5,13 @@ import { JobsMainType } from "./Constants/Jobs";
 import MapleMap from "./MapleMap";
 import Inventory from "./Inventory/Inventory";
 import Item from "./Inventory/Item";
+import QuestManager from "./Quest/QuestManager";
 
 const MyCharacter = new MapleCharacter({
   name: "Player",
-  hp: 10000,          // starting health points
+  hp: 50,          // v83 Beginner starts with 50 HP
   maxHp: 50,       // maximum health at level 1
-  mp: 5,           // starting magic points
+  mp: 5,           // v83 Beginner starts with 5 MP
   maxMp: 5,        // maximum magic points at level 1
   Hair: 30030,     // initial hair id (example value)
   exp: 0,          // starting experience
@@ -35,6 +36,10 @@ const MyCharacter = new MapleCharacter({
 // Initialize equipment array.
 MyCharacter.equips = [];
 
+// Initialize quest manager.
+MyCharacter.questManager = new QuestManager(MyCharacter);
+MyCharacter.questManager.initialize();
+
 declare global {
   interface Window {
     charecter: MapleCharacter;
@@ -52,12 +57,16 @@ window.charecter.attachEquip(10, 1302000);
 
 // Example of adding an item to the equipment inventory.
 const addInventory = async () => {
-  MyCharacter.inventory.equip = [
-    await Item.fromOpts({
-      itemId: 1060002, // blue pants
-      quantity: 1,
-    }),
-  ];
+  try {
+    MyCharacter.inventory.use = [
+      await Item.fromOpts({ itemId: 2000000, quantity: 5 }), // red potion
+      await Item.fromOpts({ itemId: 2000001, quantity: 3 }), // orange potion
+      await Item.fromOpts({ itemId: 2000002, quantity: 10 }), // white potion
+    ];
+    MyCharacter.inventory.etc = [];
+  } catch (e) {
+    console.error('Error loading test inventory items:', e);
+  }
 };
 
 addInventory();

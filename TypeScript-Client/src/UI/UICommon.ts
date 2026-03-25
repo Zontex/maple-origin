@@ -65,25 +65,23 @@ UICommon.doUpdate = function (msPerTick) {};
 // let canvasOffset: Rectangle = document.getElementById("game").getBoundingClientRect();
 
 UICommon.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
+  // Remove any leftover DOM cursor from previous approach
+  if (this.currentCursor) {
+    this.currentCursor.remove();
+    this.currentCursor = null;
+  }
+
   const clicked = canvas.clicked;
   const cursorImg = !clicked ? this.cursorImg : this.cursorDownImg;
   const cursorOrigin = !clicked ? this.cursorOrigin : this.cursorDownOrigin;
 
-  cursorImg.style.position = "absolute";
-  cursorImg.style.zIndex = 4;
-  cursorImg.style.pointerEvents = "none";
+  // Draw cursor on canvas so it scales correctly with CSS
   const mousePosition = this.getMousePosition(canvas);
-  cursorImg.style.left = `${mousePosition.x}px`;
-  cursorImg.style.top = `${mousePosition.y}px`;
-
-  // cursorImg.style.left = `${
-  //   canvas.mouseX - cursorOrigin.nX + canvasOffset.x
-  // }px`;
-  // cursorImg.style.top = `${canvas.mouseY - cursorOrigin.nY + canvasOffset.y}px`;
-
-  !!this.currentCursor && this.currentCursor.remove();
-  this.currentCursor = cursorImg;
-  canvas.gameWrapper.appendChild(cursorImg);
+  canvas.drawImage({
+    img: cursorImg,
+    dx: mousePosition.x,
+    dy: mousePosition.y,
+  });
 };
 
 export default UICommon;

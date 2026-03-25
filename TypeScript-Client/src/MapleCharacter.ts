@@ -74,6 +74,7 @@ class MapleCharacter {
   stats: Stats;
   maxExp: number = 0;
   inventory: Inventory = new Inventory({});
+  questManager: any = null;
   pos: Physics;
   bodyRects: any = [];
   bodyStartPoistion: any = { x: 0, y: 0 };
@@ -92,6 +93,21 @@ class MapleCharacter {
   weaponEquipId: any = null;
   alertStanceTimeout: any = null;
   deathTimeout: any = null;
+  // Death/tombstone animation state
+  tombstoneNode: any = null;
+  tombstoneFrame: number = 0;
+  tombstoneDelay: number = 0;
+  tombstoneActive: boolean = false;
+  tombstoneDone: boolean = false;
+  deathPosX: number = 0;
+  deathPosY: number = 0;
+  // Death dialog assets
+  deathDialogBg: any = null;
+  deathDialogOkNormal: any = null;
+  deathDialogOkHover: any = null;
+  deathDialogOkPressed: any = null;
+  deathDialogVisible: boolean = false;
+  deathDialogLoaded: boolean = false;
   projectiles: any = [];
   DamageIndicator: any = null;
   destroyed: boolean = false;
@@ -99,6 +115,20 @@ class MapleCharacter {
   levelUpFrames: any = null;
   levelUpFrame: number = 0;
   levelUpDelay: number = 0;
+  // Quest effects
+  questClearActive: boolean = false;
+  questClearFrames: any = null;
+  questClearFrame: number = 0;
+  questClearDelay: number = 0;
+  questStartActive: boolean = false;
+  questStartFrames: any = null;
+  questStartFrame: number = 0;
+  questStartDelay: number = 0;
+  // EXP gain effect
+  incExpActive: boolean = false;
+  incExpFrames: any = null;
+  incExpFrame: number = 0;
+  incExpDelay: number = 0;
   onStanceFinish: any = null;
   onLastFrame: any = null;
   zmap: any = null;
@@ -452,7 +482,8 @@ class MapleCharacter {
     this.playLevelUp();
   }
 
-  addExp(exp: number) {
+  addExp(exp: number, showEffect: boolean = false) {
+    if (exp > 0 && showEffect) this.playIncExp();
     if (this.exp + exp >= this.maxExp) {
       this.exp = this.exp + exp - this.maxExp;
       this.levelUp();
@@ -472,6 +503,55 @@ class MapleCharacter {
     this.levelingUp = true;
     this.levelUpFrame = 0;
     this.levelUpDelay = 0;
+  }
+
+  async playQuestClear() {
+    try {
+      const sfxNode: any = await WZManager.get("Sound.wz/Game.img/QuestClear");
+      if (sfxNode?.nGetAudio) PLAY_AUDIO(sfxNode.nGetAudio());
+      const qc: any = await WZManager.get("Effect.wz/BasicEff.img/QuestClear");
+      if (qc?.nChildren?.length > 0) {
+        this.questClearFrames = qc.nChildren;
+        this.questClearActive = true;
+        this.questClearFrame = 0;
+        this.questClearDelay = 0;
+      }
+    } catch (e) {
+      console.error('playQuestClear error:', e);
+    }
+  }
+
+  async playQuestStart() {
+    try {
+      const sfxNode: any = await WZManager.get("Sound.wz/Game.img/QuestAlert");
+      if (sfxNode?.nGetAudio) PLAY_AUDIO(sfxNode.nGetAudio());
+      const qa: any = await WZManager.get("Effect.wz/BasicEff.img/QuestAlert/Appear");
+      if (qa?.nChildren?.length > 0) {
+        // Filter to only canvas frames (some children are $int properties like 'pos')
+        this.questStartFrames = qa.nChildren.filter((n: any) => n.nTagName === 'canvas');
+        this.questStartActive = true;
+        this.questStartFrame = 0;
+        this.questStartDelay = 0;
+      }
+    } catch (e) {
+      console.error('playQuestStart error:', e);
+    }
+  }
+
+  async playIncExp() {
+    try {
+      const sfxNode: any = await WZManager.get("Sound.wz/Game.img/IncEXP");
+      if (sfxNode?.nGetAudio) PLAY_AUDIO(sfxNode.nGetAudio());
+      const ie: any = await WZManager.get("Effect.wz/BasicEff.img/IncEXP");
+      if (ie?.nChildren?.length > 0) {
+        this.incExpFrames = ie.nChildren;
+        this.incExpActive = true;
+        this.incExpFrame = 0;
+        this.incExpDelay = 0;
+      }
+    } catch (e) {
+      console.error('playIncExp error:', e);
+    }
   }
 
   async jump() {
@@ -562,51 +642,56 @@ async executeAttackDamage() {
 
   // Define attack range based on weapon type
   const weaponType = getEquipTypeById(this.weaponEquipId);
-  let attackRange = 50; // Default range
-  
+  let attackRange = 70; // Default melee range
+
   // Adjust range based on weapon type
   switch (weaponType) {
     case "Sword":
-      attackRange = 60;
+    case "Axe":
+    case "Mace":
+      attackRange = 80;
+      break;
+    case "Spear":
+    case "Polearm":
+      attackRange = 100;
       break;
     case "Bow":
     case "Crossbow":
-      attackRange = 150;
+      attackRange = 250;
       break;
     case "Claw":
-      attackRange = 100;
+      attackRange = 200;
+      break;
+    case "Dagger":
+      attackRange = 60;
       break;
     default:
-      attackRange = 50;
+      attackRange = 70;
   }
 
   // Directional attack: only hit monsters in the direction the character is facing
   const isCharacterFacingRight = this.flipped;
-  
+
   // Find all monsters within range (that are not already dying)
   const monsters = this.map?.monsters.filter((monster: Monster) => {
     if (monster.dying) return false;
-    
-    // Check if monster is in the right direction
-    const isMonsterOnRight = monster.pos.x > this.pos.x;
-    const isMonsterOnLeft = monster.pos.x < this.pos.x;
-    
-    // Only hit monsters in the direction we're facing
-    if ((isMonsterOnRight && !isCharacterFacingRight) || 
-        (isMonsterOnLeft && isCharacterFacingRight)) {
-      return false;
-    }
-    
-    // Calculate distance
+
     const dx = monster.pos.x - this.pos.x;
     const dy = monster.pos.y - this.pos.y;
-    
-    // Use a more generous vertical range to make hitting easier
-    // This helps with platforms where monsters might be slightly above/below
-    const horizontalDistance = Math.abs(dx);
+
+    // Only hit monsters in the direction we're facing
+    // Allow a small overlap behind the player (20px) for monsters right on top of you
+    if (isCharacterFacingRight && dx < -20) return false;
+    if (!isCharacterFacingRight && dx > 20) return false;
+
+    // Account for monster width — their anchor is at their feet center
+    // but their body extends outward
+    const monsterHalfWidth = (monster.width || 50) / 2;
+    const horizontalDistance = Math.abs(dx) - monsterHalfWidth;
+    const effectiveDistance = Math.max(0, horizontalDistance);
     const verticalDistance = Math.abs(dy);
-    
-    return horizontalDistance <= attackRange && verticalDistance <= 70;
+
+    return effectiveDistance <= attackRange && verticalDistance <= 100;
   }) || [];
 
   // Log how many monsters are in range
@@ -807,7 +892,9 @@ isCloseToMob = (inAllDirections = true) => {
       const jumpAudio: any = jumpNode.nGetAudio();
       PLAY_AUDIO(jumpAudio);
 
-      if (this.map!.id !== portal.toMap) {
+      if (this.map!.id !== portal.toMap && portal.toMap < 999999999) {
+        const { fadeToBlack } = await import('./MapState');
+        fadeToBlack();
         await this.map!.load(portal.toMap);
       }
 
@@ -900,33 +987,215 @@ isCloseToMob = (inAllDirections = true) => {
     this.isInClimbingRope = true;
   }
 
-  die() {
-    console.log("player died");
+  async die() {
+    if (this.isDead) return;
     this.isDead = true;
     this.pos.isMoveEnalbed = false;
+    this.isInAttack = false;
+    this.isInAlert = false;
+    this.deathPosX = this.pos.x;
+    this.deathPosY = this.pos.y;
 
-    if (this.deathTimeout) {
-      clearTimeout(this.deathTimeout);
+    // Tombstone fall: starts 300px above death position, falls down
+    this.tombstoneYOffset = -300;
+    this.tombstoneActive = true;
+    this.tombstoneDone = false;
+
+    // Load tombstone animation
+    try {
+      this.tombstoneNode = await WZManager.get('Effect.wz/Tomb.img/fall');
+      this.tombstoneFrame = 0;
+      this.tombstoneDelay = 0;
+
+      // Play tombstone SFX
+      const tombSoundNode: any = await WZManager.get('Sound.wz/Game.img/Tombstone');
+      if (tombSoundNode) {
+        PLAY_AUDIO(tombSoundNode.nGetAudio());
+      }
+    } catch (e) {
+      console.error('Error loading tombstone effect:', e);
+      this.tombstoneActive = false;
+      this.tombstoneDone = true;
+      this.showDeathDialog();
+    }
+  }
+
+  async showDeathDialog() {
+    // Load death dialog assets once
+    if (!this.deathDialogLoaded) {
+      try {
+        const noticeNode: any = await WZManager.get('UI.wz/UIWindow.img/Notice');
+        this.deathDialogBg = noticeNode.nGet('0');
+        const okBtn: any = await WZManager.get('UI.wz/Basic.img/BtOK');
+        this.deathDialogOkNormal = okBtn.normal.nChildren[0];
+        this.deathDialogOkHover = okBtn.mouseOver.nChildren[0];
+        this.deathDialogOkPressed = okBtn.pressed.nChildren[0];
+        this.deathDialogLoaded = true;
+      } catch (e) {
+        console.error('Error loading death dialog:', e);
+        setTimeout(() => this.respawnAtTown(), 2000);
+        return;
+      }
+    }
+    this.deathDialogVisible = true;
+  }
+
+  getDeathDialogRect() {
+    const bgImg = this.deathDialogBg?.nGetImage();
+    if (!bgImg) return null;
+    const x = Math.floor(400 - bgImg.width / 2);
+    const y = Math.floor(300 - bgImg.height / 2);
+    return { x, y, width: bgImg.width, height: bgImg.height };
+  }
+
+  drawDeathDialog(canvas: any) {
+    if (!this.deathDialogVisible || !this.deathDialogLoaded) return;
+
+    const bgImg = this.deathDialogBg?.nGetImage();
+    if (!bgImg) return;
+
+    const dlg = this.getDeathDialogRect()!;
+
+    // Draw dialog background
+    canvas.drawImage({ img: bgImg, dx: dlg.x, dy: dlg.y });
+
+    // Draw OK button centered at bottom of dialog
+    const btnImg = this._getDeathOkBtnImg(canvas);
+    if (btnImg) {
+      const btnX = dlg.x + Math.floor(dlg.width / 2) - Math.floor(btnImg.width / 2);
+      const btnY = dlg.y + dlg.height - btnImg.height - 12;
+      canvas.drawImage({ img: btnImg, dx: btnX, dy: btnY });
+    }
+  }
+
+  _getDeathOkBtnImg(canvas: any) {
+    const dlg = this.getDeathDialogRect();
+    const normalImg = this.deathDialogOkNormal?.nGetImage();
+    if (!dlg || !normalImg) return normalImg;
+
+    const btnX = dlg.x + Math.floor(dlg.width / 2) - Math.floor(normalImg.width / 2);
+    const btnY = dlg.y + dlg.height - normalImg.height - 12;
+    const mx = canvas.mouseX;
+    const my = canvas.mouseY;
+    const over = mx >= btnX && mx <= btnX + normalImg.width &&
+                 my >= btnY && my <= btnY + normalImg.height;
+
+    if (over && canvas.clicked) return this.deathDialogOkPressed?.nGetImage();
+    if (over) return this.deathDialogOkHover?.nGetImage();
+    return normalImg;
+  }
+
+  handleDeathDialogClick(canvas: any): boolean {
+    if (!this.deathDialogVisible) return false;
+    const dlg = this.getDeathDialogRect();
+    const normalImg = this.deathDialogOkNormal?.nGetImage();
+    if (!dlg || !normalImg) return false;
+
+    const btnX = dlg.x + Math.floor(dlg.width / 2) - Math.floor(normalImg.width / 2);
+    const btnY = dlg.y + dlg.height - normalImg.height - 12;
+    const mx = canvas.mouseX;
+    const my = canvas.mouseY;
+    if (mx >= btnX && mx <= btnX + normalImg.width &&
+        my >= btnY && my <= btnY + normalImg.height) {
+      this.respawnAtTown();
+      return true;
+    }
+    return false;
+  }
+
+  async respawnAtTown() {
+    this.deathDialogVisible = false;
+    this.tombstoneActive = false;
+    this.tombstoneDone = false;
+    this.isDead = false;
+    this.hp = this.spawnDefaultHp;
+
+    const { fadeToBlack } = await import('./MapState');
+    fadeToBlack();
+
+    if (!this.map!.isTown) {
+      await this.map!.load(this.map!.getNearbyTownMapId());
     }
 
-    this.deathTimeout = setTimeout(async () => {
-      this.isDead = false;
-      this.hp = this.spawnDefaultHp;
-      console.log(this.map!.getLocationAboveRandomFoothold());
+    const spawnLocation = this.map!.getCenterFootholdLocation();
+    if (spawnLocation) {
+      this.pos = new Physics();
+      this.pos.x = spawnLocation.x;
+      this.pos.y = spawnLocation.y;
+    }
+  }
 
-      if (!this.map!.isTown) {
-        await this.map!.load(this.map!.getNearbyTownMapId());
-      }
+  tombstoneYOffset: number = 0;
 
-      const randomLocationInMap = this.map!.getLocationAboveRandomFoothold();
-      if (randomLocationInMap) {
-        this.pos = new Physics();
-        // todo
-        // 1. fix - sometimes the y location is way off,
-        this.pos.x = randomLocationInMap.x;
-        this.pos.y = randomLocationInMap.y - 100;
+  updateTombstone(msPerTick: number) {
+    if (!this.tombstoneActive || !this.tombstoneNode) return;
+
+    // Animate the tombstone falling from the sky
+    if (this.tombstoneYOffset < 0) {
+      // Fall speed: accelerate with gravity
+      this.tombstoneYOffset += msPerTick * 0.6;
+      if (this.tombstoneYOffset >= 0) {
+        this.tombstoneYOffset = 0;
       }
-    }, 5 * 1000);
+    }
+
+    // Animate sprite frames
+    this.tombstoneDelay += msPerTick;
+    const frameNode = this.tombstoneNode.nChildren[this.tombstoneFrame];
+    if (!frameNode) {
+      this.tombstoneActive = false;
+      this.tombstoneDone = true;
+      this.showDeathDialog();
+      return;
+    }
+
+    const frameDelay = frameNode.nGet('delay').nGet('nValue', 80);
+    if (this.tombstoneDelay >= frameDelay) {
+      this.tombstoneDelay -= frameDelay;
+      this.tombstoneFrame++;
+      if (this.tombstoneFrame >= this.tombstoneNode.nChildren.length) {
+        // Keep showing last frame, mark done
+        this.tombstoneFrame = this.tombstoneNode.nChildren.length - 1;
+        this.tombstoneActive = false;
+        this.tombstoneDone = true;
+        this.showDeathDialog();
+      }
+    }
+  }
+
+  drawTombstone(canvas: any, camera: any) {
+    if (!this.tombstoneNode) return;
+    if (!this.tombstoneActive && !this.tombstoneDone) return;
+
+    const frameIdx = Math.min(this.tombstoneFrame, this.tombstoneNode.nChildren.length - 1);
+    const frameNode = this.tombstoneNode.nChildren[frameIdx];
+    if (!frameNode) return;
+
+    const img = frameNode.nGetImage();
+    const origin = frameNode.origin;
+    if (img && origin) {
+      canvas.drawImage({
+        img,
+        dx: this.deathPosX - camera.x - origin.nX,
+        dy: this.deathPosY - camera.y - origin.nY + this.tombstoneYOffset,
+      });
+    }
+  }
+
+  applyFallDamage(fallDistance: number) {
+    // Fall damage only triggers after falling a significant height
+    // Normal jump = ~100-150px. Platform gaps = ~200-300px.
+    // Only high drops (500+ pixels) should cause damage.
+    const fallDamageThreshold = 500;
+    if (fallDistance <= fallDamageThreshold) return;
+    if (this.isDead) return;
+
+    // Damage: 5% of max HP per 100 pixels beyond threshold
+    const excessDistance = fallDistance - fallDamageThreshold;
+    const damage = Math.floor(this.maxHp * (excessDistance / 100) * 0.05);
+    if (damage > 0) {
+      this.takeDamage(damage);
+    }
   }
 
   async takeDamage(damage: number) {
@@ -1025,7 +1294,11 @@ isCloseToMob = (inAllDirections = true) => {
     if (!this.map) return;
     const itemDrops: DropItemSprite[] = this.map!.itemDrops.filter(
       (itemDrop: DropItemSprite) => {
-        if (itemDrop.isAlreadyPickedUp) {
+        if (itemDrop.isAlreadyPickedUp || !itemDrop.hasLanded) {
+          return false;
+        }
+        // frame may not be set yet if draw hasn't run
+        if (!itemDrop.frame || !itemDrop.pos) {
           return false;
         }
         const isHit = areAnyRectanglesOverlapping(
@@ -1062,6 +1335,21 @@ isCloseToMob = (inAllDirections = true) => {
       return;
     }
 
+    // Update chat balloon timer
+    if (this.showChatBalloon) {
+      this.chatBalloonTimer += msPerTick;
+      if (this.chatBalloonTimer >= this.chatBalloonDuration) {
+        this.showChatBalloon = false;
+        this.chatBalloonTimer = 0;
+      }
+    }
+
+    // Update tombstone animation when dead
+    if (this.isDead) {
+      this.updateTombstone(msPerTick);
+      return;
+    }
+
     if (!!this.levelingUp) {
       this.levelUpDelay += msPerTick;
       if (this.levelUpDelay > 120) {
@@ -1075,6 +1363,54 @@ isCloseToMob = (inAllDirections = true) => {
       }
     }
 
+    // Quest clear effect
+    if (this.questClearActive && this.questClearFrames) {
+      this.questClearDelay += msPerTick;
+      const curFrame = this.questClearFrames[this.questClearFrame];
+      const frameDelay = curFrame?.delay?.nValue ?? 100;
+      if (this.questClearDelay > frameDelay) {
+        this.questClearDelay -= frameDelay;
+        this.questClearFrame += 1;
+      }
+      if (this.questClearFrame >= this.questClearFrames.length || !this.questClearFrames[this.questClearFrame]) {
+        this.questClearActive = false;
+        this.questClearFrame = 0;
+        this.questClearDelay = 0;
+      }
+    }
+
+    // Quest start/alert effect
+    if (this.questStartActive && this.questStartFrames) {
+      this.questStartDelay += msPerTick;
+      const curFrame = this.questStartFrames[this.questStartFrame];
+      const frameDelay = curFrame?.delay?.nValue ?? 100;
+      if (this.questStartDelay > frameDelay) {
+        this.questStartDelay -= frameDelay;
+        this.questStartFrame += 1;
+      }
+      if (this.questStartFrame >= this.questStartFrames.length || !this.questStartFrames[this.questStartFrame]) {
+        this.questStartActive = false;
+        this.questStartFrame = 0;
+        this.questStartDelay = 0;
+      }
+    }
+
+    // IncEXP effect
+    if (this.incExpActive && this.incExpFrames) {
+      this.incExpDelay += msPerTick;
+      const curFrame = this.incExpFrames[this.incExpFrame];
+      const frameDelay = curFrame?.delay?.nValue ?? 80;
+      if (this.incExpDelay > frameDelay) {
+        this.incExpDelay -= frameDelay;
+        this.incExpFrame += 1;
+      }
+      if (this.incExpFrame >= this.incExpFrames.length || !this.incExpFrames[this.incExpFrame]) {
+        this.incExpActive = false;
+        this.incExpFrame = 0;
+        this.incExpDelay = 0;
+      }
+    }
+
     this.delay += msPerTick;
     if (this.delay > this.nextDelay) {
       this.advanceFrame();
@@ -1084,6 +1420,12 @@ isCloseToMob = (inAllDirections = true) => {
     this.checkForMobsHit();
 
     this.pos.update(msPerTick);
+
+    // Fall damage: check if we just landed after a long fall
+    if (this.pos.fallDistance > 0 && this.pos.fh) {
+      this.applyFallDamage(this.pos.fallDistance);
+      this.pos.fallDistance = 0;
+    }
 
     this.projectiles = this.projectiles.filter(
       (projectile: Projectile) => !projectile.destroyed
@@ -1109,8 +1451,14 @@ isCloseToMob = (inAllDirections = true) => {
 
     const isDrawable = (n: any) =>
       n.nTagName === "canvas" || n.nTagName === "uol";
-    const getParts = (img: any) =>
-      img.nGet(realStance).nGet(realFrame).nChildren;
+    const getParts = (img: any) => {
+      const stanceNode = img.nGet(realStance);
+      // Fallback to stand1 if the part doesn't have this stance (e.g. hair has no 'dead')
+      if (!stanceNode || !stanceNode.nChildren || stanceNode.nChildren.length === 0) {
+        return img.nGet('stand1').nGet(0).nChildren;
+      }
+      return stanceNode.nGet(realFrame).nChildren;
+    };
     const getFParts = (img: any) =>
       img.nGet(faceExpr).nGet(faceFrame).nChildren;
 
@@ -1315,6 +1663,9 @@ isCloseToMob = (inAllDirections = true) => {
       }
     }
   
+    // Draw tombstone behind character when dead
+    this.drawTombstone(canvas, camera);
+
     const characterIsFlipped = !!this.flipped;
     const imgdir = this.baseBody[this.stance][this.frame];
   
@@ -1414,6 +1765,7 @@ isCloseToMob = (inAllDirections = true) => {
       4,
       4
     );
+
   }
   
   drawName(
