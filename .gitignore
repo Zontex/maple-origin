@@ -1,0 +1,8 @@
+.DS_STORE
+.idea
+.vscode
+node_modules
+dist
+
+# WZ game data — too large for git, distribute separately
+TypeScript-Client/public/wz_client/
