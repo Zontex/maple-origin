@@ -18,7 +18,7 @@ import WZManager from "./wz-utils/WZManager";
 
 // henesys 100000000
 // 100020100 - maps with pigs - useful to test fast things with mobs
-const defaultMap = 2; // Maple Road - Lower level of Training Camp (has quest NPC 9101002)
+const defaultMap = 1000000; // Southperry (Pio's map - has reactors)
 // const defaultMap = 100000000; // henesys
 // const defaultMap = 104040000; // left of henesys
 // const defaultMap: number = 100040102; // elinia - monkey map

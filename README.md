@@ -36,6 +36,7 @@ A 1:1 recreation of pre-Big Bang MapleStory v83, running entirely in the browser
 - Real-time multiplayer (WebSocket — player sync, chat, shared combat)
 - Background music
 - Mobile touch controls
+- Reactor system — breakable map objects (boxes, barrels) loaded from Reactor.wz with multi-state hit animations, item drops from 292 reactor scripts (quest-gated and random), respawn timers
 - EXP and leveling system
 
 ## Getting Started

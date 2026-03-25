@@ -63,6 +63,10 @@ Tasks ordered from quick wins to long-term plans. Check off as completed.
 - [x] **Remove hardcoded inventory items** — ETC tab starts empty; quest items only obtained through drops/rewards
 - [x] **Remove connection status overlay** — "Connected" indicator removed from screen
 - [x] **Remove mobile touch controls** — Touch joystick disabled
+- [x] **Reactor system** — Breakable map objects (boxes, barrels) loaded from Reactor.wz with multi-state hit animations, item drops from reactor drop database (163 reactors), quest-gated drops, respawn timers (`reactorTime` seconds, 0 = no respawn)
+- [x] **Reactor drop data** — 1126 reactor drop entries converted from Cosmic SQL to TypeScript constants (`ReactorDropData.ts`), chance formula matches server (`1/chance` probability)
+- [x] **Quest random item rewards (prop system)** — Items with `prop > 0` in Act.img are randomly awarded (server picks one), not player-selected. QuestData parses `prop` field, QuestManager randomly picks one from prop items on completion, UIQuestDialog only displays the randomly chosen item (not all options)
+- [x] **Quest completion NPC fallback** — When completion requirements have no NPC specified, fall back to the start NPC; fixes quests like Pio's Collecting Recycled Goods showing as in-progress despite having all items
 
 ---
 
@@ -95,12 +99,6 @@ Tasks ordered from quick wins to long-term plans. Check off as completed.
   - **Quest completion on correct answer**: The correct selection should advance to the next page or complete the quest. Wrong answers should show the error response and return to the question
   - **QuestDialogue structure change**: `QuestDialogue.start.messages` currently stores `string[]`. Needs to store `{ text: string, selections?: SelectionOption[], responses?: Map<number, string> }[]` instead, or a parallel array of selections per page
   - **Scale**: 1112 quest texts in Say.img use `#L` codes — this is a core feature affecting quiz quests, branching dialogs, and multi-choice conversations throughout the game (Rain's quizzes, job advancement choices, etc.)
-- [ ] **Quest "select one" item rewards (prop system)** — Many quest completion rewards have multiple items with `prop=1` in Act.img, meaning the player must SELECT ONE item, not receive all of them (e.g., Todd's Hunting Method quest 1035 offers 5 different hats). Implementation:
-  - **How to detect**: In `Act.img/<questId>/1/item/<n>`, items with `prop` property > 0 are selection items. Items without `prop` or `prop=0` are always given. Items with negative `count` are removed (quest item cleanup)
-  - **QuestReward type change**: Add `selectable?: boolean` flag to each item in `QuestReward.items[]`. Parse `prop` field during QuestData init in `case 'item':` reward parsing
-  - **UIQuestDialog change**: When reward has selectable items, render them as clickable choices (highlighted on hover, click to select). Show `QuestIcon/3/0` ("SELECT ITEM") header above them. Only the selected item should be given on quest completion
-  - **Quest completion change**: `QuestManager.completeQuest()` needs to accept a `selectedItemIndex` parameter. Only give the selected item (plus any non-selectable items like EXP, always-given items, and negative-count removals)
-  - **Current bug**: All 5 items show as regular rewards and none are actually given because `addToInventory` for equips may be failing silently, or the items are all given but equip tab isn't rendering them
 - [ ] **Quest system polish** — Persist quest state to localStorage, extend script engine stubs (warp, teachSkill, changeJobById)
 - [ ] **Skill system foundation** — Load skill data from Skill.wz, skill UI window, hotkey bar
 - [ ] **Hotkey/quickslot bar** — Bottom bar for skills, potions, actions (UI.wz/StatusBar3.img)

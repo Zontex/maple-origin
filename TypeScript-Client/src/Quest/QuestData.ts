@@ -34,7 +34,7 @@ export interface QuestRequirement {
 export interface QuestReward {
   exp?: number;
   meso?: number;
-  items?: { id: number; count: number }[];
+  items?: { id: number; count: number; prop?: number }[];
   nextQuest?: number;
   fame?: number;
 }
@@ -371,12 +371,17 @@ class QuestDataManager {
           reward.items = [];
           if (prop.nChildren) {
             for (const itemNode of prop.nChildren) {
-              let itemId = 0, count = 0;
+              let itemId = 0, count = 0, itemProp = 0;
               for (const p of itemNode.nChildren) {
                 if (p.nName === 'id') itemId = p.nValue;
                 if (p.nName === 'count') count = p.nValue;
+                if (p.nName === 'prop') itemProp = p.nValue;
               }
-              if (itemId && count > 0) reward.items.push({ id: itemId, count });
+              if (itemId && count > 0) {
+                const entry: { id: number; count: number; prop?: number } = { id: itemId, count };
+                if (itemProp > 0) entry.prop = itemProp;
+                reward.items.push(entry);
+              }
             }
           }
           break;

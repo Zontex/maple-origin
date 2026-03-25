@@ -145,9 +145,20 @@ export default class QuestManager {
         console.log(`Quest reward: +${r.fame} fame`);
       }
       if (r.items) {
-        for (const item of r.items) {
+        // Separate prop items (random reward) from guaranteed items
+        const propItems = r.items.filter(i => i.prop && i.prop > 0);
+        const guaranteedItems = r.items.filter(i => !i.prop || i.prop <= 0);
+
+        for (const item of guaranteedItems) {
           this.character.inventory.addToInventory(item.id, item.count);
           console.log(`Quest reward: +${item.count}x item #${item.id}`);
+        }
+
+        // Randomly pick one from prop items
+        if (propItems.length > 0) {
+          const picked = propItems[Math.floor(Math.random() * propItems.length)];
+          this.character.inventory.addToInventory(picked.id, picked.count);
+          console.log(`Quest reward (random): +${picked.count}x item #${picked.id} (from ${propItems.length} options)`);
         }
       }
     }
@@ -246,7 +257,9 @@ export default class QuestManager {
 
       if (state === QuestState.STARTED) {
         // Check if this NPC completes the quest
-        if (reqs.complete.npc === npcId) {
+        // If no completion NPC specified, the start NPC handles completion too
+        const completionNpc = reqs.complete.npc || reqs.start.npc;
+        if (completionNpc === npcId) {
           if (this.canCompleteQuest(questId)) {
             result.completable.push(questId);
           } else {

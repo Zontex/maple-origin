@@ -374,7 +374,16 @@ class MapleCharacter {
       return distance <= this.maxCloseToMobDistance;
     });
 
-    return isCloseToMonster;
+    // Also check reactors
+    const isCloseToReactor = (this.map?.reactors || []).some((reactor: any) => {
+      if (reactor.destroyed) return false;
+      const distance = Math.sqrt(
+        (reactor.x - this.pos.x) ** 2 + (reactor.y - this.pos.y) ** 2
+      );
+      return distance <= this.maxCloseToMobDistance;
+    });
+
+    return isCloseToMonster || isCloseToReactor;
   };
 
   async setFace(face = 20000) {
@@ -697,8 +706,24 @@ async executeAttackDamage() {
   // Log how many monsters are in range
   console.log(`Found ${monsters.length} monsters in attack range`);
 
-  // If no monsters are hit, just play a swing sound
-  if (monsters.length === 0) {
+  // Check reactor hits (melee only — same range as monsters)
+  const reactorsHit = this.map?.reactors?.filter((reactor: any) => {
+    if (reactor.destroyed) return false;
+    const dx = reactor.x - this.pos.x;
+    const dy = reactor.y - this.pos.y;
+    if (isCharacterFacingRight && dx < -20) return false;
+    if (!isCharacterFacingRight && dx > 20) return false;
+    const halfW = (reactor.width || 48) / 2;
+    const hDist = Math.max(0, Math.abs(dx) - halfW);
+    return hDist <= attackRange && Math.abs(dy) <= 100;
+  }) || [];
+
+  for (const reactor of reactorsHit) {
+    reactor.hit();
+  }
+
+  // If no monsters are hit, just play a swing sound (reactors still count as a hit though)
+  if (monsters.length === 0 && reactorsHit.length === 0) {
     try {
       const missNode = await WZManager.get("Sound.wz/Game.img/Swing");
       if (missNode && missNode.nGetAudio) {
@@ -707,7 +732,7 @@ async executeAttackDamage() {
     } catch (error) {
       console.error("Error playing swing sound:", error);
     }
-    return;
+    if (monsters.length === 0) return;
   }
 
   // Process each hit monster

@@ -73,6 +73,7 @@ export default class UIQuestDialog {
   private selections: SelectionOption[] = [];
   private selectionRects: { index: number; x: number; y: number; w: number; h: number }[] = [];
   private hoveredSelection: number = -1;
+  private selectedPropItem: { id: number; count: number } | null = null; // randomly picked from prop items
 
   // Temp canvas for text measurement
   private measureCanvas: GameCanvas | null = null;
@@ -152,12 +153,29 @@ export default class UIQuestDialog {
     }
   }
 
+  /** Get display items for reward section — guaranteed items + one randomly picked prop item */
+  private getDisplayRewardItems(reward: { items?: { id: number; count: number; prop?: number }[] }): { id: number; count: number }[] {
+    if (!reward?.items) return [];
+    const guaranteed = reward.items.filter(i => !i.prop || i.prop <= 0);
+    const propItems = reward.items.filter(i => i.prop && i.prop > 0);
+    if (propItems.length > 0) {
+      // Pick one randomly (cached so it stays consistent for this dialog showing)
+      if (!this.selectedPropItem || !propItems.some(p => p.id === this.selectedPropItem!.id)) {
+        const picked = propItems[Math.floor(Math.random() * propItems.length)];
+        this.selectedPropItem = { id: picked.id, count: picked.count };
+      }
+      return [...guaranteed, this.selectedPropItem];
+    }
+    return guaranteed;
+  }
+
   private async preloadRewardIcons() {
     if (!this.questId) return;
     const rewards = QuestData.rewards.get(this.questId);
     const reward = this.phase === 'complete' ? (rewards?.complete || rewards?.start) : (rewards?.start || rewards?.complete);
     if (reward?.items) {
-      await Promise.all(reward.items.map(item => this.loadItemIcon(item.id)));
+      const displayItems = this.getDisplayRewardItems(reward);
+      await Promise.all(displayItems.map(item => this.loadItemIcon(item.id)));
     }
   }
 
@@ -188,6 +206,7 @@ export default class UIQuestDialog {
     this.onQuestCompleted = opts.onCompleted || null;
     this.currentPage = 0;
     this.accepted = false;
+    this.selectedPropItem = null;
 
     // Load NPC sprite
     const strId = `${this.npcId}`.padStart(7, '0');
@@ -228,6 +247,7 @@ export default class UIQuestDialog {
     if (opts.questId) this.questId = opts.questId;
     this.selections = opts.selections || [];
     this.accepted = false;
+    this.selectedPropItem = null;
 
     // Load NPC sprite if different
     if (opts.npcId !== this.npcId || !this.speakerImg) {
@@ -345,12 +365,13 @@ export default class UIQuestDialog {
     if (!this.scriptMode && this.questId && this.isLastPage && !this.accepted) {
       const rewards = QuestData.rewards.get(this.questId);
       const reward = this.phase === 'complete' ? (rewards?.complete || rewards?.start) : (rewards?.start || rewards?.complete);
-      if (reward && (reward.exp || reward.meso || reward.fame || (reward.items && reward.items.length > 0))) {
+      const displayItems = this.getDisplayRewardItems(reward || {});
+      if (reward && (reward.exp || reward.meso || reward.fame || displayItems.length > 0)) {
         rewardsH += 30; // gap + REWARD icon
         if (reward.exp) rewardsH += LINE_H + 2;
         if (reward.meso) rewardsH += LINE_H + 2;
         if (reward.fame) rewardsH += LINE_H + 2;
-        if (reward.items) rewardsH += reward.items.length * 34; // ~32px icon height + 2px gap
+        if (displayItems.length > 0) rewardsH += displayItems.length * 34; // ~32px icon height + 2px gap
       }
     }
     const totalTextH = textH + selectionsH + rewardsH;
@@ -654,7 +675,8 @@ export default class UIQuestDialog {
       const rewards = QuestData.rewards.get(this.questId);
       // Show complete rewards if phase is complete, otherwise start rewards; fall back to whichever has data
       const reward = this.phase === 'complete' ? (rewards?.complete || rewards?.start) : (rewards?.start || rewards?.complete);
-      const hasRewards = reward && (reward.exp || reward.meso || reward.fame || (reward.items && reward.items.length > 0));
+      const displayItems = this.getDisplayRewardItems(reward || {});
+      const hasRewards = reward && (reward.exp || reward.meso || reward.fame || displayItems.length > 0);
       if (hasRewards) {
         textY += 8;
         // Draw REWARD!! icon
@@ -717,9 +739,9 @@ export default class UIQuestDialog {
           });
           textY += LINE_H + 2;
         }
-        // Draw item rewards with icons
-        if (reward.items) {
-          for (const item of reward.items) {
+        // Draw item rewards with icons (only display items — prop items reduced to one random pick)
+        if (displayItems.length > 0) {
+          for (const item of displayItems) {
             const iconX = this.x + TEXT_LEFT;
             const itemIcon = this.itemIconCache.get(item.id);
             if (itemIcon) {

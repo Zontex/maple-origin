@@ -19,6 +19,7 @@ import UIQuestDialog from './UI/UIQuestDialog';
 import QuestScriptEngine from './Quest/QuestScriptEngine';
 import NpcScriptEngine from './NpcScriptEngine';
 import QuestData from './Quest/QuestData';
+import Reactor from './Reactor';
 
 export interface MapleMap {
   id: number | string;
@@ -39,6 +40,7 @@ export interface MapleMap {
   npcScriptEngine: NpcScriptEngine;
   mapId: number;
   monsters: any;
+  reactors: Reactor[];
   itemDrops: any;
   PlayerCharacter: any;
   doneLoading: boolean;
@@ -59,6 +61,7 @@ export interface MapleMap {
   loadObjects: (wzNode: any) => Promise<any>;
   loadNPCs: (wzNode: any) => Promise<any>;
   loadMonsters: (wzNode: any) => Promise<any>;
+  loadReactors: (wzNode: any) => Promise<void>;
   spawnMonster: (opts: any) => Promise<void>;
   spawnNPC: (opts: any) => Promise<void>;
   update: (msPerTick: number) => void;
@@ -99,6 +102,7 @@ MapleMap.load = async function (id: number | string) {
   console.log("Map WZ Node:", this.wzNode);
   this.npcs = [];
   this.monsters = [];
+  this.reactors = [];
   this.characters = [];
 
   if (!this.PlayerCharacter) {
@@ -119,6 +123,7 @@ MapleMap.load = async function (id: number | string) {
   this.names = await this.loadNames(id as number);
   await this.loadNPCs(this.wzNode.life);
   await this.loadMonsters(this.wzNode.life);
+  await this.loadReactors(this.wzNode.reactor);
 
   Timer.doReset();
 
@@ -348,6 +353,9 @@ MapleMap.clearRespawnTimers = function () {
   for (const timer of respawnTimers) clearTimeout(timer);
   respawnTimers = [];
   monsterSpawnDefs = [];
+  for (const timer of reactorRespawnTimers) clearTimeout(timer);
+  reactorRespawnTimers = [];
+  reactorSpawnDefs = [];
 };
 
 let currentMonsters: Monster[] = [];
@@ -375,6 +383,36 @@ MapleMap.loadMonsters = async function (wzNode) {
   currentMonsters = this.monsters;
 };
 
+// --- Reactor loading ---
+let reactorSpawnDefs: any[] = [];
+let reactorRespawnTimers: any[] = [];
+
+MapleMap.loadReactors = async function (wzNode) {
+  reactorSpawnDefs = [];
+  if (!wzNode?.nChildren) return;
+
+  for (const rNode of wzNode.nChildren) {
+    const id = parseInt(rNode.nGet?.('id')?.nValue || '0');
+    if (!id) continue;
+    const x = rNode.nGet?.('x')?.nValue || 0;
+    const y = rNode.nGet?.('y')?.nValue || 0;
+    const reactorTime = rNode.nGet?.('reactorTime')?.nValue || 0;
+    const f = rNode.nGet?.('f')?.nValue || 0;
+
+    const spawnDef = { id, x, y, reactorTime, f, map: this };
+    reactorSpawnDefs.push(spawnDef);
+
+    try {
+      const reactor = await Reactor.fromOpts(spawnDef);
+      this.reactors.push(reactor);
+    } catch (e) {
+      console.warn(`[MapleMap] Failed to load reactor ${id}:`, e);
+    }
+  }
+
+  console.log(`[MapleMap] Loaded ${this.reactors.length} reactors`);
+};
+
 // --- Modified NPC spawning to include position and dialogue support ---
 MapleMap.spawnNPC = async function (opts = {}) {
   // Add a reference to the map in the NPC options
@@ -400,6 +438,7 @@ MapleMap.changeMap = async function (newMapId: number) {
   // Optionally, clear current map state
   this.npcs = [];
   this.monsters = [];
+  this.reactors = [];
   this.characters = [];
   this.itemDrops = [];
   
@@ -494,10 +533,23 @@ MapleMap.update = function (msPerTick) {
   }
   this.monsters = this.monsters.filter((m: Monster) => !m.destroyed);
 
+  // Reactor respawn handling
+  for (const reactor of this.reactors) {
+    if (reactor.destroyed && !reactor.respawnScheduled && reactor.reactorTime > 0) {
+      reactor.respawnScheduled = true;
+      const r = reactor;
+      const timer = setTimeout(() => {
+        r.reset();
+      }, reactor.reactorTime * 1000);
+      reactorRespawnTimers.push(timer);
+    }
+  }
+
   this.backgrounds.forEach((bg: Background) => bg.update(msPerTick));
   this.objects.forEach((obj: Obj) => obj.update(msPerTick));
   this.npcs.forEach((npc: NPC) => npc.update(msPerTick));
   this.monsters.forEach((mob: Monster) => mob.update(msPerTick));
+  this.reactors.forEach((r: Reactor) => r.update(msPerTick));
   this.characters.forEach((chr: MapleCharacter) => chr.update(msPerTick));
   this.portals.forEach((p: Portal) => p.update(msPerTick));
 
@@ -531,6 +583,7 @@ MapleMap.render = function (
     this.objects.filter(inCurrentLayer).forEach(draw);
     this.tiles.filter(inCurrentLayer).forEach(draw);
     this.monsters.filter(inCurrentLayer).forEach(draw);
+    (this.reactors as any[]).filter(inCurrentLayer).forEach(draw);
     this.characters.filter(inCurrentLayer).forEach(draw);
     this.npcs.filter(inCurrentLayer).forEach(draw);
   }
@@ -538,6 +591,7 @@ MapleMap.render = function (
   const notInAnyLayer = (obj: any) => !(obj.layer >= 0 && obj.layer <= 7);
   currentMonsters.filter(notInAnyLayer).forEach(draw);
   this.monsters.filter(notInAnyLayer).forEach(draw);
+  (this.reactors as any[]).filter(notInAnyLayer).forEach(draw);
   this.characters.filter(notInAnyLayer).forEach(draw);
   this.npcs.filter(notInAnyLayer).forEach(draw);
 

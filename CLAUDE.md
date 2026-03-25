@@ -381,13 +381,12 @@ After warp/map change, physics state must be reset:
 - `pos.isClimbing = false` — clear climbing state
 - Player lands naturally on the nearest foothold (like the original game)
 
-### Quest Reward Selection (prop system)
+### Quest Random Rewards (prop system)
 In `Act.img/<questId>/1/item/<n>`, each item can have a `prop` field:
-- `prop > 0` → selectable item — player must choose ONE from all prop items
-- `prop = 0` or absent → always given (non-selectable)
+- `prop > 0` → random reward item — server picks ONE at random from all prop items
+- `prop = 0` or absent → always given (guaranteed reward)
 - `count = -1` → item removal (quest item cleanup, always applied)
-- `QuestIcon/3/0` (83x17) = "SELECT ITEM" header image for selection rewards
-- Currently NOT implemented — all items are shown as regular rewards and given together
+- Implementation: `QuestManager.completeQuest()` separates prop items from guaranteed, randomly picks one prop item. `UIQuestDialog.getDisplayRewardItems()` shows only the picked item (not all options).
 
 ### Spawn Position on Map Change
 1. Try named portal (if `portalName` specified)
