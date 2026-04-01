@@ -12,7 +12,8 @@ import {
 } from "./Physics/Collision";
 import ClimbDirections from "./Constants/enums/ClimbDirections";
 import getEquipTypeById, {
-  WeaponTypeToStance,
+  getWeaponConfig,
+  DEFAULT_PROJECTILE_ID,
   playAudioForAttackByWeaponType,
 } from "./Constants/EquipType";
 import ExpTable from "./Constants/ExpTable";
@@ -353,42 +354,6 @@ class MapleCharacter {
     }
   }
 
-  isCloseToMob = (inAllDirections = true) => {
-    const monstersToConsider = inAllDirections
-      ? this.map!.monsters
-      : this.map!.monsters.filter((monster: Monster) => {
-          const isMonsterOnRight = monster.pos.x > this.pos.x;
-          const isMonsterOnLeft = monster.pos.x < this.pos.x;
-          const isPlayerFacingRight = this.flipped;
-
-          return (
-            (isMonsterOnRight && isPlayerFacingRight) ||
-            (isMonsterOnLeft && !isPlayerFacingRight)
-          );
-        });
-
-    console.log(monstersToConsider.length, this.map!.monsters.length);
-
-    const isCloseToMonster = monstersToConsider.some((monster: Monster) => {
-      const distance = Math.sqrt(
-        (monster.pos.x - this.pos.x) ** 2 + (monster.pos.y - this.pos.y) ** 2
-      );
-
-      return distance <= this.maxCloseToMobDistance;
-    });
-
-    // Also check reactors
-    const isCloseToReactor = (this.map?.reactors || []).some((reactor: any) => {
-      if (reactor.destroyed) return false;
-      const distance = Math.sqrt(
-        (reactor.x - this.pos.x) ** 2 + (reactor.y - this.pos.y) ** 2
-      );
-      return distance <= this.maxCloseToMobDistance;
-    });
-
-    return isCloseToMonster || isCloseToReactor;
-  };
-
   async setFace(face = 20000) {
     this.Face = await WZManager.get(`Character.wz/Face/000${face}.img`);
     this.face = face;
@@ -521,10 +486,19 @@ class MapleCharacter {
     this.active = true;
   }
 
+  changeJob(jobId: number) {
+    this.stats.setJobId(jobId);
+    this.job = jobId;
+    // Future: stat gains, SP, equipment checks, animation
+  }
+
   levelUp() {
     this.stats.level += 1;
     this.maxExp = ExpTable.getExpNeededForLevel(this.stats.level);
     this.stats.addAbilityPoints();
+    // Restore HP/MP to full on level up
+    this.hp = this.maxHp;
+    this.mp = this.maxMp;
     this.playLevelUp();
     // Broadcast to other players
     if (!this.isRemote && (window as any).__mySocket) {
@@ -616,138 +590,84 @@ class MapleCharacter {
   }
 
  /**
- * Improved implementation of the attack method for MapleCharacter
+ * Attack method — uses WeaponConfig to determine stance, range, and melee vs projectile behavior.
  */
 async attack() {
-  // Don't allow attacking if already in attack animation
   if (this.isInAttack) return;
-  
-  // Set attack state and reset movement
+
   this.isInAttack = true;
   this.rightClickRelease();
   this.leftClickRelease();
   this.isInAlert = false;
 
-  // Get weapon type and corresponding stance
   const weaponType = getEquipTypeById(this.weaponEquipId);
-  const weaponStanceByAttackType = WeaponTypeToStance[weaponType];
-  
-  console.log("Weapon Type", weaponType);
-  console.log("Weapon Stance Mapping", weaponStanceByAttackType);
+  const config = getWeaponConfig(weaponType);
 
-  if (!weaponStanceByAttackType) {
-    console.error("Unknown weapon type:", weaponType);
+  if (!config) {
+    console.error('Unknown weapon type:', weaponType);
     this.isInAttack = false;
     return;
   }
 
-  // Choose the appropriate attack stance (melee/range)
-  let attackStance = "swingO1"; // Default stance if none available
-  
-  if (this.isCloseToMob(false)) {
-    // Use melee attack if close to monster
-    if (weaponStanceByAttackType.melee && weaponStanceByAttackType.melee.length > 0) {
-      attackStance = weaponStanceByAttackType.melee[0];
-    }
-  } else {
-    // Use ranged attack if not close to monster
-    if (weaponStanceByAttackType.range && weaponStanceByAttackType.range.length > 0) {
-      attackStance = weaponStanceByAttackType.range[0];
-    }
+  // Ranged weapons fire projectiles unless the player is right next to a mob
+  const useRanged = config.isRanged && !this.isCloseToMob(false);
+  const stancePool = useRanged ? config.stances.ranged : config.stances.melee;
+
+  if (stancePool.length === 0) {
+    this.isInAttack = false;
+    return;
   }
 
-  console.log("Using attack stance:", attackStance);
-  
-  // Set the stance with proper callbacks
+  // Pick a random stance from the pool for variety
+  const attackStance = stancePool[Math.floor(Math.random() * stancePool.length)];
+
   this.setStance(
     attackStance,
     0,
-    true,  // useStanceUntilMaxFrame - ensure animation completes
-    false, // isOscillateFrames - don't oscillate, we want to complete one animation
+    true,
+    false,
     () => {
-      // onFinish callback - called when animation completes
-      console.log("Attack animation finished");
       this.isInAttack = false;
     },
     async () => {
-      // onLastFrame callback - called at the "hit" frame of the animation
-      console.log("Executing attack at peak frame");
-      await this.executeAttackDamage();
+      if (useRanged) {
+        await this.fireProjectile(weaponType);
+      } else {
+        await this.executeAttackDamage();
+      }
     }
   );
 }
 
 /**
- * Execute the actual attack damage calculation and effects
+ * Execute melee attack damage using the weapon config and proper stat formulas.
  */
 async executeAttackDamage() {
-  console.log("Executing attack damage");
-  
-  try {
-    // Play appropriate sound for the weapon
-    playAudioForAttackByWeaponType(getEquipTypeById(this.weaponEquipId));
-  } catch (error) {
-    console.error("Error playing attack sound:", error);
-  }
-
-  // Define attack range based on weapon type
   const weaponType = getEquipTypeById(this.weaponEquipId);
-  let attackRange = 70; // Default melee range
+  const config = getWeaponConfig(weaponType);
+  const attackRange = config?.meleeRange ?? 70;
 
-  // Adjust range based on weapon type
-  switch (weaponType) {
-    case "Sword":
-    case "Axe":
-    case "Mace":
-      attackRange = 80;
-      break;
-    case "Spear":
-    case "Polearm":
-      attackRange = 100;
-      break;
-    case "Bow":
-    case "Crossbow":
-      attackRange = 250;
-      break;
-    case "Claw":
-      attackRange = 200;
-      break;
-    case "Dagger":
-      attackRange = 60;
-      break;
-    default:
-      attackRange = 70;
+  try {
+    playAudioForAttackByWeaponType(weaponType);
+  } catch (error) {
+    console.error('Error playing attack sound:', error);
   }
 
-  // Directional attack: only hit monsters in the direction the character is facing
   const isCharacterFacingRight = this.flipped;
 
-  // Find all monsters within range (that are not already dying)
+  // Find monsters in melee range facing the right direction
   const monsters = this.map?.monsters.filter((monster: Monster) => {
     if (monster.dying) return false;
-
     const dx = monster.pos.x - this.pos.x;
     const dy = monster.pos.y - this.pos.y;
-
-    // Only hit monsters in the direction we're facing
-    // Allow a small overlap behind the player (20px) for monsters right on top of you
     if (isCharacterFacingRight && dx < -20) return false;
     if (!isCharacterFacingRight && dx > 20) return false;
-
-    // Account for monster width — their anchor is at their feet center
-    // but their body extends outward
     const monsterHalfWidth = (monster.width || 50) / 2;
-    const horizontalDistance = Math.abs(dx) - monsterHalfWidth;
-    const effectiveDistance = Math.max(0, horizontalDistance);
-    const verticalDistance = Math.abs(dy);
-
-    return effectiveDistance <= attackRange && verticalDistance <= 100;
+    const effectiveDistance = Math.max(0, Math.abs(dx) - monsterHalfWidth);
+    return effectiveDistance <= attackRange && Math.abs(dy) <= 100;
   }) || [];
 
-  // Log how many monsters are in range
-  console.log(`Found ${monsters.length} monsters in attack range`);
-
-  // Check reactor hits (melee only — same range as monsters)
+  // Check reactor hits
   const reactorsHit = this.map?.reactors?.filter((reactor: any) => {
     if (reactor.destroyed) return false;
     const dx = reactor.x - this.pos.x;
@@ -760,66 +680,98 @@ async executeAttackDamage() {
   }) || [];
 
   for (const reactor of reactorsHit) {
-    reactor.hit(false); // Local hit
-    // Broadcast to other players
+    reactor.hit(false);
     if ((window as any).__mySocket) {
       (window as any).__mySocket.sendReactorHit(reactor.oId);
     }
   }
 
-  // If no monsters are hit, just play a swing sound (reactors still count as a hit though)
+  // Nothing hit — play swing sound
   if (monsters.length === 0 && reactorsHit.length === 0) {
     try {
-      const missNode = await WZManager.get("Sound.wz/Game.img/Swing");
+      const missNode = await WZManager.get('Sound.wz/Game.img/Swing');
       if (missNode && missNode.nGetAudio) {
         PLAY_AUDIO(missNode.nGetAudio());
       }
     } catch (error) {
-      console.error("Error playing swing sound:", error);
+      console.error('Error playing swing sound:', error);
     }
     if (monsters.length === 0) return;
   }
 
-  // Process each hit monster
+  // Determine attack type from current stance (stab vs swing affects damage multiplier)
+  const attackType = this.getAttackTypeFromStance();
+
   for (const monster of monsters) {
     try {
-      // Calculate damage based on weapon type and stats
-      const weaponAttack = this.stats.getWeaponAttack(this.equips);
-      const baseDamage = weaponAttack + (this.stats.str / 4);
-      
-      // Add some random variation (80% to 120% of base damage)
-      const randomFactor = 0.8 + Math.random() * 0.4;
-      
-      // Calculate final damage (ensure it's at least 1)
-      const damage = Math.max(1, Math.floor(baseDamage * randomFactor));
-      
-      console.log(`Dealing ${damage} damage to monster`);
-      
-      // Apply knockback in the direction we're facing
+      // Get raw damage range, then reduce by monster defense
+      const rawRange = this.stats.getAttackRange(this.equips, weaponType, attackType);
+      const monsterDef = monster.mobFile?.info?.PDDamage?.nValue ?? 0;
+      const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
+      const defRange = this.stats.getAttackDamageRangeAfterMonsterDefense(rawRange, monsterDef, monsterLevel);
+      const isMiss = this.stats.getRandomIsMiss(monsterLevel, monster.mobFile?.info?.eva?.nValue ?? 0);
+      const damage = isMiss ? 0 : Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
       const knockbackDirection = isCharacterFacingRight ? 1 : -1;
-      
-      // Apply the damage to the monster
       monster.hit(damage, knockbackDirection, this);
-      
-      // Visual feedback: display hit effect at monster position
       this.createHitEffect(monster.pos.x, monster.pos.y);
     } catch (error) {
-      console.error("Error processing monster hit:", error);
+      console.error('Error processing monster hit:', error);
     }
   }
-  
+
   // Play hit sound
   try {
-    const hitNode = await WZManager.get("Sound.wz/Game.img/Hit");
+    const hitNode = await WZManager.get('Sound.wz/Game.img/Hit');
     if (hitNode && hitNode.nGetAudio) {
       PLAY_AUDIO(hitNode.nGetAudio());
     }
   } catch (error) {
-    console.error("Error playing hit sound:", error);
+    console.error('Error playing hit sound:', error);
   }
-  
-  // Check for item drops after the attack
+
   this.checkForItemDropPickup(true);
+}
+
+/**
+ * Determine AttackType (Stab vs Swing) from the current stance name.
+ */
+getAttackTypeFromStance(): AttackType {
+  if (typeof this.stance === 'string' && this.stance.startsWith('stab')) {
+    return AttackType.Stab;
+  }
+  return AttackType.Swing;
+}
+
+/**
+ * Fire a projectile for ranged weapon attacks (bow, crossbow, claw, pistol).
+ */
+async fireProjectile(weaponType: number) {
+  try {
+    playAudioForAttackByWeaponType(weaponType);
+  } catch (error) {
+    console.error('Error playing attack sound:', error);
+  }
+
+  const attackType = this.getAttackTypeFromStance();
+  const weaponAttackRange = this.stats.getAttackRange(this.equips, weaponType, attackType);
+  const projectileItemId = DEFAULT_PROJECTILE_ID[weaponType] || 2060000;
+
+  try {
+    const projectile = await Projectile.fromOpts({
+      id: projectileItemId,
+      charecter: this,
+      x: this.pos.x,
+      y: this.pos.y - 30,
+      right: this.flipped,
+      left: !this.flipped,
+      targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying) || [],
+      weaponAttackRange: weaponAttackRange,
+      maxDistance: 600,
+    });
+    this.projectiles.push(projectile);
+  } catch (error) {
+    console.error('Error creating projectile:', error);
+  }
 }
 
 /**

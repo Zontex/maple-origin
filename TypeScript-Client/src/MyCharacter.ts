@@ -1,7 +1,7 @@
 // MyCharacterSetup.ts
 import MapleCharacter from "./MapleCharacter";
 import Stats from "./Stats/Stats";
-import { JobsMainType } from "./Constants/Jobs";
+import { JobId } from "./Constants/Jobs";
 import MapleMap from "./MapleMap";
 import Inventory from "./Inventory/Inventory";
 import Item from "./Inventory/Item";
@@ -20,15 +20,14 @@ const MyCharacter = new MapleCharacter({
     mesos: 20000,    // starting mesos
   }),
   stats: new Stats({
-    str: 500,
-    dex: 500,
+    str: 12,
+    dex: 5,
     int: 4,
     luk: 4,
     abilityPoints: 0,
     maxHp: 50,
     maxMp: 5,
-    jobType: JobsMainType.Beginner, // beginner job type
-    job: "Beginner",                // beginner job order (using a literal here)
+    jobId: JobId.Beginner,          // v83 numeric job ID (0 = Beginner)
     level: 1,
   }),
 });

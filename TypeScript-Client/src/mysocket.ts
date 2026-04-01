@@ -6,7 +6,6 @@ import { Physics } from "./Physics";
 import Monster from "./Monster";
 import Inventory from "./Inventory/Inventory";
 import Stats from "./Stats/Stats";
-import { JobsMainType } from "./Constants/Jobs";
 import DropItemSprite from "./DropItem/DropItemSprite";
 
 let nextDropId = 1;
@@ -370,7 +369,7 @@ class MySocket {
       skin: MyCharacter.skinColor || 0,
       mapId: mapId,
       level: MyCharacter.stats.level,
-      job: MyCharacter.job || JobsMainType.Beginner,
+      job: MyCharacter.stats.jobId,
       hp: MyCharacter.hp,
       maxHp: MyCharacter.maxHp,
       attacking: false
@@ -575,7 +574,7 @@ class MySocket {
           maxHp: playerData.maxHp || 100,
           stats: new Stats({
             level: playerData.level || 1,
-            job: playerData.job || 0,
+            jobId: playerData.job || 0,
             str: 4,
             dex: 4,
             int: 4,

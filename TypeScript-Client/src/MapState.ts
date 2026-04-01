@@ -14,6 +14,7 @@ import TouchJoyStick, {
 } from "./UI/TouchJoyStick";
 import ClickManager from "./UI/ClickManager";
 import TaxiUI from "./UI/TaxiUI";
+import ShopUI from "./UI/ShopUI";
 import WZManager from "./wz-utils/WZManager";
 import UIMiniMap from "./UI/UIMiniMap";
 import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
@@ -315,8 +316,11 @@ MapStateInstance.doUpdate = function (
     // Update TaxiUI
     if (TaxiUI.isVisible) {
       TaxiUI.update(msPerTick);
-      // Don't return early, continue updating the game state
-      // This allows the TaxiUI to handle clicks while game runs in background
+    }
+
+    // Update ShopUI
+    if (ShopUI.isVisible) {
+      ShopUI.update(msPerTick);
     }
 
     // When dead, only update tombstone animation + death dialog, block all input
@@ -372,7 +376,7 @@ MapStateInstance.doUpdate = function (
       MyCharacter.update(msPerTick);
     } else {
       const questDialogOpen = MapleMap.questDialog && !MapleMap.questDialog.isHidden;
-      const dialogOpen = !MapleMap.npcDialog.isHidden || TaxiUI.isVisible || questDialogOpen;
+      const dialogOpen = !MapleMap.npcDialog.isHidden || TaxiUI.isVisible || ShopUI.isVisible || questDialogOpen;
 
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
@@ -422,6 +426,8 @@ MapStateInstance.doUpdate = function (
           MapleMap.npcDialog.setIsHidden(true);
         } else if (TaxiUI.isVisible) {
           TaxiUI.hide();
+        } else if (ShopUI.isVisible) {
+          ShopUI.hide();
         } else {
           const notHiddenMenus = this.UIMenus.filter((menu) => !menu.isHidden);
           if (notHiddenMenus.length > 0) {
@@ -497,6 +503,11 @@ MapStateInstance.doRender = function (
     // Draw TaxiUI on top of game elements
     if (TaxiUI.isVisible) {
       TaxiUI.render(canvas, camera);
+    }
+
+    // Draw ShopUI on top of game elements
+    if (ShopUI.isVisible) {
+      ShopUI.render(canvas, camera);
     }
 
     // Draw death dialog on top of game but under cursor

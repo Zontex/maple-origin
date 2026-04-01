@@ -311,6 +311,11 @@ export default class QuestManager {
       }
     }
 
+    // Job check — numeric job IDs from WZ (0=Beginner, 100=Warrior, etc.)
+    if (req.jobs && req.jobs.length > 0) {
+      if (!req.jobs.includes(this.character.stats.jobId)) return false;
+    }
+
     // Skip item check for now — equip items (1xxxxxx) use Character.wz, not Item.wz,
     // and can't be reliably tracked in client-side inventory yet.
 

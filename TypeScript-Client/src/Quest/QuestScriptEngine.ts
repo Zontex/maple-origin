@@ -1,6 +1,7 @@
 import QuestData, { npcNames, mobNames } from './QuestData';
 import { QuestState } from './QuestData';
 import WZManager from '../wz-utils/WZManager';
+import { fadeToBlack } from '../MapState';
 
 export type ScriptDialogType = 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple';
 
@@ -73,6 +74,7 @@ export default class QuestScriptEngine {
   // Callbacks set by caller
   private onShowDialog: ((dialog: PendingDialog) => void) | null = null;
   private onDispose: (() => void) | null = null;
+  private changeMapFn: ((mapId: number, portalName?: string) => Promise<void>) | null = null;
 
   async loadScript(questId: number): Promise<string | null> {
     if (this.scriptCache.has(questId)) return this.scriptCache.get(questId)!;
@@ -97,6 +99,7 @@ export default class QuestScriptEngine {
     character: any;
     onShowDialog: (dialog: PendingDialog) => void;
     onDispose: () => void;
+    changeMap?: (mapId: number, portalName?: string) => Promise<void>;
   }) {
     await loadItemNames();
     this.currentQuestId = opts.questId;
@@ -104,6 +107,7 @@ export default class QuestScriptEngine {
     this.character = opts.character;
     this.onShowDialog = opts.onShowDialog;
     this.onDispose = opts.onDispose;
+    this.changeMapFn = opts.changeMap || null;
     this.status = -1;
     this.disposed = false;
 
@@ -181,7 +185,7 @@ export default class QuestScriptEngine {
       updateHp(amount: number) { if (character) character.hp = amount; },
       setHp(amount: number) { if (character) character.hp = amount; },
       getJob() {
-        const jobId = character?.stats?.job ?? 0;
+        const jobId = character?.stats?.jobId ?? 0;
         return { getId() { return jobId; } };
       },
       getJobStyle() { return 0; },
@@ -249,9 +253,15 @@ export default class QuestScriptEngine {
       // Misc (stubs)
       dropMessage(type: number, text: string) { console.log(`[QuestScript] ${text}`); },
       showInfo(path: string) { /* tutorial images — TODO */ },
-      warp(mapId: number, portalId?: number) { /* map change — TODO */ },
+      warp(mapId: number, portalId?: number) {
+        engine.disposed = true;
+        if (engine.changeMapFn) {
+          fadeToBlack();
+          engine.changeMapFn(mapId);
+        }
+      },
       teachSkill(skillId: number, level: number, masterLevel: number) { /* TODO */ },
-      changeJobById(jobId: number) { /* TODO */ },
+      changeJobById(jobId: number) { character?.changeJob(jobId); },
       guideHint(hint: number) { /* TODO */ },
       setQuestProgress(questId: number, progress: string) { /* TODO */ },
       getQuestProgress(questId: number) { return ''; },

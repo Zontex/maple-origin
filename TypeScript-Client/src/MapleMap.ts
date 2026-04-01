@@ -790,6 +790,12 @@ MapleMap.handleClick = function (
               onDispose: () => {
                 dialog.hide();
               },
+              changeMap: async (mapId: number, portalName?: string) => {
+                const mapState = (window as any).MapStateInstance;
+                if (mapState?.changeMap) {
+                  await mapState.changeMap(mapId);
+                }
+              },
             });
 
             scriptHandled = true;
@@ -925,6 +931,14 @@ MapleMap.tryNpcScript = async function (npc: any) {
   const hasScript = await engine.hasScript(npc.id);
 
   if (!hasScript) {
+    // Check if NPC has a shop — if so, open it directly
+    const { getShopInfo } = await import('./Shop/ShopData');
+    const shopInfo = await getShopInfo(npc.id);
+    if (shopInfo && shopInfo.items.length > 0) {
+      const { default: ShopUI } = await import('./UI/ShopUI');
+      ShopUI.show(npc.id);
+      return;
+    }
     await this.npcDialog.changeText(npc.id, null, npc.strings.name, 'Hello');
     this.npcDialog.setIsHidden(false);
     return;

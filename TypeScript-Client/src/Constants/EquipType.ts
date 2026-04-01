@@ -79,42 +79,156 @@ const EquipTypeToSoundName: Record<WeaponType, string> = {
   [WeaponType.PISTOL]: "gun",
 };
 
-export const WeaponTypeToStance: any = {
-  [EquipType.SWORD]: {
-    melee: [
-      Stance.stabO1,
-      Stance.stabO2,
-      Stance.stabOF,
-      Stance.swingO1,
-      Stance.swingO2,
-      Stance.swingO3,
-      Stance.swingOF,
-    ],
-    range: [
-      Stance.stabO1,
-      Stance.stabO2,
-      Stance.stabOF,
-      Stance.swingO1,
-      Stance.swingO2,
-      Stance.swingO3,
-      Stance.swingOF,
-    ],
+export interface WeaponConfig {
+  isRanged: boolean;
+  meleeRange: number;
+  stances: {
+    melee: Stance[];
+    ranged: Stance[];
+  };
+}
+
+const WEAPON_CONFIG: Record<number, WeaponConfig> = {
+  [WeaponType.SWORD]: {
+    isRanged: false,
+    meleeRange: 80,
+    stances: {
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      ranged: [],
+    },
   },
-  [EquipType.BOW]: {
-    melee: [Stance.swingT1, Stance.swingT3],
-    range: [Stance.shoot1, Stance.shootF],
+  [WeaponType.AXE]: {
+    isRanged: false,
+    meleeRange: 80,
+    stances: {
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      ranged: [],
+    },
   },
-  [EquipType.CLAW]: {
-    melee: [Stance.stabO1, Stance.stabO2, Stance.stabOF],
-    range: [Stance.swingO1, Stance.swingO2, Stance.swingO3, Stance.swingOF],
+  [WeaponType.MACE]: {
+    isRanged: false,
+    meleeRange: 80,
+    stances: {
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      ranged: [],
+    },
   },
-  // need to complete for every weapon type
+  [WeaponType.DAGGER]: {
+    isRanged: false,
+    meleeRange: 60,
+    stances: {
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      ranged: [],
+    },
+  },
+  [WeaponType.WAND]: {
+    isRanged: false,
+    meleeRange: 70,
+    stances: {
+      melee: [Stance.swingO1, Stance.swingO2, Stance.swingO3, Stance.stabO1, Stance.stabO2],
+      ranged: [],
+    },
+  },
+  [WeaponType.STAFF]: {
+    isRanged: false,
+    meleeRange: 70,
+    stances: {
+      melee: [Stance.swingO1, Stance.swingO2, Stance.swingO3, Stance.stabO1, Stance.stabO2],
+      ranged: [],
+    },
+  },
+  [WeaponType.SWORD_2H]: {
+    isRanged: false,
+    meleeRange: 90,
+    stances: {
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      ranged: [],
+    },
+  },
+  [WeaponType.AXE_2H]: {
+    isRanged: false,
+    meleeRange: 90,
+    stances: {
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      ranged: [],
+    },
+  },
+  [WeaponType.MACE_2H]: {
+    isRanged: false,
+    meleeRange: 90,
+    stances: {
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      ranged: [],
+    },
+  },
+  [WeaponType.SPEAR]: {
+    isRanged: false,
+    meleeRange: 100,
+    stances: {
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      ranged: [],
+    },
+  },
+  [WeaponType.POLEARM]: {
+    isRanged: false,
+    meleeRange: 100,
+    stances: {
+      melee: [Stance.swingO1, Stance.swingO2, Stance.swingO3, Stance.stabO1, Stance.stabO2],
+      ranged: [],
+    },
+  },
+  [WeaponType.BOW]: {
+    isRanged: true,
+    meleeRange: 80,
+    stances: {
+      melee: [Stance.swingT1, Stance.swingT3],
+      ranged: [Stance.shoot1],
+    },
+  },
+  [WeaponType.CROSSBOW]: {
+    isRanged: true,
+    meleeRange: 80,
+    stances: {
+      melee: [Stance.swingT1, Stance.swingT3],
+      ranged: [Stance.shoot1],
+    },
+  },
+  [WeaponType.CLAW]: {
+    isRanged: true,
+    meleeRange: 60,
+    stances: {
+      melee: [Stance.swingT1, Stance.swingT3],
+      ranged: [Stance.shoot1],
+    },
+  },
+  [WeaponType.KNUCKLER]: {
+    isRanged: false,
+    meleeRange: 75,
+    stances: {
+      melee: [Stance.swingP1, Stance.swingP2],
+      ranged: [],
+    },
+  },
+  [WeaponType.PISTOL]: {
+    isRanged: true,
+    meleeRange: 75,
+    stances: {
+      melee: [Stance.swingP1, Stance.swingP2],
+      ranged: [Stance.shoot1],
+    },
+  },
 };
 
-export const WeaponTypeToSoundEffect = {
-  [EquipType.SWORD]: {
-    melee: ["swordSwing1", "swordSwing2", "swordSwing3"],
-  },
+export function getWeaponConfig(weaponType: number): WeaponConfig | undefined {
+  return WEAPON_CONFIG[weaponType];
+}
+
+// Default projectile item IDs per ranged weapon type (until inventory consumption is implemented)
+export const DEFAULT_PROJECTILE_ID: Partial<Record<number, number>> = {
+  [WeaponType.BOW]: 2060000,      // arrow
+  [WeaponType.CROSSBOW]: 2060000, // arrow
+  [WeaponType.CLAW]: 2070000,     // throwing star
+  [WeaponType.PISTOL]: 2330000,   // bullet
 };
 
 const map = new Map();

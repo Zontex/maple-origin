@@ -66,6 +66,23 @@ class Inventory {
     }
     console.log(this);
   }
+
+  removeFromInventory(itemId: number, quantity: number = 1): boolean {
+    const tabs = [this.equip, this.use, this.setup, this.etc, this.cash];
+    for (const tab of tabs) {
+      for (let i = 0; i < tab.length; i++) {
+        if (tab[i].itemId === itemId) {
+          if (tab[i].quantity <= quantity) {
+            tab.splice(i, 1);
+          } else {
+            tab[i].quantity -= quantity;
+          }
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 }
 
 export default Inventory;

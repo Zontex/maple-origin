@@ -87,8 +87,11 @@ npm start
 - **EXP and leveling** with level-up animation and sound
 
 ### Combat
-- **Weapon-range-based hit detection** with monster-width awareness and v83 damage formulas
-- **Projectile system** — arrows/stars with auto-targeting
+- **All 16 weapon types** — swords, axes, maces, daggers, wands, staves, 2H swords/axes/maces, spears, polearms, bows, crossbows, claws, knucklers, pistols — each with correct attack stances, range, and sound effects
+- **v83 damage formulas** — proper per-weapon stat multipliers (STR/DEX/LUK scaling), attack type variants (stab vs swing), monster defense reduction, miss chance from evasion
+- **Projectile system** — bows, crossbows, claws, and pistols fire projectiles with auto-targeting, homing physics, and proper damage calculation
+- **Weapon-range-based hit detection** with monster-width awareness, directional filtering, and per-weapon melee range
+- **Randomized attack stances** — each attack picks a random stance from the weapon's stance pool for visual variety
 - **Monster AI** — random patrol, boundary bouncing, jump probability
 - **Monster HP bars** — show on hit, fade after 6 seconds
 - **Damage numbers** — player-hit-mob (red), mob-hit-player (violet), miss indicators
@@ -176,23 +179,95 @@ MapleWeb/
 
 ---
 
-## Roadmap
+## TODO
 
-### Next Up
+### Critical Bugs (High Impact)
+
+- [ ] **Fame reward not applied** — `Act.img` uses `"pop"` for fame but parser looks for `"fame"`. **104 quests** silently lose fame rewards. One-line fix in `QuestData.ts parseReward()`.
+- [ ] **`#L` selection codes stripped in Say.img** — **530 quests** have selection-based dialog (quiz, branching choices) but `stripFormatCodes()` removes `#L`/`#l` markers, rendering them as plain text with no interactivity.
+- [ ] **Item start requirements skipped** — `meetsRequirement()` has "Skip item check for now" comment. **488 quests** show as available even without required items.
+- [ ] **Item removals dropped in Act.img** — `parseReward()` filters `count > 0`, silently dropping `count=-1` removal entries. 21 quests have Act-only removals not covered by Check.img.
+
+### Quest System Gaps
+
+#### Script Compatibility (65 broken scripts)
+- [ ] **Remove `Java.type()` calls** — 33 quest scripts and 76 NPC scripts use `Java.type('client.Job')`, `Java.type('client.inventory.InventoryType')`, etc. These crash immediately with `ReferenceError`. Need to replace with JS equivalents or add shim constants.
+- [ ] **Add missing `qm` API methods** — Quest scripts call methods not in `QuestScriptEngine.createQM()`:
+  - `canGetFirstJob()`, `getFirstJobStatRequirement()` — Cygnus job advancement
+  - `getMeso()`, `getMapId()`, `getJobId()` — direct accessors
+  - `changeJob()` — job advancement (exists in NPC engine but not quest engine)
+  - `getQuestProgressInt()`, `getQuestStatus()` — quest state tracking
+  - `resetStats()` — stat reset for job changes
+  - `getMedalName()`, `earnTitle()` — medal/title quests
+  - `evolvePet()`, `getPet()` — pet evolution quests
+  - `sendGetNumber()` — numeric input dialog
+  - `showInfoText()`, `playSound()`, `showVideo()` — presentation
+- [ ] **Add missing `cm` API methods** — NPC scripts (214 broken) call:
+  - `removeAll()` (25 scripts), `itemQuantity()` (23), `sendGetNumber()` (19), `sendGetText()`/`getText()` (16/14)
+  - `getPlayerCount()` (21), `mapMessage()` (14), `getNpcObjectId()` (14)
+  - `hasItem()` (10) — alias for `haveItem`, trivial fix
+  - `canGetFirstJob()` / `getFirstJobStatRequirement()` (10) — job advancement NPCs
+  - `answerCPQChallenge()` (10) — CPQ system
+- [ ] **Add missing `getPlayer()` sub-methods** — `getStr()`, `getDex()`, `getInt()`, `getLuk()`, `getSkillLevel()`, `dropMessage()`, `getPet()`, `resetStats()`
+
+#### Data-Driven Quest Gaps
+- [ ] **Format code `#m` (map name)** — shows literal "map" instead of resolved name from `String.wz/Map.img`. 371 occurrences.
+- [ ] **Format code `#s` (skill name)** — not handled, raw code passes through. 379 occurrences.
+- [ ] **Format code `#q` (quest status)** — not handled. 37 occurrences.
+- [ ] **Format code `#a` (quest progress counter)** — stripped to nothing instead of showing actual kill/collect count.
+- [ ] **Repeatable quest cooldowns (`interval`)** — 535 quests have repeat timers, not enforced. Quests can be repeated immediately.
+- [ ] **`fieldEnter` auto-start** — 29 quests should auto-start when entering a map. Not implemented.
+- [ ] **`normalAutoStart` on level-up** — Quests like job advancement (1048-1053) should trigger automatically at certain levels. Currently only work via NPC click.
+- [ ] **Daily quest limiter (`dayByDay`)** — 63 quests, not enforced.
+- [ ] **Skill requirements** — 45 quest start checks + 65 quest rewards involve skills. Neither checked nor granted.
+- [ ] **Equipment requirements (`equipAllNeed`/`equipSelectNeed`)** — 13 quests, not checked.
+- [ ] **Meso completion requirement (`endmeso`)** — 54 quests require meso payment to complete, not checked.
+- [ ] **Fame requirement (`pop` in Check.img)** — 3 quests, not checked.
+- [ ] **`infoex`/`infoNumber` progress tracking** — 78+ quests use custom progress variables, system not implemented.
+- [ ] **Pet-related requirements** — 13+ quests, not implemented.
+
+#### Missing Quest Scripts (6 files)
+- [ ] `20015.js` — Greetings From the Young Empress (Cygnus Knights)
+- [ ] `29002.js` — Title Challenge - Celebrity!
+- [ ] `29400.js` — Title Challenge - Veteran Hunter
+- [ ] `29500.js` — Title Challenge - Maple Idol Star
+- [ ] `29503.js` — Title Challenge - Donation King
+- [ ] `29508.js` — Outstanding Citizen
+
+### Portal Script System (not implemented)
+- [ ] **Build `PortalScriptEngine`** — 458 portal scripts exist in `backend/scripts/portal/` but are never executed. Client currently warps directly on portal contact based on WZ `tm`/`tn` fields, bypassing all script logic.
+  - Quest-gated portals (e.g., "must complete quest X to enter") don't block
+  - Event-restricted areas are wide open
+  - Need a `pi` API similar to `cm`/`qm`: `warp()`, `playPortalSound()`, `playerMessage()`, `isQuestCompleted()`, `blockPortal()`
+- [ ] **Portal script naming mismatch** — WZ maps reference portals by IDs like `001E` but scripts use semantic names like `enterDollcave`. Need to verify how these resolve at runtime.
+
+### Script Coverage Overview
+
+| Category | Total | Working | Broken | Notes |
+|----------|-------|---------|--------|-------|
+| NPC scripts | 709 | 495 (70%) | 214 | Java.type, missing cm methods |
+| Quest scripts | 261 | 196 (75%) | 65 | Java.type, missing qm methods |
+| Portal scripts | 458 | 0 (0%) | — | Engine not built yet |
+| Reactor scripts | 292 | — | — | Many are stubs (3 lines) |
+| Event scripts | 108 | — | — | Well-implemented, need event system |
+| Data-driven quests | ~2,226 | ~1,304 (59%) | ~890 soft issues | Fame bug, selections, format codes |
+
+### Existing Roadmap
+
+#### Next Up
 - [x] Equipment equip/unequip from inventory
+- [x] Minimap rendering
+- [x] Job advancement NPCs (quest scripts 1048-1054 written)
 - [ ] Equipment stat application (STR, DEX, etc. affect damage)
 - [ ] Skill system foundation (Skill.wz data, skill UI, hotkey bar)
-- [ ] Say.img quest selection dialogs (1112 quests with quiz/branching)
 - [ ] NPC shops (buy/sell items)
 - [ ] Quest state persistence (localStorage)
 - [ ] Facial expressions (F1-F7 hotkeys)
 - [ ] Passive HP/MP regen
 - [ ] Map name display on entry
-- [x] Minimap rendering
 
-### Medium Term
+#### Medium Term
 - [ ] Multiple map connectivity (portal network between towns)
-- [ ] Job advancement NPCs
 - [ ] Party system (shared EXP, party HP display)
 - [ ] Proper chat system (history, whisper, party chat)
 - [x] Equipment window (paper doll)
@@ -222,7 +297,7 @@ The full [Cosmic](https://github.com/P0nk/Cosmic) Java v83 emulator lives in `ba
 
 | Category | Features |
 |----------|----------|
-| **Combat** | Skill animations, buff/debuff visuals, multi-hit skills, summons |
+| **Combat** | Skill system, skill animations, buff/debuff visuals, multi-hit skills, summons, afterimage weapon trails |
 | **UI** | Skill window, guild/buddy windows, options, cash shop |
 | **World** | All Victoria Island maps, Ossyria, Masteria, world tour, Maple Island, hidden streets |
 | **Polish** | Screen shake, weather effects, pets, mounts, chair sitting, medals |

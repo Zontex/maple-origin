@@ -21,13 +21,54 @@ const TOTAL_W = LEFT_W + RIGHT_W;
 const TOTAL_H = 396;
 
 const TAB_X = 7;
-const TAB_Y = 18;
+const TAB_Y = 22;
 const LIST_X = 12;
 const LIST_Y = 42;
 const LIST_W = LEFT_W - 24;
 const ENTRY_H = 18;
 const MAX_VISIBLE = 18;
 const DETAIL_PAD = 14;
+
+// Area ID to region name mapping (from WZ data)
+const AREA_NAMES: Record<number, string> = {
+  0: 'Maple Island',
+  1: 'Victoria Island',
+  2: 'El Nath Mts.',
+  3: 'Ludus Lake',
+  4: 'Underwater',
+  5: 'Mu Lung Garden',
+  6: 'Nihal Desert',
+  7: 'Temple of Time',
+  8: 'Masteria',
+  9: 'Amoria',
+  10: 'Happyville',
+  11: 'Mushroom Shrine',
+  12: 'Showa Town',
+  13: 'Singapore',
+  14: 'Malaysia',
+  15: 'Ellin Forest',
+  16: 'Korean Folk Town',
+  17: 'Nautilus',
+  18: 'Ereve',
+  19: 'Rien',
+  100: 'Party Quest',
+  200: 'Etc',
+};
+
+interface CategoryEntry {
+  type: 'category';
+  name: string;
+  count: number;
+  collapsed: boolean;
+}
+
+interface QuestEntry {
+  type: 'quest';
+  questId: number;
+  category: string;
+}
+
+type ListEntry = CategoryEntry | QuestEntry;
 
 class QuestLogMenuSprite extends DragableMenu {
   opts: any;
@@ -42,13 +83,22 @@ class QuestLogMenuSprite extends DragableMenu {
 
   // WZ images
   private questUINode: any = null;
-  private bgLeft: any = null;       // backgrnd 245x396
-  private bgRight: any = null;      // backgrnd2 305x396 (only shown when quest selected)
-  private tabBtnEnabled: any[] = [];  // Item/New/Tab1 — button background (active)
-  private tabBtnDisabled: any[] = []; // Item/New/Tab0 — button background (inactive)
-  private tabLblEnabled: any[] = [];  // Quest/Tab/enabled — text label (active)
-  private tabLblDisabled: any[] = []; // Quest/Tab/disabled — text label (inactive)
+  private bgLeft: any = null;
+  private bgRight: any = null;
+  private tabBtnEnabled: any[] = [];
+  private tabBtnDisabled: any[] = [];
+  private tabLblEnabled: any[] = [];
+  private tabLblDisabled: any[] = [];
   private buttons: MapleStanceButton[] = [];
+
+  // Progress gauge
+  private gaugeFrame: any = null;  // Gauge/frame 163x14
+  private gaugeBar: any = null;    // Gauge/gauge 1x11 (tile to fill)
+
+  // Scrollbar
+  private scrollPrev: any = null;
+  private scrollNext: any = null;
+  private scrollThumb: any = null;
 
   // NPC sprite cache for detail panel
   private cachedNpcId: number = -1;
@@ -57,7 +107,9 @@ class QuestLogMenuSprite extends DragableMenu {
 
   // State
   private questList: number[] = [];
-  private selectedIndex: number = -1;
+  private displayList: ListEntry[] = [];
+  private collapsedCategories: Set<string> = new Set();
+  private selectedQuestId: number = -1;
   private scrollOffset: number = 0;
   private lastClickTime: number = 0;
 
@@ -98,6 +150,22 @@ class QuestLogMenuSprite extends DragableMenu {
         this.tabLblEnabled[i] = this.questUINode?.Tab?.enabled?.[i]?.nGetImage?.() || null;
         this.tabLblDisabled[i] = this.questUINode?.Tab?.disabled?.[i]?.nGetImage?.() || null;
       }
+
+      // Progress gauge
+      const gauge = this.questUINode?.Gauge;
+      if (gauge) {
+        this.gaugeFrame = gauge.frame?.nGetImage?.() || null;
+        this.gaugeBar = gauge.gauge?.nGetImage?.() || null;
+      }
+
+      // Scrollbar (VScr4)
+      const basicNode = await WZManager.get('UI.wz/Basic.img');
+      const vscr = (basicNode as any)?.VScr4;
+      if (vscr?.enabled) {
+        this.scrollPrev = vscr.enabled.prev0?.nGetImage?.() || null;
+        this.scrollNext = vscr.enabled.next0?.nGetImage?.() || null;
+        this.scrollThumb = vscr.enabled.thumb0?.nGetImage?.() || null;
+      }
     } catch (e) {
       console.error('Error loading quest UI:', e);
     }
@@ -106,7 +174,7 @@ class QuestLogMenuSprite extends DragableMenu {
   }
 
   getRect(camera: CameraInterface) {
-    const w = this.selectedIndex >= 0 ? TOTAL_W : LEFT_W;
+    const w = this.selectedQuestId >= 0 ? TOTAL_W : LEFT_W;
     return { x: this.x, y: this.y, width: w, height: TOTAL_H };
   }
 
@@ -116,9 +184,52 @@ class QuestLogMenuSprite extends DragableMenu {
     if (!isHidden) this.refreshQuestList();
   }
 
+  private getCategoryName(questId: number): string | null {
+    const info = QuestData.quests.get(questId);
+    if (info?.parent) return info.parent;
+    // Use area name if available, otherwise no category
+    if (info?.area !== undefined && info.area > 0 && AREA_NAMES[info.area]) return AREA_NAMES[info.area];
+    return null;
+  }
+
+  private buildDisplayList() {
+    // Group quests by category - quests without category show directly
+    const categories = new Map<string, number[]>();
+    const uncategorized: number[] = [];
+    for (const qid of this.questList) {
+      const cat = this.getCategoryName(qid);
+      if (cat) {
+        if (!categories.has(cat)) categories.set(cat, []);
+        categories.get(cat)!.push(qid);
+      } else {
+        uncategorized.push(qid);
+      }
+    }
+
+    this.displayList = [];
+    for (const [catName, quests] of categories) {
+      const collapsed = this.collapsedCategories.has(catName);
+      this.displayList.push({
+        type: 'category',
+        name: catName,
+        count: quests.length,
+        collapsed,
+      });
+      if (!collapsed) {
+        for (const qid of quests) {
+          this.displayList.push({ type: 'quest', questId: qid, category: catName });
+        }
+      }
+    }
+    // Uncategorized quests listed directly
+    for (const qid of uncategorized) {
+      this.displayList.push({ type: 'quest', questId: qid, category: '' });
+    }
+  }
+
   private refreshQuestList() {
     const qm = this.charecter?.questManager;
-    if (!qm) { this.questList = []; return; }
+    if (!qm) { this.questList = []; this.displayList = []; return; }
 
     switch (this.currentTab) {
       case QuestTab.AVAILABLE: {
@@ -126,11 +237,15 @@ class QuestLogMenuSprite extends DragableMenu {
         const level = this.charecter?.stats?.level || 1;
         for (const [questId] of QuestData.quests) {
           if (qm.canStartQuest(questId)) {
+            const questInfo = QuestData.quests.get(questId);
+            // Filter out non-Latin quest names (Korean, Chinese, etc.)
+            if (questInfo?.name && /[^\x00-\xFF]/.test(questInfo.name)) continue;
             const reqs = QuestData.requirements.get(questId);
             const minLv = reqs?.start?.lvmin || 0;
-            if (minLv <= level + 10) this.questList.push(questId);
+            // Only show quests within player's level range
+            if (minLv <= level) this.questList.push(questId);
           }
-          if (this.questList.length >= 50) break;
+          if (this.questList.length >= 200) break;
         }
         break;
       }
@@ -141,9 +256,18 @@ class QuestLogMenuSprite extends DragableMenu {
         this.questList = Array.from(qm.completedQuests);
         break;
     }
-    this.selectedIndex = this.questList.length > 0 ? 0 : -1;
+
+    this.buildDisplayList();
+
+    // Select first quest if any
+    this.selectedQuestId = -1;
+    for (const entry of this.displayList) {
+      if (entry.type === 'quest') {
+        this.selectedQuestId = entry.questId;
+        break;
+      }
+    }
     this.scrollOffset = 0;
-    // Reset NPC sprite cache when list changes
     this.cachedNpcId = -1;
     this.cachedNpcSprite = null;
   }
@@ -172,6 +296,10 @@ class QuestLogMenuSprite extends DragableMenu {
     this.buttons.forEach(btn => ClickManager.removeButton(btn));
     this.buttons = [];
 
+    // Only show buttons when right panel is visible (quest selected)
+    if (this.selectedQuestId < 0) return;
+
+    // FORFEIT button (In Progress tab only)
     if (this.currentTab === QuestTab.IN_PROGRESS && this.questUINode?.BtGiveup) {
       const btn = new MapleStanceButton(canvas, {
         x: this.x + LEFT_W + RIGHT_W - 65,
@@ -180,10 +308,26 @@ class QuestLogMenuSprite extends DragableMenu {
         isRelativeToCamera: true,
         isPartOfUI: true,
         onClick: () => {
-          if (this.selectedIndex >= 0 && this.selectedIndex < this.questList.length) {
-            this.charecter?.questManager?.forfeitQuest(this.questList[this.selectedIndex]);
+          if (this.selectedQuestId >= 0) {
+            this.charecter?.questManager?.forfeitQuest(this.selectedQuestId);
             this.refreshQuestList();
           }
+        },
+      });
+      this.buttons.push(btn);
+      ClickManager.addButton(btn);
+    }
+
+    // QUEST HELPER button (BtAlert — shown on all tabs when quest selected)
+    if (this.questUINode?.BtAlert) {
+      const btn = new MapleStanceButton(canvas, {
+        x: this.x + LEFT_W + RIGHT_W - 155,
+        y: this.y + TOTAL_H - 25,
+        img: this.questUINode.BtAlert.nChildren,
+        isRelativeToCamera: true,
+        isPartOfUI: true,
+        onClick: () => {
+          // Quest helper - not yet implemented
         },
       });
       this.buttons.push(btn);
@@ -228,12 +372,20 @@ class QuestLogMenuSprite extends DragableMenu {
     // Quest list (left panel)
     this.drawQuestList(canvas);
 
+    // Left panel scrollbar
+    this.drawScrollbar(canvas, this.x + LEFT_W - 18, this.y + LIST_Y, this.y + TOTAL_H - 10,
+      this.scrollOffset, this.displayList.length, MAX_VISIBLE);
+
     // Right panel + detail only when a quest is selected
-    if (this.selectedIndex >= 0) {
+    if (this.selectedQuestId >= 0) {
       if (this.bgRight) {
         canvas.drawImage({ img: this.bgRight, dx: this.x + LEFT_W, dy: this.y });
       }
       this.drawQuestDetail(canvas);
+
+      // Right panel scrollbar
+      this.drawScrollbar(canvas, this.x + LEFT_W + RIGHT_W - 18, this.y + 10, this.y + TOTAL_H - 35,
+        0, 1, 1); // Static for now
     }
 
     // Buttons
@@ -270,28 +422,81 @@ class QuestLogMenuSprite extends DragableMenu {
   private drawQuestList(canvas: GameCanvas) {
     const lx = this.x + LIST_X;
     let ly = this.y + LIST_Y;
-    const end = Math.min(this.scrollOffset + MAX_VISIBLE, this.questList.length);
+    const end = Math.min(this.scrollOffset + MAX_VISIBLE, this.displayList.length);
 
     for (let i = this.scrollOffset; i < end; i++) {
-      const questInfo = QuestData.quests.get(this.questList[i]);
-      if (!questInfo) continue;
-      const selected = i === this.selectedIndex;
+      const entry = this.displayList[i];
 
-      if (selected) {
-        canvas.drawRect({
-          x: lx - 2, y: ly - 1,
-          width: LIST_W, height: ENTRY_H,
-          color: '#4477BB', alpha: 0.3,
+      if (entry.type === 'category') {
+        // Category header with collapse/expand icon
+        // Blue square icon
+        const ctx = canvas.context;
+        ctx.save();
+        ctx.fillStyle = '#5577AA';
+        ctx.fillRect(lx, ly + 2, 12, 12);
+        ctx.strokeStyle = '#334466';
+        ctx.strokeRect(lx, ly + 2, 12, 12);
+        // + or - sign
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 10px Arial';
+        ctx.fillText(entry.collapsed ? '+' : '-', lx + 3, ly + 12);
+        ctx.restore();
+
+        // Category name with count
+        canvas.drawText({
+          text: `${entry.name} (${entry.count})`,
+          color: '#222244',
+          x: lx + 16, y: ly + 3, fontSize: 11, fontWeight: 'bold',
+        });
+
+        // Light blue background for category row
+        const ctx2 = canvas.context;
+        ctx2.save();
+        ctx2.globalAlpha = 0.15;
+        ctx2.fillStyle = '#6699CC';
+        ctx2.fillRect(lx - 2, ly, LIST_W, ENTRY_H);
+        ctx2.restore();
+
+      } else {
+        // Quest entry
+        const questInfo = QuestData.quests.get(entry.questId);
+        if (!questInfo) { ly += ENTRY_H; continue; }
+        const selected = entry.questId === this.selectedQuestId;
+
+        if (selected) {
+          canvas.drawRect({
+            x: lx - 2, y: ly,
+            width: LIST_W, height: ENTRY_H,
+            color: '#4477BB', alpha: 0.3,
+          });
+        }
+
+        // Small quest status dot (like original game)
+        const ctx = canvas.context;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(lx + 5, ly + 9, 3, 0, Math.PI * 2);
+        if (this.currentTab === QuestTab.IN_PROGRESS) {
+          ctx.fillStyle = '#8899BB'; // grey-blue for in-progress
+        } else if (this.currentTab === QuestTab.COMPLETED) {
+          ctx.fillStyle = '#88AA88'; // grey-green for complete
+        } else {
+          ctx.fillStyle = '#CCAA44'; // yellow for available
+        }
+        ctx.fill();
+        ctx.strokeStyle = '#666688';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+        ctx.restore();
+
+        let name = questInfo.name;
+        if (name.length > 24) name = name.substring(0, 22) + '..';
+        canvas.drawText({
+          text: name,
+          color: selected ? '#003388' : '#333333',
+          x: lx + 14, y: ly + 3, fontSize: 11,
         });
       }
-
-      let name = questInfo.name;
-      if (name.length > 26) name = name.substring(0, 24) + '..';
-      canvas.drawText({
-        text: name,
-        color: selected ? '#003388' : '#333333',
-        x: lx + 2, y: ly + 3, fontSize: 11,
-      });
 
       ly += ENTRY_H;
     }
@@ -308,24 +513,43 @@ class QuestLogMenuSprite extends DragableMenu {
     }
   }
 
-  private drawQuestDetail(canvas: GameCanvas) {
-    if (this.selectedIndex < 0 || this.selectedIndex >= this.questList.length) return;
+  private drawScrollbar(canvas: GameCanvas, sbX: number, sbTopY: number, sbBottomY: number,
+    offset: number, totalItems: number, visibleItems: number) {
+    const arrowH = 13;
 
-    const questId = this.questList[this.selectedIndex];
+    if (this.scrollPrev) canvas.drawImage({ img: this.scrollPrev, dx: sbX, dy: sbTopY });
+    if (this.scrollNext) canvas.drawImage({ img: this.scrollNext, dx: sbX, dy: sbBottomY - arrowH });
+
+    if (this.scrollThumb && totalItems > visibleItems) {
+      const trackH = sbBottomY - sbTopY - arrowH * 2 - (this.scrollThumb.height || 25);
+      const ratio = offset / Math.max(1, totalItems - visibleItems);
+      const thumbY = sbTopY + arrowH + Math.round(ratio * trackH);
+      canvas.drawImage({ img: this.scrollThumb, dx: sbX, dy: thumbY });
+    } else if (this.scrollThumb) {
+      canvas.drawImage({ img: this.scrollThumb, dx: sbX, dy: sbTopY + arrowH });
+    }
+  }
+
+  private drawQuestDetail(canvas: GameCanvas) {
+    if (this.selectedQuestId < 0) return;
+
+    const questId = this.selectedQuestId;
     const questInfo = QuestData.quests.get(questId);
     if (!questInfo) return;
 
     const rx = this.x + LEFT_W;
     const reqs = QuestData.requirements.get(questId);
-    const BLUE_AREA_H = 120; // approximate blue header area in backgrnd2
+    const BLUE_AREA_H = 120;
 
-    // --- Blue header area (top of right panel) ---
+    // --- Blue header area (starts ~y+30 in bgRight) ---
+    // The green dot is baked into bgRight — just draw the title next to it
+    const blueY = this.y + 43;
 
-    // Quest name
+    // Quest name (bold, positioned next to the baked-in green dot)
     canvas.drawText({
-      text: questInfo.name.length > 22 ? questInfo.name.substring(0, 20) + '..' : questInfo.name,
+      text: questInfo.name.length > 20 ? questInfo.name.substring(0, 18) + '..' : questInfo.name,
       color: '#FFFFFF', fontWeight: 'bold',
-      x: rx + DETAIL_PAD + 4, y: this.y + 20,
+      x: rx + DETAIL_PAD + 20, y: blueY,
       fontSize: 12,
     });
 
@@ -334,9 +558,44 @@ class QuestLogMenuSprite extends DragableMenu {
       canvas.drawText({
         text: `Over Level ${reqs.start.lvmin}`,
         color: '#DDDDEE',
-        x: rx + DETAIL_PAD + 4, y: this.y + 38,
+        x: rx + DETAIL_PAD + 12, y: blueY + 20,
         fontSize: 10,
       });
+    }
+
+    // Progress gauge in blue header area
+    if (this.gaugeFrame && this.currentTab === QuestTab.IN_PROGRESS) {
+      const gaugeX = rx + DETAIL_PAD + 4;
+      const gaugeY = blueY + 42;
+      canvas.drawImage({ img: this.gaugeFrame, dx: gaugeX, dy: gaugeY });
+
+      // Calculate progress
+      if (this.gaugeBar) {
+        const qm = this.charecter?.questManager;
+        const progress = qm?.getMobProgress(questId);
+        let ratio = 0;
+        if (progress?.length) {
+          let done = 0, total = 0;
+          for (const p of progress) {
+            done += Math.min(p.current, p.required);
+            total += p.required;
+          }
+          if (total > 0) ratio = done / total;
+        }
+        // Fill gauge bar (gauge is 1px wide, tile it)
+        const fillW = Math.round(ratio * 155); // 163 - some padding
+        if (fillW > 0) {
+          const ctx = canvas.context;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(gaugeX + 4, gaugeY + 2, fillW, 11);
+          ctx.clip();
+          for (let gx = 0; gx < fillW; gx++) {
+            canvas.drawImage({ img: this.gaugeBar, dx: gaugeX + 4 + gx, dy: gaugeY + 2 });
+          }
+          ctx.restore();
+        }
+      }
     }
 
     // NPC sprite in top-right of blue header area
@@ -344,16 +603,16 @@ class QuestLogMenuSprite extends DragableMenu {
     if (npcId && npcId !== this.cachedNpcId) {
       this.loadNpcSprite(npcId);
     }
-    if (this.cachedNpcSprite) {
+    if (this.cachedNpcSprite && this.cachedNpcSprite.complete && this.cachedNpcSprite.naturalWidth > 0) {
       const spriteImg = this.cachedNpcSprite;
-      const spriteX = rx + RIGHT_W - spriteImg.width - 25;
+      const spriteX = rx + RIGHT_W - spriteImg.width - 30;
       const spriteY = this.y + BLUE_AREA_H - spriteImg.height - 5;
       canvas.drawImage({ img: spriteImg, dx: spriteX, dy: spriteY });
     }
 
     // --- Description text below blue area ---
-    let dy = this.y + BLUE_AREA_H + 14;
-    const maxW = RIGHT_W - DETAIL_PAD * 2 - 10;
+    let dy = this.y + BLUE_AREA_H + 10;
+    const maxW = RIGHT_W - DETAIL_PAD * 2 - 20;
     const lineH = 14;
 
     let description = '';
@@ -364,7 +623,6 @@ class QuestLogMenuSprite extends DragableMenu {
     } else {
       description = questInfo.completionText || 'Quest completed.';
     }
-    // Resolve deferred #t/#c item codes
     const qm = (window as any).charecter?.questManager;
     description = resolveItemCodes(description, qm);
 
@@ -372,7 +630,7 @@ class QuestLogMenuSprite extends DragableMenu {
     const words = description.split(' ');
     let line = '';
     let count = 0;
-    const maxLines = 14;
+    const maxLines = 12;
     for (const word of words) {
       const test = line ? `${line} ${word}` : word;
       if (test.length * 6.2 > maxW && line) {
@@ -408,23 +666,6 @@ class QuestLogMenuSprite extends DragableMenu {
       }
     }
 
-    // Rewards
-    if (this.currentTab !== QuestTab.COMPLETED) {
-      const rewards = QuestData.rewards.get(questId);
-      if (rewards?.complete) {
-        const parts: string[] = [];
-        if (rewards.complete.exp) parts.push(`${rewards.complete.exp} EXP`);
-        if (rewards.complete.meso) parts.push(`${rewards.complete.meso} Mesos`);
-        if (parts.length) {
-          dy += 8;
-          canvas.drawText({
-            text: `Reward: ${parts.join(', ')}`,
-            color: '#886600',
-            x: rx + DETAIL_PAD, y: dy, fontSize: 11,
-          });
-        }
-      }
-    }
   }
 
   private handleClick(mx: number, my: number, canvas: GameCanvas) {
@@ -447,16 +688,46 @@ class QuestLogMenuSprite extends DragableMenu {
       }
     }
 
+    // Left panel scrollbar arrow clicks
+    const sbX = this.x + LEFT_W - 18;
+    const sbTopY = this.y + LIST_Y;
+    const sbBottomY = this.y + TOTAL_H - 10;
+    if (mx >= sbX && mx <= sbX + 15) {
+      // Up arrow
+      if (my >= sbTopY && my <= sbTopY + 13) {
+        if (this.scrollOffset > 0) this.scrollOffset--;
+        return;
+      }
+      // Down arrow
+      if (my >= sbBottomY - 13 && my <= sbBottomY) {
+        if (this.scrollOffset < this.displayList.length - MAX_VISIBLE) this.scrollOffset++;
+        return;
+      }
+    }
+
     // Quest list clicks
     const lx = this.x + LIST_X;
     const ly = this.y + LIST_Y;
-    if (mx >= lx && mx <= this.x + LEFT_W - 10 && my >= ly && my < ly + MAX_VISIBLE * ENTRY_H) {
-      const idx = Math.floor((my - ly) / ENTRY_H) + this.scrollOffset;
-      if (idx >= 0 && idx < this.questList.length) {
-        this.selectedIndex = idx;
-        // Reset NPC sprite for new selection
-        this.cachedNpcId = -1;
-        this.cachedNpcSprite = null;
+    if (mx >= lx && mx <= this.x + LEFT_W - 20 && my >= ly && my < ly + MAX_VISIBLE * ENTRY_H) {
+      const visIdx = Math.floor((my - ly) / ENTRY_H);
+      const idx = visIdx + this.scrollOffset;
+      if (idx >= 0 && idx < this.displayList.length) {
+        const entry = this.displayList[idx];
+        if (entry.type === 'category') {
+          // Toggle collapse/expand
+          if (this.collapsedCategories.has(entry.name)) {
+            this.collapsedCategories.delete(entry.name);
+          } else {
+            this.collapsedCategories.add(entry.name);
+          }
+          this.buildDisplayList();
+        } else {
+          this.selectedQuestId = entry.questId;
+          this.cachedNpcId = -1;
+          this.cachedNpcSprite = null;
+          // Rebuild buttons since selection changed
+          this.rebuildButtons(canvas);
+        }
       }
     }
   }

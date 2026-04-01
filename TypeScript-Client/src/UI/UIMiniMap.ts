@@ -167,7 +167,28 @@ UIMiniMap._buildCache = function () {
 
   const padX = 7;
   const padY = 5;
-  const innerW = Math.max(mapImgW + padX * 2, 120);
+
+  // Measure header text width so the frame is wide enough to show map/street names
+  const hdrMarkW = (this.mapMark) ? 38 : 0; // map mark icon is 38x38
+  const hdrNameX = nwW + 7 + hdrMarkW + 10;
+  let headerTextW = 0;
+  if (MapleMap.names) {
+    const measureCanvas = document.createElement('canvas');
+    const measureCtx = measureCanvas.getContext('2d')!;
+    const streetName = MapleMap.names.streetName || '';
+    const mapName = MapleMap.names.mapName || '';
+    if (streetName) {
+      measureCtx.font = 'bold 13px Arial';
+      headerTextW = Math.max(headerTextW, measureCtx.measureText(streetName).width);
+    }
+    if (mapName) {
+      measureCtx.font = '13px Arial';
+      headerTextW = Math.max(headerTextW, measureCtx.measureText(mapName).width);
+    }
+  }
+  // Inner width must fit the map image AND the header (mark icon + text + padding)
+  const headerNeedsW = hdrNameX - nwW + headerTextW + 10;
+  const innerW = Math.max(mapImgW + padX * 2, headerNeedsW, 120);
   const innerH = mapImgH + padY * 2;
   const totalW = nwW + innerW + neW;
   const totalH = nwH + innerH + swH;
@@ -290,12 +311,13 @@ UIMiniMap._buildCache = function () {
   }
 
   // --- Minimap image area ---
-  const mapDrawX = nwW + padX;
+  // Center the map image horizontally if the frame is wider than needed
+  const mapDrawX = nwW + Math.floor((innerW - mapImgW) / 2);
   const mapDrawY = nwH + padY;
 
-  // Dark background behind the map image
+  // Dark background fills the entire inner area
   ctx.fillStyle = '#2a2a2a';
-  ctx.fillRect(mapDrawX, mapDrawY, mapImgW, mapImgH);
+  ctx.fillRect(nwW, nwH, innerW, innerH);
 
   // Clip minimap image to inner area
   ctx.save();

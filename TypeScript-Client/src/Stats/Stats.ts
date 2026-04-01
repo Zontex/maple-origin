@@ -1,6 +1,6 @@
 import { AttackType } from "../Constants/AttackType";
 import { WeaponType } from "../Constants/EquipType";
-import { JobsMainType, JobsType } from "../Constants/Jobs";
+import { JobsMainType, JobsType, getJobCategory, getJobNameById } from "../Constants/Jobs";
 
 export class DamageRange {
   min: number;
@@ -25,9 +25,10 @@ class Stats {
   luk: number;
   maxHp: number;
   maxMp: number;
-  jobType: JobsType;
+  jobId: number;          // Canonical numeric job ID (v83: 0=Beginner, 100=Warrior, etc.)
+  jobType: JobsType;      // Derived from jobId — used by damage calc string comparisons
   level: number;
-  job: typeof JobsMainType;
+  job: string;            // Derived display name from jobId
   abilityPoints: number;
   criticalChance: number;
   criticalDamage: number;
@@ -39,14 +40,21 @@ class Stats {
     this.luk = opts.luk || 0;
     this.maxHp = opts.maxHp || 0;
     this.maxMp = opts.maxMp || 0;
-    this.jobType = opts.jobType || JobsType.Archer;
+    this.jobId = opts.jobId ?? 0;
+    this.jobType = opts.jobType || getJobCategory(this.jobId);
     this.level = opts.level || 1;
-    this.job = opts.job || JobsMainType.Archer;
+    this.job = opts.job || getJobNameById(this.jobId);
     this.abilityPoints = opts.abilityPoints || 0;
 
     // need to add skills to this
     this.criticalChance = defaultCritChance;
     this.criticalDamage = defaultCritDamagePercent;
+  }
+
+  setJobId(id: number) {
+    this.jobId = id;
+    this.jobType = getJobCategory(id);
+    this.job = getJobNameById(id);
   }
 
   addAbilityPoints = (amount = 5) => {
@@ -121,8 +129,6 @@ class Stats {
         break;
       case WeaponType.AXE:
       case WeaponType.MACE:
-      case WeaponType.WAND:
-      case WeaponType.STAFF:
         if (attackType === AttackType.Swing) {
           primary = this.str * 4.4;
         } else {
@@ -130,11 +136,40 @@ class Stats {
         }
         secondary = this.dex;
         break;
+      case WeaponType.WAND:
+      case WeaponType.STAFF:
+        primary = this.str * 4.0;
+        secondary = this.dex;
+        break;
       case WeaponType.SWORD_2H:
         primary = this.str * 4.6;
         secondary = this.dex;
         break;
-      // ... Add more cases here for other weapon types
+      case WeaponType.AXE_2H:
+      case WeaponType.MACE_2H:
+        if (attackType === AttackType.Swing) {
+          primary = this.str * 4.8;
+        } else {
+          primary = this.str * 3.4;
+        }
+        secondary = this.dex;
+        break;
+      case WeaponType.SPEAR:
+        if (attackType === AttackType.Stab) {
+          primary = this.str * 5.0;
+        } else {
+          primary = this.str * 3.0;
+        }
+        secondary = this.dex;
+        break;
+      case WeaponType.POLEARM:
+        if (attackType === AttackType.Swing) {
+          primary = this.str * 5.0;
+        } else {
+          primary = this.str * 3.0;
+        }
+        secondary = this.dex;
+        break;
       case WeaponType.DAGGER:
         if (this.jobType === JobsType.Thief) {
           primary = this.luk * 3.6;
@@ -148,7 +183,22 @@ class Stats {
         primary = this.dex * 3.4;
         secondary = this.str;
         break;
-      // ... And so on for the rest
+      case WeaponType.CROSSBOW:
+        primary = this.dex * 3.6;
+        secondary = this.str;
+        break;
+      case WeaponType.CLAW:
+        primary = this.luk * 3.6;
+        secondary = this.str + this.dex;
+        break;
+      case WeaponType.KNUCKLER:
+        primary = this.str * 4.8;
+        secondary = this.dex;
+        break;
+      case WeaponType.PISTOL:
+        primary = this.dex * 3.6;
+        secondary = this.str;
+        break;
     }
 
     // console.log(primary, secondary, weaponAttack, skillMastery);

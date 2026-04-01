@@ -1,6 +1,7 @@
 import { npcNames, mobNames, QuestState } from './Quest/QuestData';
 import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
+import ShopUI from './UI/ShopUI';
 
 export type ScriptDialogType = 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple';
 
@@ -167,6 +168,15 @@ export default class NpcScriptEngine {
       );
 
       const fn = new Function('cm', `
+        // Stub Java.type() and ShopFactory for backend scripts that use them
+        var Java = { type: function(cls) {
+          if (cls === 'server.ShopFactory') {
+            return { getInstance: function() { return { getShop: function(id) {
+              return { sendShop: function() { cm.openShopNPC(id); } };
+            }}; }};
+          }
+          return {};
+        }};
         ${modifiedScript}
         if (typeof ${funcName} === 'function') {
           ${funcName}(${mode}, ${type}, ${selection});
@@ -209,7 +219,7 @@ export default class NpcScriptEngine {
       getLevel() { return character?.stats?.level ?? 1; },
       getName() { return character?.name || 'Player'; },
       getJob() {
-        const jobId = character?.stats?.job ?? 0;
+        const jobId = character?.stats?.jobId ?? 0;
         return { getId() { return jobId; }, id: jobId };
       },
       getMapId() { return character?.map?.mapId ?? 0; },
@@ -249,7 +259,7 @@ export default class NpcScriptEngine {
       getChar() { return playerObj; },
       getClient() { return { getPlayer() { return playerObj; } }; },
       c: { getPlayer() { return playerObj; } },
-      getJobId() { return character?.stats?.job ?? 0; },
+      getJobId() { return character?.stats?.jobId ?? 0; },
       getLevel() { return character?.stats?.level ?? 1; },
       getMeso() { return character?.inventory?.mesos ?? 0; },
       getMapId() { return character?.map?.mapId ?? 0; },
@@ -311,8 +321,8 @@ export default class NpcScriptEngine {
 
       // Skills/jobs
       teachSkill(skillId: number, level: number, masterLevel: number) { /* stub */ },
-      changeJob(job: any) { /* stub */ },
-      changeJobById(jobId: number) { /* stub */ },
+      changeJob(job: any) { character?.changeJob(typeof job === 'number' ? job : job?.getId?.() ?? 0); },
+      changeJobById(jobId: number) { character?.changeJob(jobId); },
 
       // Party/events (stubs)
       getParty() { return null; },
@@ -328,6 +338,8 @@ export default class NpcScriptEngine {
       showInfo(path: string) { /* stub */ },
       guideHint(hint: number) { /* stub */ },
       openNpc(npcId: number) { /* stub — open another NPC's dialog */ },
+      openShopNPC(shopId: number) { ShopUI.show(shopId); },
+      openShop(shopId: number) { ShopUI.show(shopId); },
       getGuild() { return null; },
     };
 
