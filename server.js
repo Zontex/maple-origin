@@ -21,6 +21,9 @@ const players = new Map();
 // Store monster state
 const monsters = new Map();
 
+// Track mob host per map (mapId -> playerId)
+const mapHosts = new Map();
+
 // Message handling
 wss.on('connection', (ws) => {
   // Set maximum payload size and add connection timeout
@@ -65,21 +68,19 @@ wss.on('connection', (ws) => {
         
         const data = JSON.parse(messageStr);
         
-        // Rate limit message processing
+        // Rate limit only high-frequency messages (position updates)
+        // Important one-off events (drops, pickups, chat) must never be dropped
         const now = Date.now();
         const player = players.get(playerId);
-        const messageInterval = 50; // 50ms between messages (20 messages per second max)
-        
-        if (player && (now - player.lastMessageTime < messageInterval)) {
-          // Skip processing if messages are coming too fast
+        // Rate limit only player_update (high frequency position updates)
+        // All other messages (mob batches, drops, pickups, damage) must always be processed
+        if (data.type === 'player_update' && player && (now - (player.lastUpdateTime || 0) < 16)) {
           return;
         }
-        
-        // Update last message time
-        if (player) {
-          player.lastMessageTime = now;
+        if (data.type === 'player_update' && player) {
+          player.lastUpdateTime = now;
         }
-        
+
         // Process the message
         handleMessage(playerId, data);
       }
@@ -121,13 +122,68 @@ wss.on('connection', (ws) => {
     
     // Notify other players about the disconnect
     if (player && player.info) {
-      broadcastToMap(player.info.mapId, {
+      const playerMapId = Number(player.info.mapId);
+      broadcastToMap(playerMapId, {
         type: 'player_left',
         id: playerId
       }, playerId);
+
+      // Reassign mob host if this player was the host
+      if (mapHosts.get(playerMapId) === playerId) {
+        mapHosts.delete(playerMapId);
+        assignMapHost(playerMapId);
+      }
     }
   });
 });
+
+// Assign or reassign mob host for a map
+function assignMapHost(mapId, newJoinerId) {
+  mapId = Number(mapId);
+
+  // Check if current host is still valid
+  const currentHost = mapHosts.get(mapId);
+  if (currentHost) {
+    const hostPlayer = players.get(currentHost);
+    if (hostPlayer && hostPlayer.ws.readyState === WebSocket.OPEN && Number(hostPlayer.mapId) === mapId) {
+      // Host is valid — but if a new player just joined, tell them they're NOT the host
+      if (newJoinerId && newJoinerId !== currentHost) {
+        const joiner = players.get(newJoinerId);
+        if (joiner) {
+          sendToPlayer(joiner.ws, { type: 'mob_host_assign', isHost: false });
+        }
+      }
+      return;
+    }
+  }
+
+  // Find a new host — first player on this map
+  let newHost = null;
+  for (const [id, player] of players.entries()) {
+    if (Number(player.mapId) === mapId && player.ws.readyState === WebSocket.OPEN && player.info) {
+      newHost = id;
+      break;
+    }
+  }
+
+  if (newHost) {
+    mapHosts.set(mapId, newHost);
+    // Tell the new host they are the mob host
+    const hostPlayer = players.get(newHost);
+    if (hostPlayer) {
+      sendToPlayer(hostPlayer.ws, { type: 'mob_host_assign', isHost: true });
+    }
+    // Tell all other players on this map they are NOT the host
+    for (const [id, player] of players.entries()) {
+      if (id !== newHost && Number(player.mapId) === mapId && player.ws.readyState === WebSocket.OPEN) {
+        sendToPlayer(player.ws, { type: 'mob_host_assign', isHost: false });
+      }
+    }
+    console.log(`Map ${mapId}: assigned mob host to ${newHost}`);
+  } else {
+    mapHosts.delete(mapId);
+  }
+}
 
 // Handle incoming messages
 function handleMessage(playerId, data) {
@@ -146,6 +202,40 @@ function handleMessage(playerId, data) {
       break;
     case 'chat_message':
       handleChatMessage(playerId, data.data);
+      break;
+    case 'item_drop':
+      handleItemDrop(playerId, data.data);
+      break;
+    case 'item_pickup':
+      handleItemPickup(playerId, data.data);
+      break;
+    case 'mob_state_batch':
+      handleMobStateBatch(playerId, data.data);
+      break;
+    case 'mob_damage_request':
+      handleMobDamageRequest(playerId, data.data);
+      break;
+    case 'mob_death':
+      handleMobDeath(playerId, data.data);
+      break;
+    case 'mob_respawn':
+      handleMobRespawn(playerId, data.data);
+      break;
+    case 'player_hit_by_mob':
+      handlePlayerHitByMob(playerId, data.data);
+      break;
+    case 'reactor_hit':
+      handleReactorHit(playerId, data.data);
+      break;
+    case 'reactor_respawn':
+      handleReactorRespawn(playerId, data.data);
+      break;
+    case 'player_level_up':
+      handlePlayerLevelUp(playerId, data.data);
+      break;
+    case 'client_log':
+      const short = playerId.slice(0, 6);
+      console.log(`\x1b[36m[CLIENT ${short}]\x1b[0m ${data.data}`);
       break;
     case 'get_player_list':
       sendPlayerList(playerId);
@@ -180,6 +270,9 @@ function handlePlayerInfo(playerId, playerInfo) {
   
   // Send player list to the new player
   sendPlayerList(playerId);
+
+  // Assign mob host for this map — pass playerId so new joiners get notified
+  assignMapHost(player.mapId, playerId);
 }
 
 // Handle player position and state updates
@@ -232,11 +325,15 @@ function handlePlayerUpdate(playerId, updateData) {
     
     // Send updated player list to this player
     sendPlayerList(playerId);
+
+    // Reassign mob host for old map, assign for new map
+    assignMapHost(currentMapId);
+    assignMapHost(newMapId, playerId);
   } else {
     // Rate limit broadcasts for position updates
     const now = Date.now();
     const timeSinceLastBroadcast = now - (player.lastBroadcast || 0);
-    const broadcastInterval = 100; // milliseconds
+    const broadcastInterval = 33; // ~30 broadcasts per second
     
     if (timeSinceLastBroadcast >= broadcastInterval) {
       // Broadcast update to players in same map
@@ -310,6 +407,103 @@ function handleChatMessage(playerId, chatData) {
       mapId: chatData.mapId
     }
   });
+}
+
+// Relay reactor hit to all other players on same map
+function handleReactorHit(playerId, hitData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const mapId = Number(hitData.mapId || player.mapId);
+  broadcastToMap(mapId, { type: 'reactor_hit', data: hitData }, playerId);
+}
+
+// Relay reactor respawn to all other players on same map
+function handleReactorRespawn(playerId, respawnData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const mapId = Number(respawnData.mapId || player.mapId);
+  broadcastToMap(mapId, { type: 'reactor_respawn', data: respawnData }, playerId);
+}
+
+// Relay player level up to all other players on same map
+function handlePlayerLevelUp(playerId, levelData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const mapId = Number(levelData.mapId || player.mapId);
+  broadcastToMap(mapId, { type: 'player_level_up', data: { ...levelData, playerId } }, playerId);
+}
+
+// Relay mob state batch from host to all other players on same map
+function handleMobStateBatch(playerId, batchData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const mapId = Number(batchData.mapId || player.mapId);
+  // Only accept from the current host
+  if (mapHosts.get(mapId) !== playerId) return;
+  broadcastToMap(mapId, { type: 'mob_state_batch', data: batchData }, playerId);
+}
+
+// Forward damage request from non-host to host
+function handleMobDamageRequest(playerId, reqData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const mapId = Number(reqData.mapId || player.mapId);
+  const hostId = mapHosts.get(mapId);
+  if (!hostId || hostId === playerId) return;
+  const hostPlayer = players.get(hostId);
+  if (hostPlayer && hostPlayer.ws.readyState === WebSocket.OPEN) {
+    sendToPlayer(hostPlayer.ws, { type: 'mob_damage_request', data: { ...reqData, sourcePlayerId: playerId } });
+  }
+}
+
+// Relay mob death from host to all other players
+function handleMobDeath(playerId, deathData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const mapId = Number(deathData.mapId || player.mapId);
+  if (mapHosts.get(mapId) !== playerId) return;
+  broadcastToMap(mapId, { type: 'mob_death', data: deathData }, playerId);
+}
+
+// Relay mob respawn from host to all other players
+function handleMobRespawn(playerId, respawnData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const mapId = Number(respawnData.mapId || player.mapId);
+  if (mapHosts.get(mapId) !== playerId) return;
+  broadcastToMap(mapId, { type: 'mob_respawn', data: respawnData }, playerId);
+}
+
+// Relay player-hit-by-mob to all other players on map
+function handlePlayerHitByMob(playerId, hitData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const mapId = Number(hitData.mapId || player.mapId);
+  broadcastToMap(mapId, { type: 'player_hit_by_mob', data: { ...hitData, playerId } }, playerId);
+}
+
+// Handle item drop — broadcast to all other players on same map
+function handleItemDrop(playerId, dropData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+
+  const mapId = Number(dropData.mapId || player.mapId);
+  broadcastToMap(mapId, {
+    type: 'item_drop',
+    data: { ...dropData, playerId }
+  }, playerId);
+}
+
+// Handle item pickup — broadcast to all players on same map (including picker)
+function handleItemPickup(playerId, pickupData) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+
+  const mapId = Number(pickupData.mapId || player.mapId);
+  broadcastToMap(mapId, {
+    type: 'item_pickup',
+    data: { ...pickupData, playerId }
+  }, playerId);
 }
 
 // Send player list to specific player

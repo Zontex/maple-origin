@@ -334,7 +334,7 @@ class DropItemSprite {
     this.frame = currentFrame;
     
     // Draw the item
-    if (currentImage && currentFrame) {
+    if (currentImage && currentFrame && currentImage.complete && currentImage.naturalWidth > 0) {
       canvas.drawImage({
         img: currentImage,
         dx: this.pos.x - camera.x - currentFrame.nWidth / 2,

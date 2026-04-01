@@ -17,6 +17,7 @@ interface ReactorState {
 
 export default class Reactor {
   id: number = 0;
+  oId: number = 0; // Unique spawn index for network identification
   x: number = 0;
   y: number = 0;
   reactorTime: number = 0; // respawn delay in seconds; 0 = no respawn
@@ -31,6 +32,7 @@ export default class Reactor {
   respawnScheduled: boolean = false;
   private pendingDestroy: boolean = false;
   private pendingAdvance: number = -1;
+  private _isRemoteHit: boolean = false; // True if hit was triggered by network
   private hitAnimState: number = -1; // which state's hit animation is playing
 
   // Animation
@@ -56,6 +58,7 @@ export default class Reactor {
   }): Promise<Reactor> {
     const reactor = new Reactor();
     reactor.id = opts.id;
+    reactor.oId = (opts as any).oId ?? 0;
     reactor.x = opts.x;
     reactor.y = opts.y;
     reactor.pos = { x: opts.x, y: opts.y };
@@ -185,7 +188,7 @@ export default class Reactor {
     }
   }
 
-  hit(): boolean {
+  hit(isRemoteHit: boolean = false): boolean {
     if (this.destroyed || this.isHit || this.pendingDestroy) return false;
 
     const state = this.states[this.currentState];
@@ -196,7 +199,7 @@ export default class Reactor {
     // Transitioning TO that state = destruction. maxState counts all states including the destroyed one.
     const nextState = state.nextState;
     const willDestroy = nextState >= this.maxState - 1;
-    console.log(`[Reactor] Hit! state=${this.currentState}, nextState=${nextState}, maxState=${this.maxState}, willDestroy=${willDestroy}`);
+    this._isRemoteHit = isRemoteHit;
 
     // Play hit animation from the CURRENT state (before advancing)
     if (state.hitFrames.length > 0) {
@@ -226,7 +229,11 @@ export default class Reactor {
 
   private destroy(): void {
     this.destroyed = true;
-    this.dropItems();
+
+    // Only the player who hit the reactor creates drops
+    if (!this._isRemoteHit) {
+      this.dropItems();
+    }
 
     // Play break sound
     try {
@@ -274,7 +281,13 @@ export default class Reactor {
           amount: 1,
         });
         if (dropItem && !dropItem.destroyed) {
+          const dropId = Date.now() + Math.floor(Math.random() * 10000) + dropIndex;
+          (dropItem as any)._netDropId = dropId;
           this.map.addItemDrop(dropItem);
+          // Broadcast non-quest drops to other players; quest drops stay local
+          if (drop.questId <= 0 && (window as any).__mySocket) {
+            (window as any).__mySocket.sendItemDrop(drop.itemId, 1, this.x + offsetX, this.y, 0, 0, dropId);
+          }
         }
       } catch (e) {
         console.warn(`[Reactor] Failed to create drop ${drop.itemId}:`, e);

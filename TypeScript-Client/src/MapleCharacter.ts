@@ -60,6 +60,8 @@ class MapleCharacter {
   faceDelay: number = 0;
   faceNextDelay: number = 0;
   equips: any = [];
+  equippedItemIds: Record<number, number> = {};
+  equippedItemIcons: Record<number, HTMLImageElement | null> = {};
   flipped: boolean = false;
   id: number = 0;
   name: string = "";
@@ -81,6 +83,7 @@ class MapleCharacter {
   isInAttack: boolean = false;
   isInAlert: boolean = false;
   isInPortal: boolean = false;
+  isRemote: boolean = false; // Network-controlled character — skip local stance logic
   isInClimbingRope: boolean = false;
   isClimbMoving: boolean = false;
   isDead: boolean = false;
@@ -414,23 +417,25 @@ class MapleCharacter {
       101: { dir: "Accessory", slot: 1 }, // face accessory
       102: { dir: "Accessory", slot: 2 }, // eye accessory
       103: { dir: "Accessory", slot: 3 }, // earring
-      112: { dir: "Accessory", slot: 16 }, // necklace
+      112: { dir: "Accessory", slot: 16 }, // necklace/pendant
+      113: { dir: "Accessory", slot: 18 }, // belt
+      114: { dir: "Accessory", slot: 15 }, // medal
       100: { dir: "Cap", slot: 0 },
       110: { dir: "Cape", slot: 8 },
       104: { dir: "Coat", slot: 4 },
       108: { dir: "Glove", slot: 7 },
       105: { dir: "Longcoat", slot: 4 },
       106: { dir: "Pants", slot: 5 },
-      180: { dir: "PetEquip" },
-      181: { dir: "PetEquip" },
-      182: { dir: "PetEquip" },
-      183: { dir: "PetEquip" },
-      111: { dir: "Ring" },
+      180: { dir: "PetEquip", slot: 21 },  // pet equip
+      181: { dir: "PetEquip", slot: 22 },  // pet hp
+      182: { dir: "PetEquip", slot: 21 },
+      183: { dir: "PetEquip", slot: 21 },
+      111: { dir: "Ring", slot: 11 },
       109: { dir: "Shield", slot: 9 },
       107: { dir: "Shoes", slot: 6 },
-      190: { dir: "TamingMob" },
-      191: { dir: "TamingMob" },
-      193: { dir: "TamingMob" },
+      190: { dir: "TamingMob", slot: 19 },
+      191: { dir: "TamingMob", slot: 20 },
+      193: { dir: "TamingMob", slot: 19 },
       130: { dir: "Weapon", slot: 10 },
       131: { dir: "Weapon", slot: 10 },
       132: { dir: "Weapon", slot: 10 },
@@ -451,28 +456,60 @@ class MapleCharacter {
       160: { dir: "Weapon", slot: 10 },
       170: { dir: "Weapon", slot: 10 },
     };
-    if (realSlot === equipMap[firstThreeDigits].slot) {
-      const dir = equipMap[firstThreeDigits].dir;
+    const mapping = equipMap[firstThreeDigits];
+    if (!mapping || mapping.slot === undefined) return;
+    const targetSlot = mapping.slot;
+    if (realSlot === targetSlot) {
+      const dir = mapping.dir;
       const equip = await WZManager.get(`Character.wz/${dir}/0${id}.img`);
       this.equips[realSlot] = equip;
-      console.log(
-        "Adding equip",
-        equip,
-        "slot",
-        equipMap[firstThreeDigits].slot,
-        "number of equips now: ",
-        this.equips.length
-      );
-      if (equipMap[firstThreeDigits].slot === 10) {
+      this.equippedItemIds[realSlot] = id;
+      console.log("Adding equip", id, "to slot", realSlot);
+      if (targetSlot === 10) {
         this.weaponEquip = equip;
         this.weaponEquipId = id;
       }
+      // Load item icon for equip window display
+      this._loadEquipIcon(realSlot, id);
     }
   }
+
+  _loadEquipIcon(slot: number, itemId: number) {
+    // Icons live inside the already-loaded Character.wz equip node at info/icon or info/iconRaw
+    try {
+      const equipNode = this.equips[slot];
+      if (!equipNode) {
+        console.warn(`[EquipIcon] No equip node for slot ${slot}`);
+        return;
+      }
+      const infoNode = equipNode.info;
+      if (!infoNode) {
+        console.warn(`[EquipIcon] No info node for slot ${slot}, item ${itemId}`);
+        return;
+      }
+      const iconNode = infoNode.iconRaw || infoNode.icon;
+      if (!iconNode) {
+        console.warn(`[EquipIcon] No icon node for slot ${slot}, item ${itemId}, info keys:`, Object.keys(infoNode));
+        return;
+      }
+      if (iconNode.nGetImage) {
+        this.equippedItemIcons[slot] = iconNode.nGetImage();
+        console.log(`[EquipIcon] Loaded icon for slot ${slot}, item ${itemId}`);
+      }
+    } catch (e) {
+      console.error(`[EquipIcon] Error loading icon for slot ${slot}:`, e);
+    }
+  }
+
   detachEquip(slot: number) {
     const realSlot = slot < 0 ? -(slot + 1) : slot;
     this.equips[realSlot] = undefined;
-    // this.equips = this.equips.filter((e, i) => i !== realSlot);
+    delete this.equippedItemIds[realSlot];
+    delete this.equippedItemIcons[realSlot];
+    if (realSlot === 10) {
+      this.weaponEquip = undefined;
+      this.weaponEquipId = undefined;
+    }
   }
   destroy() {
     this.destroyed = true;
@@ -489,6 +526,10 @@ class MapleCharacter {
     this.maxExp = ExpTable.getExpNeededForLevel(this.stats.level);
     this.stats.addAbilityPoints();
     this.playLevelUp();
+    // Broadcast to other players
+    if (!this.isRemote && (window as any).__mySocket) {
+      (window as any).__mySocket.sendPlayerLevelUp();
+    }
   }
 
   addExp(exp: number, showEffect: boolean = false) {
@@ -719,7 +760,11 @@ async executeAttackDamage() {
   }) || [];
 
   for (const reactor of reactorsHit) {
-    reactor.hit();
+    reactor.hit(false); // Local hit
+    // Broadcast to other players
+    if ((window as any).__mySocket) {
+      (window as any).__mySocket.sendReactorHit(reactor.oId);
+    }
   }
 
   // If no monsters are hit, just play a swing sound (reactors still count as a hit though)
@@ -1237,7 +1282,8 @@ isCloseToMob = (inAllDirections = true) => {
   }
 
   checkForMobsHit = () => {
-    if (!this.map) return;
+    try {
+    if (!this.map || this.isRemote) return;
     if (!this.isDead) {
       const currentTime = new Date().getTime();
 
@@ -1264,9 +1310,12 @@ isCloseToMob = (inAllDirections = true) => {
         if (monster) {
           this.lastHitTime = currentTime;
 
+          const mobInfo = monster.mobFile?.info;
+          if (!mobInfo) return;
+
           const isMiss = this.stats.getRandomMonsterTouchMiss(
-            monster.mobFile.info.level.nValue,
-            monster.mobFile.info.acc.nValue
+            mobInfo.level?.nValue ?? 1,
+            mobInfo.acc?.nValue ?? 0
           );
 
           const minXYPosition = findMinXY(this.bodyRects);
@@ -1281,19 +1330,19 @@ isCloseToMob = (inAllDirections = true) => {
               },
               0
             );
+            if ((window as any).__mySocket) {
+              (window as any).__mySocket.sendPlayerHitByMob(monster.oId, 0, true);
+            }
           } else {
             const knowbackXdirection = this.pos.x - monster.pos.x > 0 ? 1 : -1;
             const knowbackYdirection = this.pos.y > monster.pos.y ? 1 : -1;
             this.pos.applyKnockback(knowbackXdirection, knowbackYdirection);
 
-            // todo
-            // 2. if not miss -> calculate take demage (monster damage - player defense)
             const finalTakenDamage =
-              monster.mobFile.info.PADamage.nValue -
+              (mobInfo.PADamage?.nValue ?? 1) -
               this.stats.getWeaponDefense(this.equips);
             this.takeDamage(finalTakenDamage);
 
-            // send    // 0 - for miss
             this.DamageIndicator.addDamageIndicator(
               DamageIndicatorType.MobHitPlayer,
               {
@@ -1303,15 +1352,19 @@ isCloseToMob = (inAllDirections = true) => {
               finalTakenDamage
             );
 
-            // 2. Could not find hit animation for player
-            // it suppost to be like flashing the alert stance
-
             if (!this.isInAttack) {
               this.setAlert();
+            }
+
+            if ((window as any).__mySocket) {
+              (window as any).__mySocket.sendPlayerHitByMob(monster.oId, finalTakenDamage, false);
             }
           }
         }
       }
+    }
+    } catch (e) {
+      console.error('[checkForMobsHit] crash:', e);
     }
   };
 
@@ -1342,10 +1395,14 @@ isCloseToMob = (inAllDirections = true) => {
     );
 
     for (const itemDrop of itemDrops) {
-      // this.inventory.addItem(itemDrop.item);
       itemDrop.goToPlayer(this.pos.vx, this.pos.vy);
       itemDrop.isAlreadyPickedUp = true;
       console.log("itemDrop", itemDrop);
+      // Broadcast pickup to other players
+      const netDropId = (itemDrop as any)._netDropId;
+      if (netDropId && (window as any).__mySocket) {
+        (window as any).__mySocket.sendItemPickup(netDropId);
+      }
       // this is async
       this.inventory.addToInventory(itemDrop.itemFile.nName, itemDrop.amount);
 
@@ -1640,50 +1697,53 @@ isCloseToMob = (inAllDirections = true) => {
     // }
     
     // console.log(this.frame, `${Math.round(1000 / msPerTick)}fps`);
-    // set whether the character is flipped prior to drawing
-    if (this.pos.right && !this.pos.left) {
-      this.flipped = true;
-    } else if (this.pos.left && !this.pos.right) {
-      this.flipped = false;
-    }
-  
-    if (this.isDead) {
-      this.setStance(Stance.dead);
-    } else {
-      // set the stance
-      if (this.isInAttack || this.isInAlert) {
-        // is in alert only
-        if (!this.isInAttack) {
-          if (!this.pos.fh) {
-            if (this.isInClimbingRope) {
-              this.setStance(Stance.ladder, 0, false, this.isClimbMoving);
-            } else {
-              this.setStance(Stance.jump);
-            }
-          } else {
-            if (this.isInAlert && this.pos.left !== this.pos.right) {
-              this.setStance("walk1");
-            } else {
+    // Remote characters get stance from network — skip local stance logic
+    if (!this.isRemote) {
+      // set whether the character is flipped prior to drawing
+      if (this.pos.right && !this.pos.left) {
+        this.flipped = true;
+      } else if (this.pos.left && !this.pos.right) {
+        this.flipped = false;
+      }
+
+      if (this.isDead) {
+        this.setStance(Stance.dead);
+      } else {
+        // set the stance
+        if (this.isInAttack || this.isInAlert) {
+          // is in alert only
+          if (!this.isInAttack) {
+            if (!this.pos.fh) {
               if (this.isInClimbingRope) {
                 this.setStance(Stance.ladder, 0, false, this.isClimbMoving);
-              } else if (this.stance) {
-                this.setStance(Stance.alert, 0, false, true);
+              } else {
+                this.setStance(Stance.jump);
+              }
+            } else {
+              if (this.isInAlert && this.pos.left !== this.pos.right) {
+                this.setStance("walk1");
+              } else {
+                if (this.isInClimbingRope) {
+                  this.setStance(Stance.ladder, 0, false, this.isClimbMoving);
+                } else if (this.stance) {
+                  this.setStance(Stance.alert, 0, false, true);
+                }
               }
             }
+          } else {
           }
+        } else if (this.isInClimbingRope) {
+          this.setStance(Stance.ladder, 0, false, this.isClimbMoving);
         } else {
-        }
-      } else if (this.isInClimbingRope) {
-        this.setStance(Stance.ladder, 0, false, this.isClimbMoving);
-      } else {
-        if (!this.pos.fh) {
-          this.setStance(Stance.jump);
-        } else if (this.pos.left !== this.pos.right) {
-          this.setStance(Stance.walk1);
-        } else {
-          this.setStance(Stance.stand1);
-          // this here usefull to test stance
-          // this.setStance(Stance.proneStab);
+          if (!this.pos.fh) {
+            this.setStance(Stance.jump);
+          } else if (this.pos.left !== this.pos.right) {
+            this.setStance(Stance.walk1);
+          } else {
+            this.setStance(Stance.stand1);
+            // this here usefull to test stance
+            // this.setStance(Stance.proneStab);
+          }
         }
       }
     }
@@ -1783,16 +1843,102 @@ isCloseToMob = (inAllDirections = true) => {
   
     const minXYPosition = findMinXY(this.bodyRects);
     const maxXYPosition = findMaxXY(this.bodyRects);
-    canvas.context.fillStyle = "red";
-    canvas.context.fillRect(
-      Math.floor(minXYPosition.minX + maxXYPosition.maxX) / 2 - camera.x - 2,
-      (minXYPosition.minY + maxXYPosition.maxY) / 2 - camera.y - 2,
-      4,
-      4
-    );
 
+    // Draw chat balloon above character
+    if (this.showChatBalloon && this.chatBalloon && this.chatMessage) {
+      this.drawChatBalloon(canvas, camera);
+    }
   }
-  
+
+  drawChatBalloon(canvas: GameCanvas, camera: CameraInterface) {
+    if (!this.chatBalloon || !this.chatMessage || !this.showChatBalloon) return;
+
+    const fontSize = 12;
+    const lineH = 14;
+    const maxTextW = 140;
+    const padX = 8, padY = 4;
+
+    // Word-wrap
+    const words = this.chatMessage.split(' ');
+    const lines: string[] = [];
+    let cur = '';
+    for (const w of words) {
+      const test = cur ? `${cur} ${w}` : w;
+      if (canvas.measureText({ text: test, fontSize }).width > maxTextW && cur) {
+        lines.push(cur);
+        cur = w;
+      } else {
+        cur = test;
+      }
+    }
+    if (cur) lines.push(cur);
+
+    let textW = 0;
+    for (const l of lines) textW = Math.max(textW, canvas.measureText({ text: l, fontSize }).width);
+    const textH = lines.length * lineH;
+
+    const { nw, ne, sw, se, n, s, w, e, c, arrow } = this.chatBalloon;
+    const nwW = nw.width, nwH = nw.height;
+    const neW = ne.width;
+    const swH = sw.height;
+    const innerW = Math.max(textW + padX * 2, 60);
+    const innerH = Math.max(textH + padY * 2, 20);
+    const totalW = nwW + innerW + neW;
+    const totalH = nwH + innerH + swH;
+
+    const playerScreenX = this.pos.x - camera.x;
+    const playerScreenY = this.pos.y - camera.y;
+    const bx = Math.round(playerScreenX - totalW / 2);
+    const by = Math.round(playerScreenY - totalH - 75);
+
+    const ctx = canvas.context;
+    ctx.save();
+
+    // Corners
+    canvas.drawImage({ img: nw, dx: bx, dy: by });
+    canvas.drawImage({ img: ne, dx: bx + totalW - neW, dy: by });
+    canvas.drawImage({ img: sw, dx: bx, dy: by + totalH - sw.height });
+    canvas.drawImage({ img: se, dx: bx + totalW - se.width, dy: by + totalH - se.height });
+
+    // Top edge
+    ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by, innerW, nwH); ctx.clip();
+    for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += n.width) canvas.drawImage({ img: n, dx: tx, dy: by });
+    ctx.restore();
+
+    // Bottom edge
+    ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by + totalH - s.height, innerW, s.height); ctx.clip();
+    for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += s.width) canvas.drawImage({ img: s, dx: tx, dy: by + totalH - s.height });
+    ctx.restore();
+
+    // Left edge
+    ctx.save(); ctx.beginPath(); ctx.rect(bx, by + nwH, w.width, innerH); ctx.clip();
+    for (let ty = by + nwH; ty < by + nwH + innerH; ty += w.height) canvas.drawImage({ img: w, dx: bx, dy: ty });
+    ctx.restore();
+
+    // Right edge
+    ctx.save(); ctx.beginPath(); ctx.rect(bx + totalW - e.width, by + nwH, e.width, innerH); ctx.clip();
+    for (let ty = by + nwH; ty < by + nwH + innerH; ty += e.height) canvas.drawImage({ img: e, dx: bx + totalW - e.width, dy: ty });
+    ctx.restore();
+
+    // Center fill
+    ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by + nwH, innerW, innerH); ctx.clip();
+    for (let fy = by + nwH; fy < by + nwH + innerH; fy += c.height)
+      for (let fx = bx + nwW; fx < bx + nwW + innerW; fx += c.width)
+        canvas.drawImage({ img: c, dx: fx, dy: fy });
+    ctx.restore();
+
+    // Arrow
+    canvas.drawImage({ img: arrow, dx: Math.round(playerScreenX - arrow.width / 2), dy: by + totalH - 1 });
+
+    ctx.restore();
+
+    // Text
+    const textStartY = by + nwH + padY;
+    lines.forEach((line: string, i: number) => {
+      canvas.drawText({ text: line, x: bx + totalW / 2, y: textStartY + i * lineH, color: '#000000', align: 'center', fontSize, fontWeight: 'normal' });
+    });
+  }
+
   drawName(
     canvas: GameCanvas,
     camera: CameraInterface,

@@ -134,8 +134,12 @@ export class DamageIndicator {
       ({ type, position, damageNumber, timeAdded }, index) => {
         const elapsedTime = currentTime - timeAdded;
         if (elapsedTime <= DamageIndicatorTimeTillFade) {
-          const { firstNumberNode, otherNumberNode } =
-            this.DamageIndicatorTypeToImages[type];
+          const imageSet = this.DamageIndicatorTypeToImages[type];
+          if (!imageSet) {
+            damageIndicatorIndexesToRemove.push(index);
+            return;
+          }
+          const { firstNumberNode, otherNumberNode } = imageSet;
           const alpha = 1 - elapsedTime / DamageIndicatorTimeTillFade; // Calculate alpha based on time
 
           const totalDistanceToMove = 50;

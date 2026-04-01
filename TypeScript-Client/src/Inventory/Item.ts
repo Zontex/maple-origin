@@ -45,6 +45,34 @@ class Item {
       );
       this.node = itemFile;
     } else {
+      const category = Math.floor(this.itemId / 1000000);
+
+      // Equipment items (category 1) live in Character.wz, not Item.wz
+      if (category === 1) {
+        const firstThreeDigits = Math.floor(this.itemId / 10000);
+        const equipDirMap: Record<number, string> = {
+          100: 'Cap', 101: 'Accessory', 102: 'Accessory', 103: 'Accessory',
+          104: 'Coat', 105: 'Longcoat', 106: 'Pants', 107: 'Shoes',
+          108: 'Glove', 109: 'Shield', 110: 'Cape', 111: 'Ring', 112: 'Accessory',
+          113: 'Accessory', 114: 'Accessory',
+          180: 'PetEquip', 181: 'PetEquip', 182: 'PetEquip', 183: 'PetEquip',
+          190: 'TamingMob', 191: 'TamingMob', 193: 'TamingMob',
+        };
+        // Weapons: 130-170
+        let dir = equipDirMap[firstThreeDigits];
+        if (!dir && firstThreeDigits >= 130 && firstThreeDigits <= 170) {
+          dir = 'Weapon';
+        }
+        if (dir) {
+          try {
+            this.node = await WZManager.get(`Character.wz/${dir}/0${this.itemId}.img`);
+          } catch (e) {
+            console.warn(`Failed to load equip item ${this.itemId} from Character.wz/${dir}`);
+          }
+        }
+        return;
+      }
+
       const wzInventoryType = MapleInventory.getWzNameFromInventoryId(
         this.itemId.toString().padStart(8, "0")
       );
@@ -52,14 +80,7 @@ class Item {
         this.node = await WZManager.get(
           `${WZFiles.Item}/${wzInventoryType}/${this.itemId}.img`
         );
-      } else if (wzInventoryType === MapleInventory.WzInventoryType.Special) {
-        let strId = `${this.itemId}`.padStart(8, "0");
-        const idFirst4digits = strId.slice(0, 4);
-        let itemFile = await WZManager.get(
-          `${WZFiles.Item}/${wzInventoryType}/${idFirst4digits}.img/${strId}`
-        );
-        this.node = itemFile;
-      } else {
+      } else if (wzInventoryType) {
         let strId = `${this.itemId}`.padStart(8, "0");
         const idFirst4digits = strId.slice(0, 4);
         let itemFile = await WZManager.get(

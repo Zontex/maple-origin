@@ -150,7 +150,7 @@ UIMap.addButtons = function (canvas) {
     isRelativeToCamera: true,
     isPartOfUI: true,
     onClick: () => {
-      MapState.statsMenu.setIsHidden(!MapState.statsMenu.isHidden);
+      MapState.equipMenu.setIsHidden(!MapState.equipMenu.isHidden);
     },
   });
   ClickManager.addButton(equipKey);

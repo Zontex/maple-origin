@@ -110,11 +110,12 @@ UI (all rendered from WZ assets)
 ├── UI/UINpcTalk.ts      → NPC dialogue
 ├── UI/UIQuestDialog.ts  → Quest dialog (static + script-driven modes)
 ├── UI/TaxiUI.ts         → Transportation dialog
-├── UI/Menu/             → Inventory, Stats, Quest Log windows (draggable)
+├── UI/Menu/             → Inventory, Stats, Equipment, Quest Log windows (draggable)
+├── UI/UIMiniMap.ts      → Minimap with cached offscreen rendering
 ├── UI/DebugDrag.ts      → F9 debug positioning tool
 
 Networking
-├── mysocket.ts          → WebSocket client (multiplayer sync)
+├── mysocket.ts          → WebSocket client (multiplayer sync, mob host, drops, reactors)
 ├── Net/                 → Packet serialization, encryption, login packets
 
 Data
@@ -123,13 +124,16 @@ Data
 ```
 
 ### Server (server.js — current)
-Basic Node.js WebSocket relay server:
-- Player join/leave/update synchronization
-- Monster damage broadcasting
-- Chat message relay
-- Map-based message filtering
-- Rate limiting and health checks
-- **NOT an authoritative game server** — client does all game logic
+Node.js WebSocket server with host-client multiplayer model:
+- Player join/leave/update synchronization (position, stance, animation)
+- **Mob host system** — one player per map runs mob AI, broadcasts state; server tracks `mapHosts` map and handles host assignment/reassignment
+- Item drop/pickup relay — drops broadcast to all players, pickups remove items on all clients
+- Reactor hit/destroy/respawn relay
+- Chat message relay with map-based filtering
+- Level up and contact damage event relay
+- Rate limiting (only `player_update` throttled, all other messages always processed)
+- Remote logging — `client_log` messages from browser clients printed to server console
+- **NOT an authoritative game server** — client does game logic, server relays and tracks hosts
 
 ### Server (planned — Cosmic port)
 Port of [Cosmic](https://github.com/P0nk/Cosmic) Java v83 emulator to TypeScript:
@@ -263,6 +267,57 @@ Use `Math.floor(itemId / 1000000)` to determine inventory tab:
 - Item `spec` data in WZ: `hp` (flat HP), `mp` (flat MP), `hpR` (% of maxHp), `mpR` (% of maxMp)
 - Sound effect: `Sound.wz/Item.img/02000000/Use`
 
+### Equipment System
+- **Equipment window** (`UI/Menu/EquipMenuSprite.ts`) — draggable paper doll window, toggled with E key or t-shirt status bar button
+- **`MapleCharacter.equippedItemIds: Record<number, number>`** — tracks which item ID is in each slot
+- **`MapleCharacter.equippedItemIcons: Record<number, HTMLImageElement>`** — cached icons for equip window display
+- **`attachEquip(slot, itemId)`** — loads Character.wz visual data, stores item ID, loads icon
+- **`detachEquip(slot)`** — removes visual + tracking + icon
+- **Equip**: double-click item in inventory Equip tab → determines slot via `getEquipSlotForItem()`, swaps if occupied
+- **Unequip**: double-click slot in equip window → creates `Item.fromOpts()` and adds to `inventory.equip[]`
+
+### Equipment Slot Mapping
+| Prefix (itemId/10000) | Slot | Directory | Type |
+|---|---|---|---|
+| 100 | 0 | Cap | Hat |
+| 101 | 1 | Accessory | Face Accessory |
+| 102 | 2 | Accessory | Eye Accessory |
+| 103 | 3 | Accessory | Earring |
+| 104, 105 | 4 | Coat/Longcoat | Top |
+| 106 | 5 | Pants | Bottom |
+| 107 | 6 | Shoes | Shoes |
+| 108 | 7 | Glove | Gloves |
+| 109 | 9 | Shield | Shield |
+| 110 | 8 | Cape | Cape |
+| 111 | 11 | Ring | Ring |
+| 112 | 16 | Accessory | Pendant |
+| 113 | 18 | Accessory | Belt |
+| 114 | 15 | Accessory | Medal |
+| 130-170 | 10 | Weapon | Weapon |
+| 190, 193 | 19 | TamingMob | Mount |
+| 191 | 20 | TamingMob | Saddle |
+
+### Equipment Item Icons
+- Equip items (category 1) live in `Character.wz/{Dir}/0{itemId}.img`, NOT `Item.wz`
+- Icons at `node.info.iconRaw` or `node.info.icon` (prefer iconRaw)
+- `Item.load()` handles equip items separately — routes to `Character.wz` based on `equipDirMap`
+
+### Inventory UI Grid
+- Background: `UIWindow.img/Item/backgrnd` (175×289)
+- Grid: 4 columns at x=[9, 45, 81, 117], 6 rows at y=[51, 85, 119, 153, 187, 221], cell size 32×32
+- Scrollbar area: x=152-170 using `Basic.img/VScr` assets
+- Tab labels: `UIWindow.img/Item/Tab/enabled|disabled/<0-4>` (WZ text images)
+- Item quantity digits: `Basic.img/ItemNo/0-9` (WZ sprite digits)
+
+### Minimap System
+- `UI/UIMiniMap.ts` — renders once to offscreen canvas (cached), only player/other player dots drawn per frame
+- Map data from `MapleMap.wzNode.miniMap` — canvas image, width, height, centerX, centerY
+- Coordinate formula: `minimapX = (worldX + centerX) * canvasWidth / mapWidth`
+- Frame: `UIWindow.img/MiniMap/MaxMap` 9-patch (cached to avoid per-frame tiling)
+- Icons: `Map.wz/MapHelper.img/minimap` (user, another, npc, portal)
+- Map marks: `Map.wz/MapHelper.img/mark/<markName>` (38×38 icons like Henesys, Perion)
+- Toggle: M key, auto-loads on map change via `MapleMap.load()` → `UIMiniMap.loadMapData()`
+
 ### Quest Item Rules
 - Quest items (items required by active quests) cannot be dropped from inventory
 - Check both `reqs.complete.items` and `reqs.start.items` for active quests
@@ -394,3 +449,66 @@ In `Act.img/<questId>/1/item/<n>`, each item can have a `prop` field:
 3. Fall back to any portal regardless of type
 4. Fall back to center foothold (`getCenterFootholdLocation`)
 5. Fall back to map center coordinates
+
+## Multiplayer Architecture
+
+### Host-Client Model
+One player per map is the **mob host** — runs mob AI locally and broadcasts state to all other players. Non-host players disable local AI and render received state via lerp interpolation.
+
+### Server Role (`server.js`)
+- **Message relay** — not authoritative, just routes messages between clients
+- **Host tracking** — `mapHosts` Map tracks which playerId is host per mapId
+- **Host assignment** — `assignMapHost(mapId, newJoinerId)` called on player join, disconnect, map change
+- **Rate limiting** — only `player_update` messages throttled (16ms); all other messages (drops, pickups, damage, reactors) always processed
+
+### Network Messages
+| Message | Direction | Purpose |
+|---------|-----------|---------|
+| `player_update` | Client→Server→Others | Position, stance, flipped, attacking (~30/s) |
+| `player_info` | Client→Server | Initial registration with character data |
+| `player_joined/left` | Server→Clients | Player enters/leaves map |
+| `mob_host_assign` | Server→Client | `{ isHost: boolean }` — tells client their host role |
+| `mob_state_batch` | Host→Server→Others | Array of `{ oId, x, y, stance, frame, flipped, hp }` (~15/s) |
+| `mob_damage_request` | Non-host→Server→Host | `{ oId, damage, knockbackDir }` |
+| `mob_death` | Host→Server→Others | `{ oId }` — triggers death animation on non-hosts |
+| `mob_respawn` | Host→Server→Others | `{ oId }` — triggers mob spawn on non-hosts |
+| `item_drop` | Client→Server→Others | `{ dropId, itemId, amount, x, y, vx, vy }` |
+| `item_pickup` | Client→Server→Others | `{ dropId }` — removes drop on all clients |
+| `reactor_hit` | Client→Server→Others | `{ oId }` — plays hit animation on all clients |
+| `reactor_respawn` | Host→Server→Others | `{ oId }` — resets reactor on all clients |
+| `player_level_up` | Client→Server→Others | Triggers level up animation on remote player |
+| `player_hit_by_mob` | Client→Server→Others | `{ damage, isMiss }` — shows damage indicator on remote player |
+| `chat_message` | Client→Server→Others | `{ message }` — shows chat balloon above remote player |
+| `client_log` | Client→Server | Debug logging — prints to server console |
+
+### Remote Entity Pattern
+Both `MapleCharacter` and `Monster` have an `isRemote` flag:
+- **`isRemote = true`**: Skip local AI/stance logic, lerp position toward `_targetX`/`_targetY`, receive stance from network
+- **`isRemote = false`**: Run normal local AI/physics
+- Set at spawn time based on `(window as any).__mySocket?.isMobHost`
+- Also enforced in `handleMobStateBatch` (forces `isRemote = true` on first batch received)
+
+### Deterministic Entity IDs
+- Mobs and reactors get `oId` from their **spawn index** in the WZ data
+- Since all clients load the same WZ map data in the same order, `oId` values match across clients without network coordination
+- Used for all network references instead of type ID (since maps can have multiple mobs of same type)
+
+### Item Drop Sync Rules
+- **Mob drops**: Host creates drops, broadcasts via `sendItemDrop`; non-host receives and creates visual drops
+- **Inventory drops**: Dropping player creates drop + broadcasts; other players see it
+- **Pickups**: Picking player calls `goToPlayer()` + broadcasts `sendItemPickup`; other clients animate pickup and remove drop
+- **Reactor drops**: Hitting player creates drops; quest-gated drops (`questId > 0`) stay local-only; non-quest drops broadcast to all
+- Each drop gets a unique `_netDropId` (Date.now + random) for cross-client identification
+
+### Item Tooltip System
+- Hover over inventory slots to see tooltip with item name, icon, and description
+- Description loaded from `String.wz` via `getItemDescSync()` (cached alongside item names in QuestData.ts)
+- Supports `#c...#` format codes rendered in orange (e.g., "Cannot be traded or dropped")
+- Positioned below-right of hovered slot; flips if near screen edge
+- Dark blue/purple background matching original MapleStory tooltip style
+
+### Remote Logging
+- `mysocket.installRemoteLogging()` hooks `console.log/warn/error` to also send `client_log` messages to server
+- Server prints them with cyan `[CLIENT <id>]` prefix
+- Catches `window.error` and `unhandledrejection` events
+- Enables debugging without opening browser DevTools (which slows the game loop)

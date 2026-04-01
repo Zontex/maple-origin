@@ -48,12 +48,10 @@ declare global {
 
 window.charecter = MyCharacter;
 
-// Attach beginner equipment.
-window.charecter.attachEquip(5, 1060002); // blue pants
-window.charecter.attachEquip(4, 1040002); // white undershirt
-
-// Attach the beginner sword (slot 10, item ID 1302000)
-window.charecter.attachEquip(10, 1302000);
+// Attach beginner equipment
+window.charecter.attachEquip(4, 1040002);   // Coat (white undershirt)
+window.charecter.attachEquip(5, 1060002);   // Pants (blue)
+window.charecter.attachEquip(10, 1302000);  // Weapon (sword)
 
 // Example of adding an item to the equipment inventory.
 const addInventory = async () => {

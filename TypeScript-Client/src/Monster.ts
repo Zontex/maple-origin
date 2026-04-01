@@ -56,6 +56,9 @@ class Monster {
   onStanceFinish: any = null;
   flipped: boolean = false;
   layer: number = 0;
+  isRemote: boolean = false; // Network-controlled mob — skip local AI
+  _targetX: number = 0;
+  _targetY: number = 0;
 
   static async fromOpts(opts: any) {
     const mob = new Monster(opts);
@@ -185,13 +188,15 @@ async addDrops() {
       const mesoAmount = Math.floor(minMesos + Math.random() * (maxMesos - minMesos));
       
       // Add mesos drop directly
-      this.map.addItemDrop(
-        await DropItemSprite.fromOpts({
-          id: 0, // 0 indicates mesos
-          monster: this,
-          amount: mesoAmount,
-        })
-      );
+      const mesoDrop = await DropItemSprite.fromOpts({
+        id: 0,
+        monster: this,
+        amount: mesoAmount,
+      });
+      const mesoDropId = Date.now() + Math.floor(Math.random() * 10000);
+      (mesoDrop as any)._netDropId = mesoDropId;
+      this.map.addItemDrop(mesoDrop);
+      MySocket.sendItemDrop(0, mesoAmount, this.pos.x, this.pos.y, this.pos.vx / 2, this.pos.vy, mesoDropId);
       return;
     }
 
@@ -226,7 +231,10 @@ async addDrops() {
         
         // Add it to the map
         if (dropItem && !dropItem.destroyed) {
+          const dropId = Date.now() + Math.floor(Math.random() * 10000) + i;
+          (dropItem as any)._netDropId = dropId;
           this.map.addItemDrop(dropItem);
+          MySocket.sendItemDrop(monsterDropEntry.itemId, monsterDropEntry.chosenAmount, baseX + offsetX, baseY, this.pos.vx / 2, this.pos.vy, dropId);
         }
       } catch (err) {
         console.error(`Error creating drop for item ${monsterDropEntry.itemId}:`, err);
@@ -260,7 +268,10 @@ async addDrops() {
                 amount: 1,
               });
               if (dropItem && !dropItem.destroyed) {
+                const qDropId = Date.now() + Math.floor(Math.random() * 10000);
+                (dropItem as any)._netDropId = qDropId;
                 this.map.addItemDrop(dropItem);
+                MySocket.sendItemDrop(item.id, 1, baseX + offsetX, baseY, this.pos.vx / 2, this.pos.vy, qDropId);
               }
             } catch {}
           }
@@ -317,16 +328,19 @@ async addDrops() {
     this.dying = true;
     this.isMovementEnabled = false;
 
-    // Add drops with a slight delay to prevent them from being destroyed
-    // before they can be properly initialized
-    setTimeout(() => {
-      this.addDrops();
-    }, 100);
+    // Only host spawns drops, awards EXP, and broadcasts death
+    if (!this.isRemote) {
+      setTimeout(() => {
+        this.addDrops();
+      }, 100);
+
+      // Broadcast death to other clients
+      try { MySocket.sendMobDeath(this.oId); } catch {}
+    }
 
     // Award experience to the player who killed the monster
     if (responsibleMapleCharacter) {
       responsibleMapleCharacter.addExp(this.mobFile.info.exp.nValue);
-      // Track mob kill for quest progress
       responsibleMapleCharacter.questManager?.onMobKill(this.id);
     }
   }
@@ -341,7 +355,7 @@ async addDrops() {
     }
 
     if (!this.stances[stance].frames[frame]) {
-      this.onStanceFinish();
+      if (this.onStanceFinish) this.onStanceFinish();
     }
 
     const f = !this.stances[stance].frames[frame] ? 0 : frame;
@@ -386,13 +400,26 @@ async addDrops() {
     knockBackDirection: number,
     responsibleMapleCharacter: any
   ) {
-    // Send damage event to the server for synchronization with other players
-    try {
-      MySocket.sendMonsterDamage(this.id, damage);
-    } catch (error) {
-      console.error("Error sending monster damage to server:", error);
+    // Remote mob (non-host client): send damage request to host, show visual only
+    if (this.isRemote) {
+      // Send damage request to host via server
+      try {
+        MySocket.sendMobDamageRequest(this.oId, damage, knockBackDirection);
+      } catch {}
+      // Show damage indicator locally for immediate feedback
+      this.DamageIndicator.addDamageIndicator(
+        DamageIndicatorType.PlayerHitMob,
+        { x: this.centerPosition.x - this.width / 2, y: this.centerPosition.y - this.height - 20 },
+        damage
+      );
+      this.playAudio(MobSounds.Damage);
+      this.isShotHpBar = true;
+      if (this.afterHitShowHpBarTimer) clearTimeout(this.afterHitShowHpBarTimer);
+      this.afterHitShowHpBarTimer = setTimeout(() => { this.isShotHpBar = false; }, this.afterHitShowHpBarTime);
+      return;
     }
-    
+
+    // Host: apply damage authoritatively
     if (this.hp - damage <= 0) {
       this.isInHit = true;
       this.pos.right = false;
@@ -400,9 +427,6 @@ async addDrops() {
       this.hp = 0;
       this.die(responsibleMapleCharacter);
     } else {
-      // todo:
-      // 2. calcualte crit chance
-
       this.hp -= damage;
       this.playAudio(MobSounds.Damage);
       if (damage > 0) {
@@ -411,7 +435,6 @@ async addDrops() {
         this.pos.left = false;
 
         this.pos.applyKnockbackX(knockBackDirection);
-        // this.isFl
         this.setStance(MobStance.hit1, 0, () => {
           this.isInHit = false;
         });
@@ -493,6 +516,38 @@ async addDrops() {
   update(msPerTick: number) {
     this.delay += msPerTick;
 
+    // Remote mobs: lerp position, advance animation, skip AI
+    if (this.isRemote) {
+      // Advance animation frames
+      if (this.delay > this.nextDelay && this.stances[this.stance]) {
+        const hasNextFrame = !!this.stances[this.stance].frames[this.frame + 1];
+        if (this.dying && !hasNextFrame) {
+          this.destroy();
+          return;
+        }
+        this.setFrame(this.stance, this.frame + 1, this.delay - this.nextDelay);
+      }
+
+      // Lerp toward target position
+      const dx = this._targetX - this.pos.x;
+      const dy = this._targetY - this.pos.y;
+      const lerp = Math.min(1, 0.3 * (msPerTick / 16));
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+        this.pos.x = this._targetX;
+        this.pos.y = this._targetY;
+      } else {
+        this.pos.x += dx * lerp;
+        this.pos.y += dy * lerp;
+      }
+
+      this.centerPosition = {
+        x: this.pos.x,
+        y: this.pos.y - this.height / 2,
+      };
+      return;
+    }
+
+    // --- Local AI (host only) ---
     if (this.dying) {
       this.setStance(MobStance.die1);
     } else if (this.isInHit) {
@@ -537,8 +592,6 @@ async addDrops() {
         this.left();
       }
     }
-
-    // console.log(minX, maxX, this.pos.x, this.pos.y);
 
     if (this.isMovementEnabled) {
       this.pos.update(msPerTick);
@@ -692,12 +745,16 @@ async addDrops() {
     msPerTick: number,
     tdelta: number
   ) {
-    if (this.pos.right && !this.pos.left) {
-      this.flipped = true;
-    } else if (this.pos.left && !this.pos.right) {
-      this.flipped = false;
+    // Remote mobs get flipped from network; local mobs from movement
+    if (!this.isRemote) {
+      if (this.pos.right && !this.pos.left) {
+        this.flipped = true;
+      } else if (this.pos.left && !this.pos.right) {
+        this.flipped = false;
+      }
     }
 
+    if (!this.stances[this.stance] || !this.stances[this.stance].frames[this.frame]) return;
     const currentFrame = this.stances[this.stance].frames[this.frame];
     const currentImage = currentFrame.nGetImage();
 
@@ -713,31 +770,10 @@ async addDrops() {
       flipped: !!this.flipped,
     });
 
-    // draw a box around the monster usefull for debugging
-    const boxColor = "red"; // You can set the desired box color
-    const borderWidth = 1; // You can adjust the border width as needed
-    canvas.context.strokeStyle = boxColor;
-    canvas.context.lineWidth = borderWidth;
-    canvas.context.strokeRect(
-      this.pos.x - camera.x - adjustX,
-      this.pos.y - camera.y - originY,
-      currentFrame.nWidth,
-      currentFrame.nHeight
-    );
-
     this.height = currentFrame.nHeight;
     this.width = currentFrame.nWidth;
     this.x = this.pos.x - adjustX;
     this.y = this.pos.y - originY;
-
-    // draw center of the monster
-    canvas.context.fillStyle = "red";
-    canvas.context.fillRect(
-      this.pos.x - camera.x - 2,
-      this.pos.y - camera.y - 2 - this.height / 2,
-      4,
-      4
-    );
 
     // todo :
     // this need to be displayed only few seconds after being hit

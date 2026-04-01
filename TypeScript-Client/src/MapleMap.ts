@@ -20,6 +20,7 @@ import QuestScriptEngine from './Quest/QuestScriptEngine';
 import NpcScriptEngine from './NpcScriptEngine';
 import QuestData from './Quest/QuestData';
 import Reactor from './Reactor';
+import UIMiniMap from './UI/UIMiniMap';
 
 export interface MapleMap {
   id: number | string;
@@ -64,6 +65,9 @@ export interface MapleMap {
   loadReactors: (wzNode: any) => Promise<void>;
   spawnMonster: (opts: any) => Promise<void>;
   spawnNPC: (opts: any) => Promise<void>;
+  setMobHostMode: (isHost: boolean) => void;
+  findMonsterByOId: (oId: number) => Monster | undefined;
+  getMonsterSpawnDefs: () => any[];
   update: (msPerTick: number) => void;
   render: (
     canvas: any,
@@ -145,6 +149,9 @@ MapleMap.load = async function (id: number | string) {
   this.scriptEngine = new QuestScriptEngine();
   this.npcScriptEngine = new NpcScriptEngine();
   this.mapId = id as number;
+
+  // Update minimap for the new map
+  UIMiniMap.loadMapData();
 };
 
 MapleMap.addItemDrop = function (itemDrop) {
@@ -341,7 +348,32 @@ async function initializeMonster(opts: any) {
 
 MapleMap.spawnMonster = async function (opts = {}) {
   const mob = await initializeMonster(opts);
+  // Set remote mode based on current host status
+  const isMobHost = (window as any).__mySocket?.isMobHost ?? true;
+  if (!isMobHost) {
+    mob.isRemote = true;
+    mob._targetX = mob.pos.x;
+    mob._targetY = mob.pos.y;
+  }
   this.monsters.push(mob);
+};
+
+MapleMap.setMobHostMode = function (isHost: boolean) {
+  for (const mob of this.monsters) {
+    mob.isRemote = !isHost;
+    if (mob.isRemote) {
+      mob._targetX = mob.pos.x;
+      mob._targetY = mob.pos.y;
+    }
+  }
+};
+
+MapleMap.findMonsterByOId = function (oId: number): Monster | undefined {
+  return this.monsters.find((m: Monster) => m.oId === oId);
+};
+
+MapleMap.getMonsterSpawnDefs = function () {
+  return monsterSpawnDefs;
 };
 
 // Store original spawn definitions for respawning
@@ -363,11 +395,12 @@ MapleMap.loadMonsters = async function (wzNode) {
   footholds = this.footholds;
   monsterSpawnDefs = [];
 
+  let spawnIndex = 0;
   for (const mobNode of wzNode.nChildren.filter(
     (n: any) => n.type.nValue === "m"
   )) {
     const spawnDef = {
-      oId: null,
+      oId: spawnIndex++,
       id: mobNode.id.nValue,
       x: mobNode.x.nValue,
       y: mobNode.y.nValue,
@@ -399,7 +432,7 @@ MapleMap.loadReactors = async function (wzNode) {
     const reactorTime = rNode.nGet?.('reactorTime')?.nValue || 0;
     const f = rNode.nGet?.('f')?.nValue || 0;
 
-    const spawnDef = { id, x, y, reactorTime, f, map: this };
+    const spawnDef = { id, x, y, reactorTime, f, map: this, oId: reactorSpawnDefs.length };
     reactorSpawnDefs.push(spawnDef);
 
     try {
@@ -513,18 +546,22 @@ MapleMap.update = function (msPerTick) {
     return;
   }
 
-  // Remove destroyed monsters and schedule respawns
+  // Remove destroyed monsters and schedule respawns (host only)
   const mapRef = this;
+  const isMobHost = (window as any).__mySocket?.isMobHost ?? true;
   for (const mob of this.monsters) {
     if (mob.destroyed && !mob.respawnScheduled) {
       mob.respawnScheduled = true;
+      if (!isMobHost) continue; // Non-host waits for mob_respawn message
       // Find the matching spawn definition to respawn from
-      const spawnDef = monsterSpawnDefs.find((s: any) => s.id === mob.id);
+      const spawnDef = monsterSpawnDefs.find((s: any) => s.oId === mob.oId);
       if (spawnDef) {
         const timer = setTimeout(async () => {
           // Only respawn if we're still on the same map
           if (mapRef.mapId === spawnDef.map?.mapId) {
             await mapRef.spawnMonster({ ...spawnDef });
+            // Broadcast respawn to non-host clients
+            try { (window as any).__mySocket?.sendMobRespawn(spawnDef.oId); } catch {}
           }
         }, RESPAWN_DELAY);
         respawnTimers.push(timer);
@@ -534,12 +571,15 @@ MapleMap.update = function (msPerTick) {
   this.monsters = this.monsters.filter((m: Monster) => !m.destroyed);
 
   // Reactor respawn handling
+  // Reactor respawn — only the mob host handles timers, broadcasts to others
   for (const reactor of this.reactors) {
     if (reactor.destroyed && !reactor.respawnScheduled && reactor.reactorTime > 0) {
       reactor.respawnScheduled = true;
+      if (!isMobHost) continue; // Non-host waits for reactor_respawn message
       const r = reactor;
       const timer = setTimeout(() => {
         r.reset();
+        try { (window as any).__mySocket?.sendReactorRespawn(r.oId); } catch {}
       }, reactor.reactorTime * 1000);
       reactorRespawnTimers.push(timer);
     }
@@ -550,7 +590,12 @@ MapleMap.update = function (msPerTick) {
   this.npcs.forEach((npc: NPC) => npc.update(msPerTick));
   this.monsters.forEach((mob: Monster) => mob.update(msPerTick));
   this.reactors.forEach((r: Reactor) => r.update(msPerTick));
-  this.characters.forEach((chr: MapleCharacter) => chr.update(msPerTick));
+  this.characters.forEach((chr: MapleCharacter) => {
+    try { chr.update(msPerTick); } catch (e) {
+      console.error('[MapleMap] Character update crash:', e);
+      document.title = `CRASH: ${(e as any)?.message || e}`;
+    }
+  });
   this.portals.forEach((p: Portal) => p.update(msPerTick));
 
   this.itemDrops = this.itemDrops.filter(

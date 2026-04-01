@@ -106,36 +106,41 @@ interface UILoginInterface {
   charSelectScrollDelay: number;
   charSelectScrollState: 'closed' | 'opening' | 'open' | 'closing';
   startButton: MapleStanceButton | null;
+  createCharacterButton: MapleStanceButton | null;
   drawCharacterSelect: (canvas: GameCanvas, camera: any, lag: number, msPerTick: number, tdelta: number) => void;
   // Create character
   newChar: MapleStandingCharacter | null;
   newCharOptions: {
-    skinColors: number[];
-    hairs: number[];
     faces: number[];
+    hairs: number[];       // base hair IDs (style)
+    hairColors: number[];  // color offsets (0-7)
+    skinColors: number[];
     tops: number[];
     bottoms: number[];
     shoes: number[];
-    weapons: number[];
-    skinIndex: number;
-    hairIndex: number;
     faceIndex: number;
+    hairIndex: number;
+    hairColorIndex: number;
+    skinIndex: number;
     topIndex: number;
     bottomIndex: number;
     shoesIndex: number;
-    weaponIndex: number;
   };
-  createCharButtons: MapleStanceButton[];
+  createCharButtons: MapleButton[];
   newCharNameInput: MapleInput | null;
   initCreateCharacter: () => void;
   cleanupCreateCharacter: () => void;
   drawCreateCharacter: (canvas: GameCanvas, camera: any, lag: number, msPerTick: number, tdelta: number) => void;
   updateNewCharAppearance: () => void;
   confirmCreateCharacter: () => void;
-  newCharNameConfirmed: boolean;
-  newCharStage: number; // 1=name, 2=appearance, 3=stats
   newCharName: string;
+  newCharView: number; // unused, kept for back button compat
   _createCharKeyHandler: ((e: KeyboardEvent) => void) | null;
+  _appearanceUpdating: boolean;
+  _diceAnimFrame: number;
+  _diceAnimDelay: number;
+  _diceRolling: boolean;
+  _clickConsumed: boolean;
 }
 
 const UILogin = {} as UILoginInterface;
@@ -246,6 +251,21 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     stance: 'disabled',
     onClick: async () => {
       if (!uiLoginRef.charSelected) return;
+      // Apply selected character's appearance to MyCharacter
+      const selectedChar = uiLoginRef.characters[uiLoginRef.selectedCharIndex];
+      if (selectedChar) {
+        const MyChar = (await import('../MyCharacter')).default;
+        MyChar.name = selectedChar.name || 'Player';
+        await MyChar.setSkinColor(selectedChar.skinColor ?? 0);
+        await MyChar.setFace(selectedChar.faceId ?? 20000);
+        await MyChar.setHair(selectedChar.hairId ?? 30030);
+        // Apply equips from the selected character
+        MyChar.equips = [];
+        const equipSlots = selectedChar.equippedIdsBySlot || {};
+        for (const [slot, id] of Object.entries(equipSlots)) {
+          if (id) await MyChar.attachEquip(Number(slot), id as number);
+        }
+      }
       await LoginState.enterGame();
     },
   });
@@ -258,11 +278,13 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     y: -1325,
     img: this.uiLogin.nGet('CharSelect').nGet('BtNew').nChildren,
     onClick: async () => {
+      if (uiLoginRef.characters.length >= 3) return;
       await LoginState.switchToSubState(LoginSubState.CREATE_CHARACTER);
     },
   });
   ClickManager.addButton(createCharacterButton);
   this.behindFrameButtons.push(createCharacterButton);
+  this.createCharacterButton = createCharacterButton;
 
   const deleteCharacterButton = new MapleStanceButton(canvas, {
     x: 205,
@@ -335,12 +357,7 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     isHidden: true,
     onClick: async () => {
       if (LoginState.currentSubState === LoginSubState.CREATE_CHARACTER) {
-        if (uiLoginRef.newCharStage > 1) {
-          uiLoginRef.newCharStage--;
-          DebugDrag.clear();
-        } else {
-          await LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
-        }
+        await LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
       } else if (LoginState.currentSubState === LoginSubState.CHARACTER_SELECT) {
         await LoginState.switchToSubState(LoginSubState.WORLD_SELECT);
       } else {
@@ -656,6 +673,11 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
     this.startButton.stance = 'disabled';
   }
 
+  // Disable create button when all 3 slots are taken
+  if (this.createCharacterButton) {
+    this.createCharacterButton.stance = this.characters.length >= 3 ? 'disabled' : 'normal';
+  }
+
   // Update debug drag system
   DebugDrag.update(canvas.mouseX, canvas.mouseY, canvas.clicked);
 
@@ -677,7 +699,7 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
   const charScreenY = charPos.y;
 
   const charSelectNode = this.uiLogin.nGet('CharSelect');
-  const CHAR_SLOT_SPACING = 80;
+  const CHAR_SLOT_SPACING = 105;
   const TOTAL_SLOTS = 3;
 
   try {
@@ -968,75 +990,74 @@ UILogin.initCreateCharacter = function () {
   this.createCharButtons = [];
   this.charAnimFrame = 0;
   this.charAnimDelay = 0;
-  this.newCharNameConfirmed = false;
-  this.newCharStage = 1;
   this.newCharName = '';
+  this.newCharView = 1;
   this.newChar = null;
+  this._appearanceUpdating = false;
+  this._diceAnimFrame = 0;
+  this._diceAnimDelay = 0;
+  this._diceRolling = false;
+  this._clickConsumed = false;
   DebugDrag.clear();
 
   // Hide all login UI buttons so they don't interfere with create char UI
   this.inFrontOfFrameButtons.forEach((btn: any) => { btn.isHidden = true; });
   this.behindFrameButtons.forEach((btn: any) => { btn.isHidden = true; });
 
+  // v83 Beginner starter options
+  this.newCharOptions = {
+    faces: [20000, 20001, 20002],
+    hairs: [30030, 30020, 30000],
+    hairColors: [0, 1, 2, 3, 4, 5, 6, 7],
+    skinColors: [0, 1, 2, 3, 4, 5, 6, 7],
+    tops: [1040002, 1040006, 1040010],
+    bottoms: [1060002, 1060006],
+    shoes: [1072001, 1072005, 1072037, 1072038],
+    faceIndex: 0,
+    hairIndex: 0,
+    hairColorIndex: 0,
+    skinIndex: 0,
+    topIndex: 0,
+    bottomIndex: 0,
+    shoesIndex: 0,
+  };
+
+  // Roll initial stats
+  this.newCharStats = Random.generateDiceRollStats();
+
   // Keyboard handler for name input
   this._createCharKeyHandler = (e: KeyboardEvent) => {
-    if (this.newCharStage === 1) {
-      // Name entry stage
-      if (e.key === 'Backspace') {
-        this.newCharName = this.newCharName.slice(0, -1);
-        e.preventDefault();
-        e.stopPropagation();
-      } else if (e.key === 'Enter') {
-        if (this.newCharName.trim().length > 0) {
-          this.newCharStage = 2;
-          DebugDrag.clear();
-        }
-        e.preventDefault();
-        e.stopPropagation();
-      } else if (e.key === 'Escape') {
-        LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
-        e.preventDefault();
-        e.stopPropagation();
-      } else if (e.key.length === 1 && this.newCharName.length < 12) {
-        this.newCharName += e.key;
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    } else if (this.newCharStage === 2) {
-      if (e.key === 'Enter') {
-        this.newCharStage = 3;
-        DebugDrag.clear();
-        e.preventDefault();
-        e.stopPropagation();
-      } else if (e.key === 'Escape') {
-        this.newCharStage = 1;
-        DebugDrag.clear();
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    } else if (this.newCharStage === 3) {
-      if (e.key === 'Enter') {
+    if (e.key === 'Backspace') {
+      this.newCharName = this.newCharName.slice(0, -1);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (e.key === 'Enter') {
+      if (this.newCharName.trim().length > 0) {
         this.confirmCreateCharacter();
-        e.preventDefault();
-        e.stopPropagation();
-      } else if (e.key === 'Escape') {
-        this.newCharStage = 2;
-        DebugDrag.clear();
-        e.preventDefault();
-        e.stopPropagation();
       }
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (e.key === 'Escape') {
+      LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (e.key.length === 1 && this.newCharName.length < 12) {
+      this.newCharName += e.key;
+      e.preventDefault();
+      e.stopPropagation();
     }
   };
   window.addEventListener('keydown', this._createCharKeyHandler, true);
 
-  // Create preview character using MapleStandingCharacter (no physics needed)
+  // Create preview character
+  const o = this.newCharOptions;
   MapleStandingCharacter.fromAppearance({
-    name: 'New Character',
-    skinColor: 0,
-    hairId: 30030,
-    faceId: 20000,
+    name: '',
+    skinColor: o.skinColors[0],
+    hairId: o.hairs[0] + o.hairColors[0],
+    faceId: o.faces[0],
     flipped: true,
-    equipIds: [1040002, 1060002, 1302000],
+    equipIds: [o.tops[0], o.bottoms[0], o.shoes[0]],
   }).then(ch => { this.newChar = ch; }).catch(() => {});
 };
 
@@ -1057,40 +1078,68 @@ UILogin.cleanupCreateCharacter = function () {
 };
 
 UILogin.confirmCreateCharacter = function () {
-  LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
+  if (this.characters.length >= 3) return;
+  // Use default name if none entered
+  if (!this.newCharName || this.newCharName.trim().length === 0) {
+    this.newCharName = 'Beginner';
+  }
+  const o = this.newCharOptions;
+  const appearance = {
+    name: this.newCharName.trim(),
+    skinColor: o.skinColors[o.skinIndex],
+    hairId: o.hairs[o.hairIndex] + o.hairColors[o.hairColorIndex],
+    faceId: o.faces[o.faceIndex],
+    flipped: true,
+    equipIds: [o.tops[o.topIndex], o.bottoms[o.bottomIndex], o.shoes[o.shoesIndex]],
+  };
+  console.log('Create character:', appearance, 'stats:', this.newCharStats);
+
+  // Create the standing character and add to the characters array
+  MapleStandingCharacter.fromAppearance(appearance).then(ch => {
+    this.characters.push(ch);
+    LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
+  }).catch(() => {
+    LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
+  });
 };
 
 UILogin.updateNewCharAppearance = async function () {
-  if (!this.newChar || !this.newCharOptions) return;
-  const o = this.newCharOptions;
-  await this.newChar.setSkinColor(o.skinColors[o.skinIndex] ?? 0);
-  await this.newChar.setFace(o.faces[o.faceIndex] ?? 20000);
-  await this.newChar.setHair(o.hairs[o.hairIndex] ?? 30030);
-  await this.newChar.setEquipsByIds([
-    o.tops[o.topIndex],
-    o.bottoms[o.bottomIndex],
-    o.shoes[o.shoesIndex],
-    o.weapons[o.weaponIndex],
-  ].filter(Boolean));
+  if (!this.newChar || !this.newCharOptions || this._appearanceUpdating) return;
+  this._appearanceUpdating = true;
+  try {
+    const o = this.newCharOptions;
+    const hairId = o.hairs[o.hairIndex] + o.hairColors[o.hairColorIndex];
+    await this.newChar.setSkinColor(o.skinColors[o.skinIndex] ?? 0);
+    await this.newChar.setFace(o.faces[o.faceIndex] ?? 20000);
+    await this.newChar.setHair(hairId ?? 30030);
+    await this.newChar.setEquipsByIds([
+      o.tops[o.topIndex],
+      o.bottoms[o.bottomIndex],
+      o.shoes[o.shoesIndex],
+    ].filter(Boolean));
+  } catch (e) {}
+  this._appearanceUpdating = false;
 };
 
 UILogin.drawCreateCharacter = function (canvas: any, camera: any, lag: number, msPerTick: number, tdelta: number) {
   DebugDrag.update(canvas.mouseX, canvas.mouseY, canvas.clicked);
 
-  // Wait for camera to finish scrolling before rendering elements
   const targetY = -2723;
   if (Math.abs(camera.y - targetY) > 5) return;
 
   const newCharNode = this.uiLogin.nGet('NewChar');
+  const mx = canvas.mouseX;
+  const my = canvas.mouseY;
+  const clicked = canvas.clicked && !DebugDrag.enabled && !this._clickConsumed;
+  if (clicked) this._clickConsumed = true;
+  if (!canvas.clicked) this._clickConsumed = false;
 
-  // --- Character preview (always shown) ---
-  // Animation is handled by newChar.update() called in doUpdate
+  // --- Character preview ---
   if (this.newChar && this.newChar.baseBody) {
     try {
       const drawableFrames = this.newChar.getDrawableFrames(this.newChar.stance, this.newChar.frame, this.newChar.flipped);
-      DebugDrag.register('newCharPreview', 395, 356, 60, 80);
+      DebugDrag.register('newCharPreview', 395, 357, 60, 80);
       const p = DebugDrag.get('newCharPreview');
-
       drawableFrames.forEach((f: any) => {
         canvas.drawImage({
           img: f.img,
@@ -1102,222 +1151,249 @@ UILogin.drawCreateCharacter = function (canvas: any, camera: any, lag: number, m
     } catch (e) {}
   }
 
-  // ========== STAGE 1: Name entry ==========
-  if (this.newCharStage === 1) {
-    // --- charName panel ---
-    try {
-      const charNameImg = newCharNode.nGet('charName').nGetImage();
-      if (charNameImg) {
-        DebugDrag.register('charName', 484, 103, charNameImg.width, charNameImg.height);
-        const p = DebugDrag.get('charName');
-        canvas.drawImage({ img: charNameImg, dx: p.x, dy: p.y });
-      }
-    } catch (e) {}
+  // ============ RIGHT PANEL: charSet (225x377) — name + stats + dice ============
+  const rpx = 475; // right panel x
+  const rpy = 103;  // right panel y
+  try {
+    const charSetImg = newCharNode.nGet('charSet').nGetImage();
+    if (charSetImg) {
+      DebugDrag.register('charSet', rpx, rpy, 225, 377);
+      const p = DebugDrag.get('charSet');
+      canvas.drawImage({ img: charSetImg, dx: p.x, dy: p.y });
+    }
+  } catch (e) {}
+  const rp = DebugDrag.get('charSet');
 
-    // --- Name text input ---
-    const nameDisplay = (this.newCharName || '') + '_';
-    DebugDrag.register('nameText', 518, 210, 120, 16);
-    const ntPos = DebugDrag.get('nameText');
+  // Name input
+  const nameDisplay = (this.newCharName || '') + '_';
+  canvas.drawText({
+    text: nameDisplay,
+    x: rp.x + 15,
+    y: rp.y + 55,
+    color: '#000000',
+    fontSize: 13,
+    fontFamily: 'Arial',
+    align: 'left',
+  });
+
+  // BtCheck ("CHECK") button — top right of charSet panel
+  try {
+    const checkImg = newCharNode.nGet('BtCheck').nGet('normal').nGet('0').nGetImage();
+    if (checkImg) {
+      DebugDrag.register('btCheck', rp.x + 160, rp.y + 10, 50, 24);
+      const cp = DebugDrag.get('btCheck');
+      canvas.drawImage({ img: checkImg, dx: cp.x, dy: cp.y });
+    }
+  } catch (e) {}
+
+  // Stats
+  const stats = this.newCharStats || [4, 4, 4, 4];
+  const statLabels = ['STR', 'DEX', 'INT', 'LUK'];
+  const statsX = rp.x + 20;
+  const statsY = rp.y + 95;
+  for (let i = 0; i < 4; i++) {
     canvas.drawText({
-      text: nameDisplay,
-      x: ntPos.x,
-      y: ntPos.y,
+      text: statLabels[i],
+      x: statsX,
+      y: statsY + i * 25,
       color: '#000000',
-      fontSize: 12,
+      fontSize: 14,
+      fontFamily: 'Arial',
+      fontWeight: 'bold',
+      align: 'left',
+    });
+    canvas.drawText({
+      text: String(stats[i]),
+      x: statsX + 55,
+      y: statsY + i * 25,
+      color: '#000000',
+      fontSize: 14,
       fontFamily: 'Arial',
       align: 'left',
     });
-
-    // --- BtYes (OK) button ---
-    try {
-      const img = newCharNode.nGet('BtYes').nGet('normal').nGet('0').nGetImage();
-      if (img) {
-        DebugDrag.register('btYes', 512, 282, img.width, img.height);
-        const p = DebugDrag.get('btYes');
-        canvas.drawImage({ img, dx: p.x, dy: p.y });
-
-        if (canvas.clicked && !DebugDrag.enabled) {
-          const mx = canvas.mouseX;
-          const my = canvas.mouseY;
-          if (mx >= p.x && mx <= p.x + img.width &&
-              my >= p.y && my <= p.y + img.height) {
-            if (this.newCharName.trim().length > 0) {
-              this.newCharStage = 2;
-              DebugDrag.clear();
-            }
-          }
-        }
-      }
-    } catch (e) {}
-
-    // --- BtNo (Cancel) button ---
-    try {
-      const img = newCharNode.nGet('BtNo').nGet('normal').nGet('0').nGetImage();
-      if (img) {
-        DebugDrag.register('btNo', 590, 280, img.width, img.height);
-        const p = DebugDrag.get('btNo');
-        canvas.drawImage({ img, dx: p.x, dy: p.y });
-
-        if (canvas.clicked && !DebugDrag.enabled) {
-          const mx = canvas.mouseX;
-          const my = canvas.mouseY;
-          if (mx >= p.x && mx <= p.x + img.width &&
-              my >= p.y && my <= p.y + img.height) {
-            LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
-          }
-        }
-      }
-    } catch (e) {}
   }
 
-  // ========== STAGE 2: Appearance customization ==========
-  if (this.newCharStage === 2) {
-    // --- charSet panel (main settings background) ---
-    try {
-      const charSetImg = newCharNode.nGet('charSet').nGetImage();
-      if (charSetImg) {
-        DebugDrag.register('charSet', 475, 102, charSetImg.width, charSetImg.height);
-        const p = DebugDrag.get('charSet');
-        canvas.drawImage({ img: charSetImg, dx: p.x, dy: p.y });
-      }
-    } catch (e) {}
+  // "GENERATE!!" label
+  canvas.drawText({
+    text: 'GENERATE!!',
+    x: rp.x + 115,
+    y: statsY + 5,
+    color: '#663300',
+    fontSize: 11,
+    fontFamily: 'Arial',
+    fontWeight: 'bold',
+    align: 'left',
+  });
 
-    // --- avatarSel rows (0-8) ---
-    for (let i = 0; i < 9; i++) {
-      try {
-        const selImg = newCharNode.nGet('avatarSel').nGet(i.toString()).nGet('normal').nGetImage();
-        if (selImg) {
-          DebugDrag.register(`avatarSel${i}`, 370, 80 + i * 20, selImg.width, selImg.height);
-          const p = DebugDrag.get(`avatarSel${i}`);
-          canvas.drawImage({ img: selImg, dx: p.x, dy: p.y });
+  // Dice (animated)
+  try {
+    if (this._diceRolling) {
+      this._diceAnimDelay += msPerTick;
+      if (this._diceAnimDelay > 80) {
+        this._diceAnimDelay = 0;
+        this._diceAnimFrame++;
+        if (this._diceAnimFrame >= 4) {
+          this._diceAnimFrame = 0;
+          this._diceRolling = false;
+          this.newCharStats = Random.generateDiceRollStats();
         }
-      } catch (e) {}
+      }
     }
+    const diceFrame = this._diceRolling ? this._diceAnimFrame : 3;
+    const diceImg = newCharNode.nGet('dice').nGet(String(diceFrame)).nGetImage();
+    if (diceImg) {
+      DebugDrag.register('dice', rp.x + 155, statsY + 40, 30, 45);
+      const dp = DebugDrag.get('dice');
+      canvas.drawImage({ img: diceImg, dx: dp.x, dy: dp.y });
 
-    // --- BtLeft / BtRight arrows for each selector row ---
-    for (let i = 0; i < 9; i++) {
-      try {
-        const leftImg = newCharNode.nGet('BtLeft').nGet('normal').nGet('0').nGetImage();
-        if (leftImg) {
-          DebugDrag.register(`btLeft${i}`, 355, 82 + i * 20, leftImg.width, leftImg.height);
-          const p = DebugDrag.get(`btLeft${i}`);
-          canvas.drawImage({ img: leftImg, dx: p.x, dy: p.y });
-        }
-      } catch (e) {}
-      try {
-        const rightImg = newCharNode.nGet('BtRight').nGet('normal').nGet('0').nGetImage();
-        if (rightImg) {
-          DebugDrag.register(`btRight${i}`, 575, 82 + i * 20, rightImg.width, rightImg.height);
-          const p = DebugDrag.get(`btRight${i}`);
-          canvas.drawImage({ img: rightImg, dx: p.x, dy: p.y });
-        }
-      } catch (e) {}
+      if (clicked && !this._diceRolling &&
+          mx >= dp.x && mx <= dp.x + 30 &&
+          my >= dp.y && my <= dp.y + 45) {
+        this._diceRolling = true;
+        this._diceAnimFrame = 0;
+        this._diceAnimDelay = 0;
+      }
     }
+  } catch (e) {}
 
-    // --- BtYes (OK) for stage 2 ---
+  // ============ LEFT PANEL: scroll (242x210) — appearance options ============
+  const lpx = 120; // left panel x
+  const lpy = 151; // left panel y
+  try {
+    const scrollImg = newCharNode.nGet('scroll').nGet('0').nGet('3').nGetImage();
+    if (scrollImg) {
+      DebugDrag.register('scroll', lpx, lpy, 242, 210);
+      const sp = DebugDrag.get('scroll');
+      canvas.drawImage({ img: scrollImg, dx: sp.x, dy: sp.y });
+    }
+  } catch (e) {}
+  const lp = DebugDrag.get('scroll');
+
+  // Appearance rows on the scroll panel
+  const rowLabels = ['FACE', 'HAIR STYLE', 'HAIR COLOR', 'SKIN COLOR', 'TOP', 'BOTTOM', 'SHOES'];
+  const indexKeys = ['faceIndex', 'hairIndex', 'hairColorIndex', 'skinIndex', 'topIndex', 'bottomIndex', 'shoesIndex'];
+  const optionKeys = ['faces', 'hairs', 'hairColors', 'skinColors', 'tops', 'bottoms', 'shoes'];
+  const rowStartY = lp.y + 12;
+  const rowSpacing = 25;
+
+  for (let i = 0; i < rowLabels.length; i++) {
+    const rowY = rowStartY + i * rowSpacing;
+
+    // Category label
+    canvas.drawText({
+      text: rowLabels[i],
+      x: lp.x + 12,
+      y: rowY + 3,
+      color: '#000000',
+      fontSize: 11,
+      fontFamily: 'Arial',
+      fontWeight: 'bold',
+      align: 'left',
+    });
+
+    // BtLeft arrow
     try {
-      const img = newCharNode.nGet('BtYes').nGet('normal').nGet('0').nGetImage();
-      if (img) {
-        DebugDrag.register('btYes2', 501, 434, img.width, img.height);
-        const p = DebugDrag.get('btYes2');
-        canvas.drawImage({ img, dx: p.x, dy: p.y });
+      const leftImg = newCharNode.nGet('BtLeft').nGet('normal').nGet('0').nGetImage();
+      if (leftImg) {
+        const lbx = lp.x + 100;
+        const lby = rowY + 1;
+        canvas.drawImage({ img: leftImg, dx: lbx, dy: lby });
 
-        if (canvas.clicked && !DebugDrag.enabled) {
-          const mx = canvas.mouseX;
-          const my = canvas.mouseY;
-          if (mx >= p.x && mx <= p.x + img.width &&
-              my >= p.y && my <= p.y + img.height) {
-            // Advance to stats stage
-            this.newCharStage = 3;
-            DebugDrag.clear();
-          }
+        if (clicked && mx >= lbx && mx <= lbx + 15 &&
+            my >= lby && my <= lby + 16) {
+          const o = this.newCharOptions;
+          const arr = o[optionKeys[i]] as number[];
+          o[indexKeys[i]] = ((o[indexKeys[i]] as number) - 1 + arr.length) % arr.length;
+          this.updateNewCharAppearance();
         }
       }
     } catch (e) {}
 
-    // --- BtNo (Cancel) for stage 2 ---
-    try {
-      const img = newCharNode.nGet('BtNo').nGet('normal').nGet('0').nGetImage();
-      if (img) {
-        DebugDrag.register('btNo2', 587, 433, img.width, img.height);
-        const p = DebugDrag.get('btNo2');
-        canvas.drawImage({ img, dx: p.x, dy: p.y });
+    // Current selection name (centered between arrows)
+    const o = this.newCharOptions;
+    const currentIdx = o[indexKeys[i]] as number;
+    const currentVal = (o[optionKeys[i]] as number[])[currentIdx];
+    let displayText = String(currentVal);
+    // Friendly names for known values
+    const nameMap: Record<string, Record<number, string>> = {
+      faces: { 20000: 'Motivated', 20001: 'Perplexed', 20002: 'Leisure' },
+      hairs: { 30030: 'Buzz', 30020: 'Sammy', 30000: 'Toben' },
+      tops: { 1040002: 'White Undershirt', 1040006: 'Blue T-Shirt', 1040010: 'Orange T-Shirt' },
+      bottoms: { 1060002: 'Blue Jean Shorts', 1060006: 'Red-Striped Shorts' },
+      shoes: { 1072001: 'Red Rubber Boots', 1072005: 'Leather Sandals', 1072037: 'Yellow Sneakers', 1072038: 'Blue Sneakers' },
+    };
+    if (optionKeys[i] === 'skinColors') {
+      const skinNames = ['Light', 'Tan', 'Dark', 'Pale', 'Blue', 'White', 'Green', 'Pink'];
+      displayText = skinNames[currentVal] || String(currentVal);
+    } else if (optionKeys[i] === 'hairColors') {
+      const colorNames = ['Black', 'Red', 'Orange', 'Blonde', 'Green', 'Blue', 'Purple', 'Brown'];
+      displayText = colorNames[currentVal] || String(currentVal);
+    } else if (nameMap[optionKeys[i]] && nameMap[optionKeys[i]][currentVal]) {
+      displayText = nameMap[optionKeys[i]][currentVal];
+    }
+    canvas.drawText({
+      text: displayText,
+      x: lp.x + 155,
+      y: rowY + 3,
+      color: '#000000',
+      fontSize: 11,
+      fontFamily: 'Arial',
+      align: 'center',
+    });
 
-        if (canvas.clicked && !DebugDrag.enabled) {
-          const mx = canvas.mouseX;
-          const my = canvas.mouseY;
-          if (mx >= p.x && mx <= p.x + img.width &&
-              my >= p.y && my <= p.y + img.height) {
-            // Go back to name entry
-            this.newCharStage = 1;
-            DebugDrag.clear();
-          }
+    // BtRight arrow
+    try {
+      const rightImg = newCharNode.nGet('BtRight').nGet('normal').nGet('0').nGetImage();
+      if (rightImg) {
+        const rbx = lp.x + 215;
+        const rby = rowY + 1;
+        canvas.drawImage({ img: rightImg, dx: rbx, dy: rby });
+
+        if (clicked && mx >= rbx && mx <= rbx + 15 &&
+            my >= rby && my <= rby + 16) {
+          const o2 = this.newCharOptions;
+          const arr = o2[optionKeys[i]] as number[];
+          o2[indexKeys[i]] = ((o2[indexKeys[i]] as number) + 1) % arr.length;
+          this.updateNewCharAppearance();
         }
       }
     } catch (e) {}
   }
 
-  // ========== STAGE 3: Stats ==========
-  if (this.newCharStage === 3) {
-    // --- statTb (stat table background) ---
-    try {
-      const img = newCharNode.nGet('statTb').nGetImage();
-      if (img) {
-        DebugDrag.register('statTb', 500, 150, img.width, img.height);
-        const p = DebugDrag.get('statTb');
-        canvas.drawImage({ img, dx: p.x, dy: p.y });
+  // ============ BOTTOM: OK + Cancel buttons ============
+  try {
+    const okNode = newCharNode.nGet('BtYes').nGet('normal').nGet('0');
+    const okImg = okNode.nGetImage();
+    const okW = (okNode as any).nWidth || 81;
+    const okH = (okNode as any).nHeight || 41;
+    if (okImg) {
+      DebugDrag.register('btYes', 506, 434, okW, okH);
+      const bp = DebugDrag.get('btYes');
+      canvas.drawImage({ img: okImg, dx: bp.x, dy: bp.y });
+
+      if (clicked && mx >= bp.x && mx <= bp.x + okW &&
+          my >= bp.y && my <= bp.y + okH) {
+        this.confirmCreateCharacter();
       }
-    } catch (e) {}
+    }
+  } catch (e) {}
 
-    // --- dice ---
-    try {
-      const img = newCharNode.nGet('dice').nGet('0').nGetImage();
-      if (img) {
-        DebugDrag.register('dice', 550, 250, img.width, img.height);
-        const p = DebugDrag.get('dice');
-        canvas.drawImage({ img, dx: p.x, dy: p.y });
+  try {
+    const cancelNode = newCharNode.nGet('BtNo').nGet('normal').nGet('0');
+    const cancelImg = cancelNode.nGetImage();
+    const cancelW = (cancelNode as any).nWidth || 81;
+    const cancelH = (cancelNode as any).nHeight || 41;
+    if (cancelImg) {
+      DebugDrag.register('btNo', 585, 434, cancelW, cancelH);
+      const bp = DebugDrag.get('btNo');
+      canvas.drawImage({ img: cancelImg, dx: bp.x, dy: bp.y });
+
+      if (clicked && mx >= bp.x && mx <= bp.x + cancelW &&
+          my >= bp.y && my <= bp.y + cancelH) {
+        LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
       }
-    } catch (e) {}
-
-    // --- BtYes (OK) for stage 3 — confirm creation ---
-    try {
-      const img = newCharNode.nGet('BtYes').nGet('normal').nGet('0').nGetImage();
-      if (img) {
-        DebugDrag.register('btYes3', 501, 434, img.width, img.height);
-        const p = DebugDrag.get('btYes3');
-        canvas.drawImage({ img, dx: p.x, dy: p.y });
-
-        if (canvas.clicked && !DebugDrag.enabled) {
-          const mx = canvas.mouseX;
-          const my = canvas.mouseY;
-          if (mx >= p.x && mx <= p.x + img.width &&
-              my >= p.y && my <= p.y + img.height) {
-            this.confirmCreateCharacter();
-          }
-        }
-      }
-    } catch (e) {}
-
-    // --- BtNo (Cancel) for stage 3 — back to appearance ---
-    try {
-      const img = newCharNode.nGet('BtNo').nGet('normal').nGet('0').nGetImage();
-      if (img) {
-        DebugDrag.register('btNo3', 587, 433, img.width, img.height);
-        const p = DebugDrag.get('btNo3');
-        canvas.drawImage({ img, dx: p.x, dy: p.y });
-
-        if (canvas.clicked && !DebugDrag.enabled) {
-          const mx = canvas.mouseX;
-          const my = canvas.mouseY;
-          if (mx >= p.x && mx <= p.x + img.width &&
-              my >= p.y && my <= p.y + img.height) {
-            this.newCharStage = 2;
-            DebugDrag.clear();
-          }
-        }
-      }
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
 
   DebugDrag.drawAll(canvas);
 };

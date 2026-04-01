@@ -15,6 +15,9 @@ import TouchJoyStick, {
 import ClickManager from "./UI/ClickManager";
 import TaxiUI from "./UI/TaxiUI";
 import WZManager from "./wz-utils/WZManager";
+import UIMiniMap from "./UI/UIMiniMap";
+import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
+import DebugDrag from "./UI/DebugDrag";
 
 // henesys 100000000
 // 100020100 - maps with pigs - useful to test fast things with mobs
@@ -29,6 +32,7 @@ export interface MapState extends UIState {
   joyStick: JoyStick;
   statsMenu: StatsMenuSprite;
   inventoryMenu: InventoryMenuSprite;
+  equipMenu: EquipMenuSprite;
   questLog: QuestLogMenuSprite;
   UIMenus: any[];
   PlayerCharacter: any; // Reference to MyCharacter
@@ -41,6 +45,8 @@ export interface MapState extends UIState {
     i: boolean;
     s: boolean;
     q: boolean;
+    m: boolean;
+    e: boolean;
   };
 }
 
@@ -85,6 +91,7 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
 
   if (isFirstUpdate) {
     await UIMap.initialize();
+    await UIMiniMap.initialize();
   }
 
   // Spawn at named portal if specified, otherwise first spawn portal (index 0)
@@ -211,7 +218,15 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     isHidden: true,
   });
 
-  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.questLog];
+  this.equipMenu = await EquipMenuSprite.fromOpts({
+    x: 300,
+    y: 100,
+    charecter: MyCharacter,
+    isHidden: true,
+    canvas: ClickManager.GameCanvas,
+  });
+
+  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog];
 
   // Close all open UI menus (called when NPC/quest dialogs open)
   this.closeAllMenus = () => {
@@ -230,6 +245,8 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     i: false,
     s: false,
     q: false,
+    m: false,
+    e: false,
   };
 
   await initializeMapState(map, true);
@@ -238,13 +255,17 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
   const canvasElement = document.getElementById("game"); // updated to "game"
   if (canvasElement) {
     canvasElement.addEventListener("click", (event) => {
+      const rect = canvasElement.getBoundingClientRect();
+      const scaleX = rect.width / (canvasElement as HTMLCanvasElement).width;
+      const scaleY = rect.height / (canvasElement as HTMLCanvasElement).height;
+      const cx = (event.clientX - rect.left) / scaleX;
+      const cy = (event.clientY - rect.top) / scaleY;
+
+      // Minimap click (world button)
+      if (UIMiniMap.handleClick(cx, cy)) return;
+
       // Handle selection clicks on quest/NPC script dialogs
       if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {
-        const rect = canvasElement.getBoundingClientRect();
-        const scaleX = rect.width / (canvasElement as HTMLCanvasElement).width;
-        const scaleY = rect.height / (canvasElement as HTMLCanvasElement).height;
-        const cx = (event.clientX - rect.left) / scaleX;
-        const cy = (event.clientY - rect.top) / scaleY;
         if (MapleMap.questDialog.handleClick(cx, cy)) return;
       }
       MapleMap.handleClick(event, canvasElement, Camera);
@@ -386,6 +407,12 @@ MapStateInstance.doUpdate = function (
       if (canvas.isKeyDown("q") && !this.previousKeyboardState.q) {
         this.questLog.setIsHidden(!this.questLog.isHidden);
       }
+      if (canvas.isKeyDown("m") && !this.previousKeyboardState.m) {
+        UIMiniMap.isHidden = !UIMiniMap.isHidden;
+      }
+      if (canvas.isKeyDown("e") && !this.previousKeyboardState.e) {
+        this.equipMenu.setIsHidden(!this.equipMenu.isHidden);
+      }
 
       if (canvas.isKeyDown("esc")) {
         // First check if any dialog is open
@@ -422,6 +449,8 @@ MapStateInstance.doUpdate = function (
     this.previousKeyboardState.i = canvas.isKeyDown("i");
     this.previousKeyboardState.s = canvas.isKeyDown("s");
     this.previousKeyboardState.q = canvas.isKeyDown("q");
+    this.previousKeyboardState.m = canvas.isKeyDown("m");
+    this.previousKeyboardState.e = canvas.isKeyDown("e");
     this.previousKeyboardState.up = canvas.isKeyDown("up");
     this.previousKeyboardState.down = canvas.isKeyDown("down");
     this.previousKeyboardState.left = canvas.isKeyDown("left");
@@ -430,6 +459,8 @@ MapStateInstance.doUpdate = function (
     Camera.lookAt(MyCharacter.pos.x, MyCharacter.pos.y - 78);
 
     UIMap.doUpdate(msPerTick, camera, canvas);
+    UIMiniMap.update(msPerTick);
+    DebugDrag.update(canvas.mouseX, canvas.mouseY, canvas.clicked);
 
     this.UIMenus.forEach((menu) => {
       menu.update(msPerTick, camera, canvas);
@@ -473,9 +504,15 @@ MapStateInstance.doRender = function (
       MyCharacter.drawDeathDialog(canvas);
     }
 
+    // Minimap on top of game world
+    UIMiniMap.render(canvas, camera);
+
     // UIMap draws HUD + cursor
     UIMap.doRender(canvas, camera, lag, msPerTick, tdelta);
   }
+
+  // Debug drag overlay (F9)
+  DebugDrag.drawAll(canvas);
 
   // Fade overlay on top of everything (including cursor during transitions)
   if (fadeAlpha > 0) {

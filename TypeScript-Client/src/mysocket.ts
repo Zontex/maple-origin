@@ -7,6 +7,9 @@ import Monster from "./Monster";
 import Inventory from "./Inventory/Inventory";
 import Stats from "./Stats/Stats";
 import { JobsMainType } from "./Constants/Jobs";
+import DropItemSprite from "./DropItem/DropItemSprite";
+
+let nextDropId = 1;
 
 interface PlayerState {
   id: string;
@@ -66,6 +69,7 @@ class MySocket {
   socket: WebSocket | null = null;
   playerId: string = "";
   otherPlayers: Map<string, MapleCharacter> = new Map();
+  isMobHost: boolean = false;
   isConnected: boolean = false;
   reconnectAttempts: number = 0;
   maxReconnectAttempts: number = 5;
@@ -76,6 +80,45 @@ class MySocket {
   connectionStatusElement: HTMLElement | null = null;
   
   constructor() {}
+
+  // Send a log message to the server for display in server console
+  remoteLog(...args: any[]) {
+    const msg = args.map(a => {
+      if (a instanceof Error) return `${a.message}\n${a.stack}`;
+      if (typeof a === 'object') try { return JSON.stringify(a); } catch { return String(a); }
+      return String(a);
+    }).join(' ');
+    this.sendMessage({ type: 'client_log', data: msg });
+  }
+
+  // Install console hooks — all console.log/warn/error also go to server
+  installRemoteLogging() {
+    const self = this;
+    const origLog = console.log.bind(console);
+    const origWarn = console.warn.bind(console);
+    const origError = console.error.bind(console);
+
+    console.log = function(...args: any[]) {
+      origLog(...args);
+      self.remoteLog('[LOG]', ...args);
+    };
+    console.warn = function(...args: any[]) {
+      origWarn(...args);
+      self.remoteLog('[WARN]', ...args);
+    };
+    console.error = function(...args: any[]) {
+      origError(...args);
+      self.remoteLog('[ERROR]', ...args);
+    };
+
+    // Catch uncaught errors too
+    window.addEventListener('error', (e) => {
+      self.remoteLog('[UNCAUGHT]', e.message, e.filename, e.lineno, e.colno);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      self.remoteLog('[UNHANDLED PROMISE]', String(e.reason));
+    });
+  }
 
   async initialize() {
     console.log("Initializing WebSocket connection...");
@@ -167,12 +210,20 @@ class MySocket {
     }
   }
   
+  _loggingInstalled: boolean = false;
   handleSocketOpen(event: Event) {
-    console.log("Connected to WebSocket server");
     this.isConnected = true;
     this.reconnectAttempts = 0;
     this.updateConnectionStatus('connected');
-    
+
+    // Install remote logging on first connect
+    if (!this._loggingInstalled) {
+      this._loggingInstalled = true;
+      this.installRemoteLogging();
+    }
+
+    console.log("Connected to WebSocket server");
+
     // Initial registration with the server
     this.sendPlayerInfo();
     
@@ -210,6 +261,39 @@ class MySocket {
           break;
         case "chat_message":
           this.handleChatMessage(data);
+          break;
+        case "item_drop":
+          this.handleItemDrop(data.data);
+          break;
+        case "item_pickup":
+          this.handleItemPickup(data.data);
+          break;
+        case "mob_host_assign":
+          this.handleMobHostAssign(data);
+          break;
+        case "mob_state_batch":
+          this.handleMobStateBatch(data.data);
+          break;
+        case "mob_damage_request":
+          this.handleMobDamageRequest(data.data);
+          break;
+        case "mob_death":
+          this.handleMobDeath(data.data);
+          break;
+        case "mob_respawn":
+          this.handleMobRespawn(data.data);
+          break;
+        case "player_hit_by_mob":
+          this.handlePlayerHitByMob(data.data);
+          break;
+        case "player_level_up":
+          this.handlePlayerLevelUp(data.data);
+          break;
+        case "reactor_hit":
+          this.handleReactorHit(data.data);
+          break;
+        case "reactor_respawn":
+          this.handleReactorRespawn(data.data);
           break;
         case "error":
           console.error("Server error:", data.message);
@@ -459,17 +543,24 @@ class MySocket {
     }
   }
   
+  // Track players currently being loaded to prevent duplicate creation
+  private _loadingPlayers: Set<string> = new Set();
+
   async addOrUpdateOtherPlayer(playerData: PlayerState) {
     const playerId = playerData.id;
-    
+
     // Skip adding our own character
     if (playerId === this.playerId) return;
-    
+
     if (!this.otherPlayers.has(playerId)) {
+      // Prevent duplicate creation while async load is in progress
+      if (this._loadingPlayers.has(playerId)) return;
+      this._loadingPlayers.add(playerId);
+
       // Create a new player character
       try {
         console.log(`Creating new character for player ${playerId}`, playerData);
-        
+
         // Create character with proper initialization options
         const character = new MapleCharacter({
           id: playerId,
@@ -498,98 +589,103 @@ class MySocket {
         });
         // assign map to character
         character.map = MapleMap;
+        character.isRemote = true;
         // Set initial position
         character.pos = new Physics(playerData.x, playerData.y);
 
         
         
-        // Override physics update to make movement smoother
-        const originalUpdate = character.pos.update;
+        // Target position for interpolation
+        (character as any)._targetX = playerData.x;
+        (character as any)._targetY = playerData.y;
+
+        // Override physics update to lerp toward target position
         character.pos.update = function(msPerTick: number) {
-          // Simple physics that prioritizes visual smoothness over accuracy
-          
-          // Apply position changes based on velocity
-          this.x += this.vx * (msPerTick / 1000);
-          this.y += this.vy * (msPerTick / 1000);
-          
-          // Gradually reduce velocity (damping)
-          this.vx *= 0.9;
-          this.vy *= 0.9;
-          
-          // Stop completely if velocity is very small
-          if (Math.abs(this.vx) < 0.1) this.vx = 0;
-          if (Math.abs(this.vy) < 0.1) this.vy = 0;
+          const targetX = (character as any)._targetX;
+          const targetY = (character as any)._targetY;
+          if (targetX === undefined) return;
+
+          const dx = targetX - this.x;
+          const dy = targetY - this.y;
+
+          // Lerp factor — higher = snappier, 0.3 at 60fps ≈ reaches target in ~5 frames
+          const lerp = Math.min(1, 0.3 * (msPerTick / 16));
+
+          if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+            this.x = targetX;
+            this.y = targetY;
+          } else {
+            this.x += dx * lerp;
+            this.y += dy * lerp;
+          }
         };
         
         // Load assets for this character
         await character.load();
-        
+
+        // Properly initialize animation now that baseBody is loaded
+        // Force stance reset so setFrame() initializes nextDelay from WZ data
+        character.stance = '';  // Clear so setStance actually runs
+        character.setStance(playerData.stance || 'stand1', 0);
+
         // Attach basic equips
         try {
-          // Pants
           await character.attachEquip(5, 1060002);
-          // Shirt
           await character.attachEquip(4, 1040002);
-          // Beginner weapon
           await character.attachEquip(10, 1302000);
         } catch (error) {
           console.error("Failed to attach equipment to player:", error);
         }
-        
+
         // Add to tracking
         this.otherPlayers.set(playerId, character);
-        
+        this._loadingPlayers.delete(playerId);
+
         // Add to map characters
         MapleMap.characters.push(character);
-        
+
         console.log(`Added player ${character.name} to the map`);
       } catch (error) {
+        this._loadingPlayers.delete(playerId);
         console.error(`Failed to create character for player ${playerId}:`, error);
       }
     } else {
-      // Update existing player
+      // Update existing player — set target for lerp interpolation
       try {
         const character = this.otherPlayers.get(playerId)!;
-        
-        // Calculate movement vector for smooth interpolation
+
         const dx = playerData.x - character.pos.x;
         const dy = playerData.y - character.pos.y;
-        
-        // For large position changes (teleporting), update directly
-        const isLargeMovement = Math.abs(dx) > 100 || Math.abs(dy) > 100;
-        
-        if (isLargeMovement) {
+
+        // Teleport if too far
+        if (Math.abs(dx) > 200 || Math.abs(dy) > 200) {
           character.pos.x = playerData.x;
           character.pos.y = playerData.y;
-          character.pos.vx = 0;
-          character.pos.vy = 0;
-        } else {
-          // Set velocity for smooth movement (reach target in about 3-5 frames)
-          character.pos.vx = dx * 0.3;
-          character.pos.vy = dy * 0.3;
-          
-          // Cap maximum velocity
-          const maxSpeed = 300;
-          character.pos.vx = Math.max(Math.min(character.pos.vx, maxSpeed), -maxSpeed);
-          character.pos.vy = Math.max(Math.min(character.pos.vy, maxSpeed), -maxSpeed);
         }
-        
-        // Update appearance and animation state
-        if (playerData.stance) character.stance = playerData.stance;
-        if (playerData.frame !== undefined) character.frame = playerData.frame;
-        if (playerData.flipped !== undefined) character.flipped = playerData.flipped;
-        
-        // Handle attacking state
-        if (playerData.attacking && !character.isInAttack) {
-          // Trigger attack animation
-          if (character.attack && typeof character.attack === 'function') {
-            try {
-              character.attack();
-            } catch (error) {
-              console.error("Error animating attack:", error);
-            }
+
+        // Set lerp target
+        (character as any)._targetX = playerData.x;
+        (character as any)._targetY = playerData.y;
+
+        // Handle stance changes
+        if (playerData.stance) {
+          const isAttackStance = playerData.stance.startsWith('swing') ||
+            playerData.stance.startsWith('stab') ||
+            playerData.stance.startsWith('shoot');
+
+          if (isAttackStance && !character.isInAttack) {
+            // Play attack animation: complete once, then return to alert/stand
+            character.isInAttack = true;
+            character.setStance(playerData.stance, 0, true, false, () => {
+              character.isInAttack = false;
+              character.setStance('alert', 0);
+            });
+          } else if (!isAttackStance && !character.isInAttack && playerData.stance !== character.stance) {
+            // Normal stance change — only when not mid-attack
+            character.setStance(playerData.stance, 0);
           }
         }
+        if (playerData.flipped !== undefined) character.flipped = playerData.flipped;
       } catch (error) {
         console.error(`Failed to update character for player ${playerId}:`, error);
       }
@@ -612,47 +708,41 @@ class MySocket {
     
     if (this.otherPlayers.has(playerId)) {
       const character = this.otherPlayers.get(playerId)!;
-      
-      // Update position with smoother interpolation
+
+      // Set lerp target position
       if (playerData.x !== undefined && playerData.y !== undefined) {
-        // Calculate position difference
         const dx = playerData.x - character.pos.x;
         const dy = playerData.y - character.pos.y;
-        
-        // Handle large position changes (teleporting)
-        if (Math.abs(dx) > 100 || Math.abs(dy) > 100) {
+
+        // Teleport if too far
+        if (Math.abs(dx) > 200 || Math.abs(dy) > 200) {
           character.pos.x = playerData.x;
           character.pos.y = playerData.y;
-          character.pos.vx = 0;
-          character.pos.vy = 0;
-        } else {
-          // Set velocity for smoother movement
-          character.pos.vx = dx * 0.3;
-          character.pos.vy = dy * 0.3;
+        }
+
+        (character as any)._targetX = playerData.x;
+        (character as any)._targetY = playerData.y;
+      }
+
+      // Handle stance changes — detect attack stances specially
+      if (playerData.stance) {
+        const isAttackStance = playerData.stance.startsWith('swing') ||
+          playerData.stance.startsWith('stab') ||
+          playerData.stance.startsWith('shoot');
+
+        if (isAttackStance && !character.isInAttack) {
+          character.isInAttack = true;
+          character.setStance(playerData.stance, 0, true, false, () => {
+            character.isInAttack = false;
+            character.setStance('alert', 0);
+          });
+        } else if (!isAttackStance && !character.isInAttack && playerData.stance !== character.stance) {
+          character.setStance(playerData.stance, 0);
         }
       }
-      
-      // Important: Properly update stance and animation state
-      if (playerData.stance) {
-        character.setStance(playerData.stance, playerData.frame || 0);
-      }
-      
-      // Update flipped state (facing direction)
+
       if (playerData.flipped !== undefined) {
         character.flipped = playerData.flipped;
-      }
-      
-      // Handle foothold (ground) state
-      // This is crucial for fixing the "stuck in air" issue
-      if (playerData.onGround) {
-        // Set a foothold if player is on ground
-        if (!character.pos.fh) {
-          // Create a basic foothold if needed
-          character.pos.fh = { id: 1, x1: 0, x2: 1000, y1: character.pos.y, y2: character.pos.y };
-        }
-      } else {
-        // Clear foothold if player is in air
-        character.pos.fh = null;
       }
     }
   }
@@ -683,21 +773,7 @@ class MySocket {
   }
   
   handleMonsterDamage(data: any) {
-    const damageEvent = data.damage;
-    
-    // Skip events in other maps
-    if (Number(damageEvent.mapId) !== Number(MapleMap.id)) return;
-    
-    // Find the monster in our map
-    const monster = MapleMap.monsters.find(m => m.id === damageEvent.targetId);
-    
-    if (monster) {
-      // Apply damage from other player
-      if (damageEvent.sourceId !== this.playerId) {
-        // Apply the damage
-        monster.hit(damageEvent.damage, 1, null);
-      }
-    }
+    // Deprecated — mob damage is now handled via host model (mob_state_batch + mob_damage_request)
   }
   
   handleChatMessage(data: any) {
@@ -716,26 +792,287 @@ class MySocket {
     const player = this.otherPlayers.get(chatMessage.playerId);
     if (player) {
       try {
-        // Show chat balloon
+        // Show chat balloon — reset timer to 0 (elapsed time, not timestamp)
         player.chatMessage = chatMessage.message;
         player.showChatBalloon = true;
-        
-        // Hide after 5 seconds
-        player.chatBalloonTimer = Date.now();
+        player.chatBalloonTimer = 0;
         player.chatBalloonDuration = 5000;
-        
-        setTimeout(() => {
-          player.showChatBalloon = false;
-        }, 5000);
       } catch (error) {
         console.error("Error displaying chat message:", error);
       }
     }
   }
   
+  // --- Item Drop Sync ---
+
+  // Broadcast a drop to other players
+  sendItemDrop(itemId: number, amount: number, x: number, y: number, vx: number, vy: number, dropId: number) {
+    this.sendMessage({
+      type: 'item_drop',
+      data: {
+        dropId,
+        itemId,
+        amount,
+        x, y, vx, vy,
+        mapId: Number(MapleMap.id),
+      }
+    });
+  }
+
+  // Broadcast that we picked up a drop
+  sendItemPickup(dropId: number) {
+    this.sendMessage({
+      type: 'item_pickup',
+      data: {
+        dropId,
+        mapId: Number(MapleMap.id),
+      }
+    });
+  }
+
+  // Receive a drop from another player
+  async handleItemDrop(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+
+    try {
+      const dropItem = await DropItemSprite.fromOpts({
+        id: data.itemId,
+        amount: data.amount,
+        monster: {
+          pos: { x: data.x, y: data.y, vx: data.vx || 0, vy: data.vy || 0 }
+        }
+      });
+
+      if (!dropItem.destroyed) {
+        (dropItem as any)._netDropId = data.dropId;
+        MapleMap.addItemDrop(dropItem);
+      }
+    } catch (e) {
+      console.error('Error creating networked drop:', e);
+    }
+  }
+
+  // Receive a pickup event from another player — remove the drop locally
+  handleItemPickup(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+
+    const drop = MapleMap.itemDrops.find(
+      (d: DropItemSprite) => (d as any)._netDropId === data.dropId && !d.isAlreadyPickedUp
+    );
+    if (drop) {
+      drop.goToPlayer(0, 0);  // goToPlayer sets isAlreadyPickedUp internally
+    }
+  }
+
+  // --- Player Effects Sync ---
+
+  sendPlayerLevelUp() {
+    this.sendMessage({
+      type: 'player_level_up',
+      data: { mapId: Number(MapleMap.id) }
+    });
+  }
+
+  handlePlayerLevelUp(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    const player = this.otherPlayers.get(data.playerId);
+    if (player) {
+      player.playLevelUp();
+    }
+  }
+
+  // --- Reactor Sync ---
+
+  sendReactorHit(reactorOId: number) {
+    this.sendMessage({
+      type: 'reactor_hit',
+      data: { oId: reactorOId, mapId: Number(MapleMap.id) }
+    });
+  }
+
+  handleReactorHit(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    const reactor = MapleMap.reactors?.find((r: any) => r.oId === data.oId);
+    if (reactor && !reactor.destroyed) {
+      reactor.hit(true); // Remote hit — plays animation, skips drops
+    }
+  }
+
+  sendReactorRespawn(reactorOId: number) {
+    this.sendMessage({
+      type: 'reactor_respawn',
+      data: { oId: reactorOId, mapId: Number(MapleMap.id) }
+    });
+  }
+
+  handleReactorRespawn(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    const reactor = MapleMap.reactors?.find((r: any) => r.oId === data.oId);
+    if (reactor) {
+      reactor.reset();
+    }
+  }
+
+  // --- Mob Sync ---
+
+  handleMobHostAssign(data: any) {
+    this.isMobHost = data.isHost;
+    console.log(`[MOB] I am ${data.isHost ? '' : 'NOT '}the mob host`);
+    MapleMap.setMobHostMode(data.isHost);
+  }
+
+  // Host broadcasts mob state every ~66ms
+  sendMobStateBatch() {
+    if (!this.isMobHost || !this.isConnected) return;
+    const mobs = MapleMap.monsters
+      .filter((m: any) => !m.destroyed)
+      .map((m: any) => ({
+        oId: m.oId,
+        x: m.pos.x,
+        y: m.pos.y,
+        stance: typeof m.stance === 'string' ? m.stance : (m.stance?.name || 'stand'),
+        frame: m.frame,
+        flipped: m.flipped,
+        hp: m.hp,
+        maxHp: m.maxHp,
+        dying: m.dying,
+      }));
+    if (mobs.length === 0) return;
+    this.sendMessage({
+      type: 'mob_state_batch',
+      data: { mapId: Number(MapleMap.id), mobs }
+    });
+  }
+
+  // Non-host receives mob state batch — lerp positions, update stance
+  handleMobStateBatch(data: any) {
+    if (this.isMobHost) return;
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    for (const mobState of data.mobs) {
+      const mob = MapleMap.findMonsterByOId(mobState.oId);
+      if (!mob || mob.destroyed) continue;
+
+      // Ensure this mob is in remote mode
+      if (!mob.isRemote) {
+        mob.isRemote = true;
+      }
+
+      // Teleport if too far, else lerp
+      const dx = mobState.x - mob.pos.x;
+      const dy = mobState.y - mob.pos.y;
+      if (Math.abs(dx) > 300 || Math.abs(dy) > 300) {
+        mob.pos.x = mobState.x;
+        mob.pos.y = mobState.y;
+      }
+      mob._targetX = mobState.x;
+      mob._targetY = mobState.y;
+
+      // Update stance if changed (compare strings)
+      const stanceName = mobState.stance;
+      if (stanceName && mob.stances[stanceName] && mob.stance !== stanceName) {
+        mob.setStance(stanceName);
+      }
+      mob.flipped = mobState.flipped;
+      mob.hp = mobState.hp;
+      mob.maxHp = mobState.maxHp;
+
+      // Sync dying state
+      if (mobState.dying && !mob.dying) {
+        mob.hp = 0;
+        mob.dying = true;
+        mob.isMovementEnabled = false;
+        mob.setStance(mob.stances['die'] ? 'die' : 'die1');
+      }
+    }
+  }
+
+  // Host receives damage request from non-host
+  handleMobDamageRequest(data: any) {
+    if (!this.isMobHost) return;
+    const mob = MapleMap.findMonsterByOId(data.oId);
+    if (!mob || mob.destroyed || mob.dying) return;
+    // Apply damage on host — hit() handles HP, death, drops
+    mob.hit(data.damage, data.knockbackDir || 1, null);
+  }
+
+  // Non-host sends damage request to host (via server)
+  sendMobDamageRequest(oId: number, damage: number, knockbackDir: number) {
+    this.sendMessage({
+      type: 'mob_damage_request',
+      data: { oId, damage, knockbackDir, mapId: Number(MapleMap.id) }
+    });
+  }
+
+  // Host broadcasts mob death
+  sendMobDeath(oId: number) {
+    this.sendMessage({
+      type: 'mob_death',
+      data: { oId, mapId: Number(MapleMap.id) }
+    });
+  }
+
+  // Non-host receives mob death
+  handleMobDeath(data: any) {
+    if (this.isMobHost) return;
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    const mob = MapleMap.findMonsterByOId(data.oId);
+    if (!mob || mob.destroyed || mob.dying) return;
+    mob.hp = 0;
+    mob.dying = true;
+    mob.isMovementEnabled = false;
+    // Play death animation — die() without drops/EXP for remote
+    if (mob.stances['die1'] || mob.stances['die']) {
+      mob.setStance(mob.stances['die'] ? 'die' : 'die1');
+    }
+  }
+
+  // Host broadcasts mob respawn
+  sendMobRespawn(oId: number) {
+    this.sendMessage({
+      type: 'mob_respawn',
+      data: { oId, mapId: Number(MapleMap.id) }
+    });
+  }
+
+  // Non-host receives mob respawn
+  async handleMobRespawn(data: any) {
+    if (this.isMobHost) return;
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    const spawnDefs = MapleMap.getMonsterSpawnDefs();
+    const spawnDef = spawnDefs.find((s: any) => s.oId === data.oId);
+    if (spawnDef) {
+      await MapleMap.spawnMonster({ ...spawnDef });
+      // Mark newly spawned mob as remote
+      const mob = MapleMap.findMonsterByOId(data.oId);
+      if (mob) {
+        mob.isRemote = true;
+        mob._targetX = mob.pos.x;
+        mob._targetY = mob.pos.y;
+      }
+    }
+  }
+
+  // Broadcast when local player gets hit by mob
+  sendPlayerHitByMob(mobOId: number, damage: number, isMiss: boolean) {
+    this.sendMessage({
+      type: 'player_hit_by_mob',
+      data: { mobOId, damage, isMiss, mapId: Number(MapleMap.id) }
+    });
+  }
+
+  // Show damage indicator on remote player hit by mob
+  handlePlayerHitByMob(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    const player = this.otherPlayers.get(data.playerId);
+    if (player && player.DamageIndicator) {
+      const pos = { x: player.pos.x, y: player.pos.y - 40 };
+      player.DamageIndicator.addDamageIndicator(1, pos, data.isMiss ? 0 : data.damage);
+    }
+  }
+
   startUpdateLoop() {
     // Send position updates at regular intervals
-    const updateInterval = 100; // 100ms = 10 updates per second
+    const updateInterval = 33; // ~30 updates per second
     
     // Store previous position to only send updates when something changed
     let lastPosX = 0;
@@ -775,8 +1112,21 @@ class MySocket {
         console.error("Error in update loop:", error);
       }
     }, updateInterval);
+
+    // Mob state broadcast (host only, ~15/s)
+    setInterval(() => {
+      try {
+        if (this.isMobHost && this.isConnected) {
+          this.sendMobStateBatch();
+        }
+      } catch (error) {
+        console.error("Error in mob broadcast loop:", error);
+      }
+    }, 66);
   }
 }
 
 // Export a singleton instance
-export default new MySocket();
+const mySocketInstance = new MySocket();
+(window as any).__mySocket = mySocketInstance;
+export default mySocketInstance;

@@ -50,19 +50,22 @@ export interface QuestDialogue {
 const npcNames: Map<number, string> = new Map();
 const mobNames: Map<number, string> = new Map();
 const itemNames: Map<number, string> = new Map();
+const itemDescs: Map<number, string> = new Map();
 
 // Lazy-loaded item names from String.wz
 let itemNamesLoaded = false;
 
-// Recursively extract item names from a WZ node tree
+// Recursively extract item names and descriptions from a WZ node tree
 function extractItemNames(node: any) {
   if (!node?.nChildren) return;
   for (const child of node.nChildren) {
     const id = parseInt(child.nName);
     if (!isNaN(id)) {
-      // This is an item entry — get its name
+      // This is an item entry — get its name and description
       const nameNode = child.nGet?.('name');
       if (nameNode?.nValue) itemNames.set(id, nameNode.nValue);
+      const descNode = child.nGet?.('desc');
+      if (descNode?.nValue) itemDescs.set(id, descNode.nValue);
     } else {
       // This is a category folder (e.g., "Etc", "Eqp", "Accessory", "Armor") — recurse
       extractItemNames(child);
@@ -84,6 +87,10 @@ async function ensureItemNames() {
 
 function getItemNameSync(itemId: number): string {
   return itemNames.get(itemId) || 'item';
+}
+
+function getItemDescSync(itemId: number): string {
+  return itemDescs.get(itemId) || '';
 }
 
 // Resolve deferred #t and #c codes in text (call after ensureItemNames)
@@ -489,4 +496,4 @@ class QuestDataManager {
 
 const QuestData = new QuestDataManager();
 export default QuestData;
-export { mobNames, npcNames, itemNames, ensureItemNames, getItemNameSync };
+export { mobNames, npcNames, itemNames, ensureItemNames, getItemNameSync, getItemDescSync };
