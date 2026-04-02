@@ -39,10 +39,16 @@ class Background {
 
     this.ani = wzNode.nGet("ani").nGet("nValue", 0);
 
-    const bS = wzNode.bS.nValue;
-    const no = wzNode.no.nValue;
+    const bS = wzNode.bS?.nValue ?? wzNode.nGet('bS')?.nValue;
+    const no = wzNode.no?.nValue ?? wzNode.nGet('no')?.nValue;
+    if (!bS && bS !== 0) { this.frames = []; return; }
     const backFile: any = await WZManager.get(`Map.wz/Back/${bS}.img`);
-    const spriteNode = backFile[!this.ani ? "back" : "ani"][no];
+    if (!backFile) { this.frames = []; return; }
+    const category = backFile[!this.ani ? "back" : "ani"];
+    if (!category) { this.frames = []; return; }
+    const noKey = String(no);
+    const spriteNode = category[noKey] || category.nGet?.(noKey);
+    if (!spriteNode) { this.frames = []; return; }
 
     if (!this.ani) {
       this.frames = [spriteNode];
@@ -72,56 +78,39 @@ class Background {
     this.front = wzNode.nGet("front").nGet("nValue", 0);
     this.flipped = wzNode.nGet("f").nGet("nValue", 0);
 
+    // v83 background type mapping
+    // 0: no tile, no scroll
+    // 1: tile X, no scroll
+    // 2: tile Y, no scroll
+    // 3: tile X+Y, no scroll
+    // 4: scroll X, tile X
+    // 5: scroll Y, tile Y
+    // 6: scroll X, tile X+Y
+    // 7: scroll Y, tile X+Y
     this.tileX = false;
     this.tileY = false;
     switch (this.type) {
-      case 1: {
-      }
-      case 4: {
-        this.tileX = true;
-        break;
-      }
-      case 2: {
-      }
-      case 5: {
-        this.tileY = true;
-        break;
-      }
-      case 3: {
-      }
-      case 6: {
-      }
-      case 7: {
-        this.tileX = true;
-        this.tileY = true;
-        break;
-      }
+      case 1: case 4: this.tileX = true; break;
+      case 2: case 5: this.tileY = true; break;
+      case 3: case 6: case 7: this.tileX = true; this.tileY = true; break;
     }
 
     this.velocityX = 0;
     this.velocityY = 0;
     switch (this.type) {
-      case 4: {
-      }
-      case 6: {
-        this.velocityX = this.rx;
-        break;
-      }
-      case 5: {
-      }
-      case 7: {
-        this.velocityY = this.ry;
-        break;
-      }
+      case 4: case 6: this.velocityX = this.rx; break;
+      case 5: case 7: this.velocityY = this.ry; break;
     }
   }
   setFrame(frame = 0, carryOverDelay = 0) {
+    if (!this.frames || this.frames.length === 0) return;
     this.frame = !this.frames[frame] ? 0 : frame;
 
     this.delay = carryOverDelay;
-    this.nextDelay = this.frames[this.frame].nGet("delay").nGet("nValue", 100);
+    this.nextDelay = this.frames[this.frame]?.nGet?.("delay")?.nGet?.("nValue", 100) ?? 100;
   }
   update(msPerTick: number) {
+    if (!this.frames || this.frames.length === 0) return;
     this.delay += msPerTick;
     if (this.delay > this.nextDelay) {
       this.setFrame(this.frame + 1, this.delay - this.nextDelay);
@@ -134,8 +123,10 @@ class Background {
     msPerTick: number,
     tdelta: number
   ) {
+    if (!this.frames || this.frames.length === 0) return;
     const firstFrame = this.frames[0];
     const currentFrame = this.frames[this.frame];
+    if (!currentFrame) return;
     const currentImage = currentFrame.nGetImage();
     let dx = this.x;
     let dy = this.y;

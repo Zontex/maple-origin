@@ -895,6 +895,8 @@ isCloseToMob = (inAllDirections = true) => {
   }
 
   async checkForPortal() {
+    if (this.isInPortal) return;
+
     const portal = this.map!.portals.filter(
       (portal: Portal) => portal.rect
     ).find((portal: Portal) => {
@@ -907,9 +909,11 @@ isCloseToMob = (inAllDirections = true) => {
       );
     });
 
-    console.log("chosenxportal", portal);
-    if (portal && !this.isInPortal) {
-      this.isInPortal = true;
+    if (!portal) return;
+
+    this.isInPortal = true;
+
+    try {
       const jumpNode: any = await WZManager.get("Sound.wz/Game.img/Portal");
       const jumpAudio: any = jumpNode.nGetAudio();
       PLAY_AUDIO(jumpAudio);
@@ -920,26 +924,40 @@ isCloseToMob = (inAllDirections = true) => {
         await this.map!.load(portal.toMap);
       }
 
+      // Find the destination portal by name
       const othersidePortal = this.map!.portals.find(
         (newMapPortals: Portal) => {
           return newMapPortals.name === portal.toName;
         }
       );
 
+      // Reset physics and place character at destination
+      this.pos = new Physics();
+      this.pos.vx = 0;
+      this.pos.vy = 0;
+      this.pos.fh = null;
+      this.pos.lf = null;
+      this.pos.isClimbing = false;
+
       if (othersidePortal) {
-        setTimeout(() => {
-          this.pos = new Physics();
-          this.pos.x = othersidePortal.x;
-          this.pos.y = othersidePortal.y - 10;
-        }, 50);
-
-        setTimeout(() => {
-          this.isInPortal = false;
-        }, 1000);
-
-        console.log("position changed", this.pos.x, this.pos.y);
+        this.pos.x = othersidePortal.x;
+        this.pos.y = othersidePortal.y - 10;
+      } else {
+        // Fallback: spawn portal, or center of map
+        const spawnPortal = this.map!.portals.find((p: Portal) => p.type === 0);
+        if (spawnPortal) {
+          this.pos.x = spawnPortal.x;
+          this.pos.y = spawnPortal.y - 10;
+        }
       }
+    } catch (error) {
+      console.error('Portal transition failed:', error);
     }
+
+    // Always reset after a delay so portals can be used again
+    setTimeout(() => {
+      this.isInPortal = false;
+    }, 1000);
   }
 
   async upClick() {

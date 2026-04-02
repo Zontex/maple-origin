@@ -6,3 +6,15 @@ dist
 
 # WZ game data — too large for git, distribute separately
 TypeScript-Client/public/wz_client/
+
+# SQLite database
+*.db
+*.db-wal
+*.db-shm
+
+# WZ parser (clone separately)
+tools/wz-parser/
+
+# Python cache
+__pycache__/
+*.pyc

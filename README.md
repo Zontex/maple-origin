@@ -21,10 +21,20 @@ A 1:1 recreation of pre-Big Bang **MapleStory v83** — running entirely in the 
 - WZ game data (see below)
 
 ### WZ Data Setup
-The WZ game data (~3.8GB of JSON files) is not included in this repo. Place the `wz_client/` folder at:
+The WZ game data (~3.4GB of JSON files) is not included in this repo. You need authentic v83 `.wz` files, then convert them:
+
+```bash
+# 1. Place v83 .wz files in a folder (e.g., 83/)
+# 2. Install the WZ parser
+cd tools/wz-parser && npm install && npx coffee -c parser/*.coffee && cd ../..
+
+# 3. Convert each .wz file to JSON
+node tools/wz-to-json.js 83/UI.wz TypeScript-Client/public/wz_client/UI.wz/
+node tools/wz-to-json.js 83/Map.wz TypeScript-Client/public/wz_client/Map.wz/
+# ... repeat for all 17 .wz files (String, Quest, Etc, Character, Mob, Npc, etc.)
 ```
-TypeScript-Client/public/wz_client/
-```
+
+The JSON files go to `TypeScript-Client/public/wz_client/`.
 
 ### Install & Run
 
@@ -37,9 +47,11 @@ cd TypeScript-Client && npm install && cd ..
 cd TypeScript-Client && npm run dev
 # → http://localhost:5173
 
-# Start multiplayer server (separate terminal)
+# Start server (separate terminal)
 npm run dev
-# → WebSocket on port 3001
+# → WebSocket + SQLite on port 3001
+
+# Login with: admin / admin
 ```
 
 ### Production Build
@@ -81,7 +93,10 @@ npm start
 
 ### Character System
 - Full **sprite composition** — body, head, hair, face, equipment layers (z-sorted)
-- **Login flow** — login screen, world/channel select, character select, character creation
+- **Login flow** — authentic v83 login screen, world/channel select, character select with equipment preview, 3-stage character creation (race select → name → customize)
+- **User accounts** — SQLite database with bcrypt authentication, character persistence (stats, inventory, equipment, quests, map position)
+- **Character creation** — race selection (Explorers/Cygnus Knights/Aran), name validation, face/hair/skin/clothes/weapon/gender customization with live preview
+- **Auto-save** — character state saved on map change, every 60s, on disconnect, and on browser close
 - **Death system** — dead stance, tombstone animation + SFX, revival dialog, respawn at nearest town
 - **Stats menu** with AP allocation
 - **EXP and leveling** with level-up animation and sound
@@ -157,7 +172,7 @@ MapleWeb/
 │   │   ├── Monster.ts          # Enemy AI, HP, drops, animations
 │   │   ├── Reactor.ts          # Breakable map objects
 │   │   ├── NPC.ts              # NPC rendering, dialogue, taxi
-│   │   ├── mysocket.ts         # WebSocket multiplayer (player, mob, drop, reactor sync)
+│   │   ├── mysocket.ts         # WebSocket client (auth, multiplayer, character save)
 │   │   ├── Physics/            # Movement, collision, climbing
 │   │   ├── Stats/              # Damage formulas, AP system
 │   │   ├── Inventory/          # 5-tab inventory, items, mesos
@@ -167,11 +182,21 @@ MapleWeb/
 │   │   ├── Effects/            # Damage numbers, level up, IncEXP
 │   │   └── wz-utils/           # WZManager, WZNode (JSON WZ parsing)
 │   └── public/wz_client/       # 22K+ JSON files from WZ archives
+├── server/                     # Backend server modules
+│   ├── db.js                   # SQLite database (WAL mode, schema init)
+│   ├── worlds.js               # v83 world list (Scania, Bera, Broa, etc.)
+│   └── models/
+│       ├── User.js             # Registration, login (bcrypt)
+│       └── Character.js        # Character CRUD, inventory, equipment, quests
+├── server.js                   # WebSocket server (auth, multiplayer relay, auto-save)
 ├── backend/                    # Cosmic Java v83 emulator (reference for TS port)
 │   ├── src/                    # 857 Java files, 30+ game systems
 │   └── scripts/                # 1,823 JS scripts (NPC, quest, portal, event)
-├── server.js                   # WebSocket server (host tracking, message relay)
-└── tools/wz_explorer.py        # WZ asset browser (Flask, port 5555)
+└── tools/
+    ├── wz-to-json.js           # WZ binary → JSON converter (uses wz-parser)
+    ├── wz-parser/              # MapleStory-node-resources WZ parser
+    ├── wz_scripts/             # XML → JSON converter (alternative pipeline)
+    └── wz_explorer.py          # WZ asset browser (Flask, port 5555)
 ```
 
 ### Key Design Principle
@@ -285,7 +310,7 @@ The full [Cosmic](https://github.com/P0nk/Cosmic) Java v83 emulator lives in `ba
 | Scripts | 1,823 (708 NPC, 253 quest, 458 portal, 292 reactor, 108 event) |
 | Game systems | 30+ (guilds, marriage, PQs, cash shop, trading, etc.) |
 
-**Phase 1** — Project scaffold, WebSocket protocol, database layer, authentication, character CRUD
+**Phase 1** ✅ — Project scaffold, WebSocket protocol, SQLite database, bcrypt authentication, character CRUD, inventory/equipment persistence, auto-save
 
 **Phase 2** — Server-authoritative movement, monster AI, damage validation, inventory management, drop system, EXP/leveling
 
@@ -313,12 +338,13 @@ The full [Cosmic](https://github.com/P0nk/Cosmic) Java v83 emulator lives in `ba
 
 ## Communication with Server
 
-Set `VITE_WEBSOCKET_URL` in `.env` to the WebSocket URL. Without it, the game runs in local/offline mode for UI development.
+The client connects to the WebSocket server automatically on login. The server handles:
+- **Authentication** — login/register via WebSocket messages, bcrypt password hashing
+- **Character persistence** — SQLite database stores stats, inventory, equipment, quests, map position
+- **Multiplayer relay** — player sync, mob host system, item drops, chat, reactors
+- **Auto-save** — characters saved on disconnect, map change, every 60s, and server shutdown
 
-For connecting to a traditional TCP-based server emulator, use [websocat](https://github.com/vi/websocat) as a protocol converter:
-```bash
-websocat --binary ws-l:127.0.0.1:8089 tcp:127.0.0.1:8484
-```
+Default login: `admin` / `admin`. Registration is disabled by default.
 
 ---
 

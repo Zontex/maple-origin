@@ -18,6 +18,7 @@ import ShopUI from "./UI/ShopUI";
 import WZManager from "./wz-utils/WZManager";
 import UIMiniMap from "./UI/UIMiniMap";
 import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
+import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 
 // henesys 100000000
@@ -142,6 +143,8 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
 }
 
 MapStateInstance.changeMap = async function (map = defaultMap, portalName?: string) {
+  // Auto-save character before map transition
+  MySocket.saveCharacterToServer();
   await initializeMapState(map, false, portalName);
 };
 
@@ -189,6 +192,12 @@ MapStateInstance.getMapName = async function(mapId: number) {
 };
 
 MapStateInstance.initialize = async function (map: number = defaultMap) {
+  // Use saved map override from character select if available
+  if ((this as any)._startMapOverride) {
+    map = (this as any)._startMapOverride;
+    delete (this as any)._startMapOverride;
+  }
+
   // Ensure quest data is loaded before map (NPCs need it for indicators)
   if (MyCharacter.questManager) {
     await MyCharacter.questManager.initialize();

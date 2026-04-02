@@ -218,6 +218,10 @@ export default class NpcScriptEngine {
       getMaxMp() { return character?.maxMp ?? 100; },
       getLevel() { return character?.stats?.level ?? 1; },
       getName() { return character?.name || 'Player'; },
+      getStr() { return character?.stats?.str ?? 4; },
+      getDex() { return character?.stats?.dex ?? 4; },
+      getInt() { return character?.stats?.int ?? 4; },
+      getLuk() { return character?.stats?.luk ?? 4; },
       getJob() {
         const jobId = character?.stats?.jobId ?? 0;
         return { getId() { return jobId; }, id: jobId };

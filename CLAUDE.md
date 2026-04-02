@@ -12,10 +12,19 @@ npm install
 npm run dev          # Vite dev server at http://localhost:5173
 ```
 
-### Server (multiplayer)
+### Server (auth + multiplayer + persistence)
 ```bash
 npm install
-npm run dev          # WebSocket server at http://localhost:3001
+npm run dev          # WebSocket + SQLite server at http://localhost:3001
+# Login: admin / admin
+```
+
+### WZ Conversion
+```bash
+# Convert v83 .wz binary files to JSON (requires Node.js)
+cd tools/wz-parser && npm install && npx coffee -c parser/*.coffee && cd ../..
+node tools/wz-to-json.js 83/UI.wz TypeScript-Client/public/wz_client/UI.wz/
+# Repeat for all 17 .wz files
 ```
 
 ### Tools
@@ -55,10 +64,10 @@ python3 tools/wz_explorer.py  # WZ asset explorer at http://localhost:5555
 
 ### Login Map Structure
 The login screen is a single tall vertical map (`UI.wz/MapLogin.img`) with sections at different Y positions:
-- **Login Screen**: Camera at `{ x: -372, y: -308 }`
-- **World Select**: Camera at `{ x: -372, y: -914 }`
-- **Character Select**: Camera at `{ x: -372, y: -1544 }`
-- **Create Character**: Camera at `{ x: -372, y: -2723 }`
+- **Login Screen**: Camera at `{ x: -370, y: -305 }`
+- **World Select**: Camera at `{ x: -375, y: -900 }`
+- **Character Select**: Camera at `{ x: -375, y: -1525 }`
+- **Create Character**: Camera at `{ x: -375, y: -3325 }`
 - Camera transitions use easing via `Camera.setTopLeft()` + `Camera.update()` called every frame in GameLoop
 
 ## Architecture Overview
@@ -123,8 +132,18 @@ Data
 ├── Constants/           → ExpTable, Jobs, EquipType, DropData
 ```
 
-### Server (server.js — current)
-Node.js WebSocket server with host-client multiplayer model:
+### Server (server.js + server/ modules)
+Node.js WebSocket server with authentication, persistence, and multiplayer:
+
+**Authentication & Persistence (SQLite via better-sqlite3):**
+- `server/db.js` — SQLite schema (users, characters, inventory_items, equipped_items, quests)
+- `server/models/User.js` — register (bcrypt), login, validation
+- `server/models/Character.js` — CRUD, save/load with inventory+equipment+quests, per-world character list
+- `server/worlds.js` — v83 world list (Scania, Bera, Broa, Windia, Khaini, Bellocan, Mardia, Kradia)
+- Auto-save on disconnect, map change, every 60s, browser close, server shutdown (SIGINT/SIGTERM)
+- Default login: `admin` / `admin` (registration disabled)
+
+**Multiplayer Relay:**
 - Player join/leave/update synchronization (position, stance, animation)
 - **Mob host system** — one player per map runs mob AI, broadcasts state; server tracks `mapHosts` map and handles host assignment/reassignment
 - Item drop/pickup relay — drops broadcast to all players, pickups remove items on all clients
@@ -133,15 +152,12 @@ Node.js WebSocket server with host-client multiplayer model:
 - Level up and contact damage event relay
 - Rate limiting (only `player_update` throttled, all other messages always processed)
 - Remote logging — `client_log` messages from browser clients printed to server console
-- **NOT an authoritative game server** — client does game logic, server relays and tracks hosts
 
 ### Server (planned — Cosmic port)
 Port of [Cosmic](https://github.com/P0nk/Cosmic) Java v83 emulator to TypeScript:
 - Authoritative game logic
-- Character persistence (database)
 - Server-side validation
 - Quest/skill/job systems
-- Proper authentication
 - Map instance management
 
 ### WZ Data (TypeScript-Client/public/wz_client/)
@@ -199,6 +215,28 @@ Port of [Cosmic](https://github.com/P0nk/Cosmic) Java v83 emulator to TypeScript
 - **Comments**: JSDoc for public methods; inline comments for complex logic
 - **Constants**: Store in dedicated files within Constants directory
 - **Organization**: Group related functionality in directories (UI, Physics, etc.)
+
+## WZ Converter Tool
+`tools/wz-to-json.js` converts v83 `.wz` binary files to JSON format:
+```bash
+node tools/wz-to-json.js <input.wz> <output_dir>
+```
+- Uses `tools/wz-parser/` (MapleStory-node-resources) for WZ parsing
+- Outputs `$imgdir`/`$canvas`/`$$` JSON format with base64 PNG images and MP3 audio
+- JSON property naming: use `value` (not `nValue`), `x`/`y` (not `nX`/`nY`) — WZNode constructor adds the `n` prefix
+- Supports pixel formats: form 1 (BGRA4444), form 2 (BGRA8888), form 513 (BGR565)
+
+### Background Type Mapping (Critical)
+| Type | Tile X | Tile Y | Velocity |
+|------|--------|--------|----------|
+| 0 | no | no | none |
+| 1 | yes | no | none |
+| 2 | no | yes | none |
+| 3 | yes | yes | none |
+| 4 | yes | no | scroll X |
+| 5 | no | yes | scroll Y |
+| 6 | yes | yes | scroll X |
+| 7 | yes | yes | scroll Y |
 
 ## Debugging Tips
 - **F9 key** toggles DebugDrag mode — shows green boxes around registered UI elements, click to select (turns red), drag to reposition, offset logged to console

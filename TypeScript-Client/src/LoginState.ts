@@ -16,11 +16,12 @@ export enum LoginSubState {
   CREATE_CHARACTER = 'CREATE_CHARACTER',
 }
 
+// v83 MapLogin camera positions (found via debug tool)
 const LOGIN_CAMERA_POSITIONS = {
-  [LoginSubState.LOGIN_SCREEN]: { x: -372, y: -308 },
-  [LoginSubState.WORLD_SELECT]: { x: -372, y: -914 },
-  [LoginSubState.CHARACTER_SELECT]: { x: -372, y: -1544 },
-  [LoginSubState.CREATE_CHARACTER]: { x: -372, y: -2723 },
+  [LoginSubState.LOGIN_SCREEN]: { x: -370, y: -305 },
+  [LoginSubState.WORLD_SELECT]: { x: -375, y: -900 },
+  [LoginSubState.CHARACTER_SELECT]: { x: -375, y: -1525 },
+  [LoginSubState.CREATE_CHARACTER]: { x: -375, y: -3325 },
 };
 
 interface LoginState extends UIState {
@@ -43,7 +44,7 @@ const LoginState: LoginState = {
 
     // Extend camera boundaries to allow scrolling to all login screen sections
     // (the map footholds don't cover the create character area)
-    Camera.setBoundaries({ left: -800, right: 800, top: -3500, bottom: 800 });
+    Camera.setBoundaries({ left: -800, right: 1600, top: -5000, bottom: 1200 });
 
     const initialPos = LOGIN_CAMERA_POSITIONS[LoginSubState.LOGIN_SCREEN];
     Camera.setTopLeft(initialPos.x, initialPos.y);
@@ -115,13 +116,26 @@ const LoginState: LoginState = {
 
   async enterGame(): Promise<void> {
     UILogin.removeInputs();
+
+    // Set starting map from saved character data (MapState.initialize reads this)
+    const startMapId = (MyCharacter as any)._startMapId;
+    if (startMapId) {
+      (MapState as any)._startMapOverride = startMapId;
+    }
+
     await StateManager.setState(MapState);
     MapleMap.PlayerCharacter = MyCharacter;
 
-    // Connect to multiplayer server if configured
-    if (config.websocketUrl) {
-      await MySocket.initialize();
+    // Set saved position if available
+    const posX = (MyCharacter as any)._startPosX;
+    const posY = (MyCharacter as any)._startPosY;
+    if (posX !== undefined && posY !== undefined) {
+      MyCharacter.pos.x = posX;
+      MyCharacter.pos.y = posY;
     }
+
+    // Initialize multiplayer (update loop, player info) — socket is already connected from login
+    await MySocket.initialize();
   },
 };
 

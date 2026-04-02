@@ -60,9 +60,11 @@ class MapleInput {
     input.style.fontSize = `${fontSize * scaleY}px`;
     input.style.cursor = cursor;
     input.style.position = "fixed";
-
-    // debug
-    // input.style.border = "1px solid red";
+    input.style.outline = "none";
+    input.style.boxShadow = "none";
+    input.style.padding = "0";
+    input.style.caretColor = color;
+    input.style.zIndex = "10";
 
     input.type = type;
 

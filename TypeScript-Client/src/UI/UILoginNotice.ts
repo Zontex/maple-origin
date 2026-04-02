@@ -112,6 +112,7 @@ export default class UILoginNotice {
       img: this.uiLoginNotice.BtYes.nChildren,
       onClick: () => {
         this.setIsHidden(true);
+        if (this.okHandler) this.okHandler();
       },
     });
     this.buttons.push(okButton);

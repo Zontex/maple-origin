@@ -10,8 +10,8 @@ import Camera from '../Camera';
 import WZNode from '../wz-utils/WZNode';
 import FrameAnimation from './FrameAnimation';
 import MapleButton from './MapleButton';
-import LoginPacket from '../Net/Packets/LoginPacket';
 import UILoginNotice, { NoticeType, NoticeMessage } from './UILoginNotice';
+import MySocket from '../mysocket';
 import UILoginTOS from './UILoginTOS';
 import config from '../Config';
 import MapleStandingCharacter from '../MapleStandingCharacter';
@@ -141,6 +141,12 @@ interface UILoginInterface {
   _diceAnimDelay: number;
   _diceRolling: boolean;
   _clickConsumed: boolean;
+  loadCharactersFromServer: () => Promise<void>;
+  createCharStage: 'raceSelect' | 'nameEntry' | 'charCustomize';
+  selectedRace: 'normal' | 'knight' | 'aran';
+  _drawRaceSelect: (canvas: any, mx: number, my: number, clicked: boolean, msPerTick: number) => void;
+  _drawNameEntry: (canvas: any, mx: number, my: number, clicked: boolean) => void;
+  _drawCharCustomize: (canvas: any, camera: any, mx: number, my: number, clicked: boolean, msPerTick: number, tdelta: number) => void;
 }
 
 const UILogin = {} as UILoginInterface;
@@ -154,15 +160,6 @@ UILogin.initialize = async function (canvas: GameCanvas) {
   this.selectedChannelIndex = null;
   this.characters = [];
   this.selectedCharIndex = 0;
-  // Load default character for char select preview
-  MapleStandingCharacter.fromAppearance({
-    name: 'Player',
-    skinColor: 0,
-    hairId: 30030,
-    faceId: 20000,
-    flipped: true,
-    equipIds: [1040002, 1060002, 1302000],
-  }).then(ch => { this.characters = [ch]; }).catch(() => {});
   this.charAnimFrame = 0;
   this.charAnimDelay = 0;
   this.charSelected = false;
@@ -251,21 +248,87 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     stance: 'disabled',
     onClick: async () => {
       if (!uiLoginRef.charSelected) return;
-      // Apply selected character's appearance to MyCharacter
       const selectedChar = uiLoginRef.characters[uiLoginRef.selectedCharIndex];
-      if (selectedChar) {
-        const MyChar = (await import('../MyCharacter')).default;
-        MyChar.name = selectedChar.name || 'Player';
-        await MyChar.setSkinColor(selectedChar.skinColor ?? 0);
-        await MyChar.setFace(selectedChar.faceId ?? 20000);
-        await MyChar.setHair(selectedChar.hairId ?? 30030);
-        // Apply equips from the selected character
-        MyChar.equips = [];
-        const equipSlots = selectedChar.equippedIdsBySlot || {};
-        for (const [slot, id] of Object.entries(equipSlots)) {
-          if (id) await MyChar.attachEquip(Number(slot), id as number);
+      if (!selectedChar || !selectedChar._serverId) return;
+
+      // Load full character data from server
+      const result = await MySocket.selectCharacter(selectedChar._serverId);
+      if (!result.success || !result.character) {
+        console.error('Failed to select character:', result.error);
+        return;
+      }
+
+      const charData = result.character;
+      const MyChar = (await import('../MyCharacter')).default;
+
+      // Apply appearance
+      MyChar.name = charData.name || 'Player';
+      await MyChar.setSkinColor(charData.skin ?? 0);
+      await MyChar.setFace(charData.face ?? 20000);
+      await MyChar.setHair(charData.hair ?? 30030);
+
+      // Apply stats
+      MyChar.hp = charData.hp;
+      MyChar.maxHp = charData.maxHp;
+      MyChar.mp = charData.mp;
+      MyChar.maxMp = charData.maxMp;
+      MyChar.fame = charData.fame ?? 0;
+      if (MyChar.stats) {
+        MyChar.stats.level = charData.stats.level;
+        MyChar.stats.str = charData.stats.str;
+        MyChar.stats.dex = charData.stats.dex;
+        MyChar.stats.int = charData.stats.int;
+        MyChar.stats.luk = charData.stats.luk;
+        MyChar.stats.abilityPoints = charData.stats.ap;
+        MyChar.stats.maxHp = charData.stats.maxHp;
+        MyChar.stats.maxMp = charData.stats.maxMp;
+        MyChar.stats.jobId = charData.stats.jobId;
+      }
+
+      // Apply equipped items
+      MyChar.equips = [];
+      if (charData.equipped) {
+        for (const eq of charData.equipped) {
+          await MyChar.attachEquip(eq.slot, eq.item_id);
         }
       }
+
+      // Apply inventory
+      if (MyChar.inventory && charData.inventory) {
+        const Item = (await import('../Inventory/Item')).default;
+        for (const tab of ['equip', 'use', 'setup', 'etc', 'cash'] as const) {
+          const items = charData.inventory[tab] || [];
+          (MyChar.inventory as any)[tab] = [];
+          for (const item of items) {
+            if (item && item.itemId) {
+              try {
+                const itemObj = await Item.fromOpts({ itemId: item.itemId, quantity: item.quantity });
+                (MyChar.inventory as any)[tab].push(itemObj);
+              } catch { /* skip failed items */ }
+            }
+          }
+        }
+        MyChar.inventory.mesos = charData.mesos ?? 0;
+      }
+
+      // Apply quests
+      if (MyChar.questManager && charData.quests) {
+        for (const q of charData.quests) {
+          if (q.state === 2) {
+            MyChar.questManager.forceCompleteQuest(q.quest_id);
+          } else if (q.state === 1) {
+            MyChar.questManager.forceStartQuest(q.quest_id);
+          }
+        }
+      }
+
+      // Store server character ID for saving later
+      (MyChar as any)._serverCharId = charData.id;
+      // Set starting map from saved data
+      (MyChar as any)._startMapId = charData.mapId;
+      (MyChar as any)._startPosX = charData.posX;
+      (MyChar as any)._startPosY = charData.posY;
+
       await LoginState.enterGame();
     },
   });
@@ -291,7 +354,13 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     y: -1275,
     img: this.uiLogin.nGet('CharSelect').nGet('BtDelete').nChildren,
     onClick: async () => {
-      console.log('Delete character button clicked!');
+      if (!uiLoginRef.charSelected) return;
+      const selectedChar = uiLoginRef.characters[uiLoginRef.selectedCharIndex];
+      if (!selectedChar || !selectedChar._serverId) return;
+      const result = await MySocket.deleteCharacter(selectedChar._serverId);
+      if (result.success) {
+        await uiLoginRef.loadCharactersFromServer();
+      }
     },
   });
   ClickManager.addButton(deleteCharacterButton);
@@ -327,6 +396,8 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     y: -470,
     img: this.uiLogin.nGet('WorldSelect')?.BtGoworld.nChildren,
     onClick: async () => {
+      // Fetch characters for selected world from server
+      await uiLoginRef.loadCharactersFromServer();
       await LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
     },
     isHidden: true
@@ -376,6 +447,30 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     y: -85,
     img: this.uiLogin.nGet('Title').nGet('BtLogin').nChildren,
     onClick: async () => {
+      const username = this.inputUsn?.input?.value?.trim() || '';
+      const password = this.inputPwd?.input?.value || '';
+
+      if (!username || !password) {
+        this.showNotice(NoticeType.NORMAL, NoticeMessage.INCORRECT_LOGIN_ID);
+        return;
+      }
+
+      // Connect to server if not already connected
+      try {
+        await MySocket.connectForLogin();
+      } catch {
+        this.showNotice(NoticeType.NORMAL, NoticeMessage.UNABLE_TO_CONNECT_GAME_SERVER);
+        return;
+      }
+
+      // Authenticate
+      const result = await MySocket.sendLogin(username, password);
+      if (!result.success) {
+        this.showNotice(NoticeType.ABNORMAL, NoticeMessage.PASSWORD_IS_INCORRECT);
+        return;
+      }
+
+      // Login succeeded — proceed to world select
       await LoginState.switchToSubState(LoginSubState.WORLD_SELECT);
       viewAllCharacterButton.isHidden = false;
       channelBackButton.isHidden = false;
@@ -666,8 +761,6 @@ UILogin.removeInputs = function () {
 };
 
 UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) {
-  if (this.characters.length === 0) return;
-
   // Keep start button disabled until character is selected
   if (this.startButton && !this.charSelected) {
     this.startButton.stance = 'disabled';
@@ -998,6 +1091,8 @@ UILogin.initCreateCharacter = function () {
   this._diceAnimDelay = 0;
   this._diceRolling = false;
   this._clickConsumed = false;
+  this.createCharStage = 'raceSelect';
+  this.selectedRace = 'normal';
   DebugDrag.clear();
 
   // Hide all login UI buttons so they don't interfere with create char UI
@@ -1009,10 +1104,11 @@ UILogin.initCreateCharacter = function () {
     faces: [20000, 20001, 20002],
     hairs: [30030, 30020, 30000],
     hairColors: [0, 1, 2, 3, 4, 5, 6, 7],
-    skinColors: [0, 1, 2, 3, 4, 5, 6, 7],
+    skinColors: [0, 1, 2, 3, 4, 5, 9],
     tops: [1040002, 1040006, 1040010],
     bottoms: [1060002, 1060006],
     shoes: [1072001, 1072005, 1072037, 1072038],
+    weapons: [1302000, 1322005, 1312004],
     faceIndex: 0,
     hairIndex: 0,
     hairColorIndex: 0,
@@ -1020,45 +1116,55 @@ UILogin.initCreateCharacter = function () {
     topIndex: 0,
     bottomIndex: 0,
     shoesIndex: 0,
+    weaponIndex: 0,
+    gender: 0,
   };
 
-  // Roll initial stats
-  this.newCharStats = Random.generateDiceRollStats();
-
-  // Keyboard handler for name input
+  // Keyboard handler for name input (only active in nameEntry and charCustomize stages)
   this._createCharKeyHandler = (e: KeyboardEvent) => {
+    if (this.createCharStage === 'raceSelect') return;
+    if (this.createCharStage !== 'nameEntry' && this.createCharStage !== 'charCustomize') return;
+
     if (e.key === 'Backspace') {
       this.newCharName = this.newCharName.slice(0, -1);
       e.preventDefault();
       e.stopPropagation();
     } else if (e.key === 'Enter') {
-      if (this.newCharName.trim().length > 0) {
+      // Only confirm on Enter in charCustomize stage
+      if (this.createCharStage === 'charCustomize' && this.newCharName.trim().length > 0) {
         this.confirmCreateCharacter();
+      } else if (this.createCharStage === 'nameEntry' && this.newCharName.trim().length > 0) {
+        this.createCharStage = 'charCustomize';
+        // Create preview character when entering customization
+        const o = this.newCharOptions;
+        MapleStandingCharacter.fromAppearance({
+          name: this.newCharName,
+          skinColor: o.skinColors[0],
+          hairId: o.hairs[0] + o.hairColors[0],
+          faceId: o.faces[0],
+          flipped: true,
+          equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
+        }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
       }
       e.preventDefault();
       e.stopPropagation();
     } else if (e.key === 'Escape') {
-      LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
+      if (this.createCharStage === 'charCustomize') {
+        this.createCharStage = 'nameEntry';
+      } else if (this.createCharStage === 'nameEntry') {
+        this.createCharStage = 'raceSelect';
+      } else {
+        LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
+      }
       e.preventDefault();
       e.stopPropagation();
-    } else if (e.key.length === 1 && this.newCharName.length < 12) {
+    } else if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key) && this.newCharName.length < 12) {
       this.newCharName += e.key;
       e.preventDefault();
       e.stopPropagation();
     }
   };
   window.addEventListener('keydown', this._createCharKeyHandler, true);
-
-  // Create preview character
-  const o = this.newCharOptions;
-  MapleStandingCharacter.fromAppearance({
-    name: '',
-    skinColor: o.skinColors[0],
-    hairId: o.hairs[0] + o.hairColors[0],
-    faceId: o.faces[0],
-    flipped: true,
-    equipIds: [o.tops[0], o.bottoms[0], o.shoes[0]],
-  }).then(ch => { this.newChar = ch; }).catch(() => {});
 };
 
 UILogin.cleanupCreateCharacter = function () {
@@ -1077,30 +1183,41 @@ UILogin.cleanupCreateCharacter = function () {
   this.behindFrameButtons.forEach((btn: any) => { btn.isHidden = false; });
 };
 
-UILogin.confirmCreateCharacter = function () {
+UILogin.confirmCreateCharacter = async function () {
   if (this.characters.length >= 3) return;
   // Use default name if none entered
   if (!this.newCharName || this.newCharName.trim().length === 0) {
-    this.newCharName = 'Beginner';
+    this.showNotice(NoticeType.NORMAL, NoticeMessage.CANNOT_USE_NAME);
+    return;
   }
   const o = this.newCharOptions;
-  const appearance = {
-    name: this.newCharName.trim(),
-    skinColor: o.skinColors[o.skinIndex],
-    hairId: o.hairs[o.hairIndex] + o.hairColors[o.hairColorIndex],
-    faceId: o.faces[o.faceIndex],
-    flipped: true,
-    equipIds: [o.tops[o.topIndex], o.bottoms[o.bottomIndex], o.shoes[o.shoesIndex]],
-  };
-  console.log('Create character:', appearance, 'stats:', this.newCharStats);
+  const name = this.newCharName.trim();
+  const hair = o.hairs[o.hairIndex] + o.hairColors[o.hairColorIndex];
+  const face = o.faces[o.faceIndex];
+  const skin = o.skinColors[o.skinIndex];
 
-  // Create the standing character and add to the characters array
-  MapleStandingCharacter.fromAppearance(appearance).then(ch => {
-    this.characters.push(ch);
-    LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
-  }).catch(() => {
-    LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
+  // Save to server
+  const result = await MySocket.createCharacter({
+    worldId: this.selectedWorldId ?? 0,
+    name,
+    hair,
+    face,
+    skin,
+    gender: 0,
   });
+
+  if (!result.success) {
+    if (result.error?.includes('name already taken')) {
+      this.showNotice(NoticeType.NORMAL, NoticeMessage.NAME_IN_USE);
+    } else {
+      this.showNotice(NoticeType.NORMAL, NoticeMessage.CANNOT_USE_NAME);
+    }
+    return;
+  }
+
+  // Reload characters from server and go back to select screen
+  await this.loadCharactersFromServer();
+  LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
 };
 
 UILogin.updateNewCharAppearance = async function () {
@@ -1116,286 +1233,376 @@ UILogin.updateNewCharAppearance = async function () {
       o.tops[o.topIndex],
       o.bottoms[o.bottomIndex],
       o.shoes[o.shoesIndex],
+      o.weapons?.[o.weaponIndex],
     ].filter(Boolean));
   } catch (e) {}
   this._appearanceUpdating = false;
 };
 
 UILogin.drawCreateCharacter = function (canvas: any, camera: any, lag: number, msPerTick: number, tdelta: number) {
-  DebugDrag.update(canvas.mouseX, canvas.mouseY, canvas.clicked);
 
-  const targetY = -2723;
-  if (Math.abs(camera.y - targetY) > 5) return;
-
-  const newCharNode = this.uiLogin.nGet('NewChar');
   const mx = canvas.mouseX;
   const my = canvas.mouseY;
-  const clicked = canvas.clicked && !DebugDrag.enabled && !this._clickConsumed;
+  const clicked = canvas.clicked && !this._clickConsumed;
   if (clicked) this._clickConsumed = true;
   if (!canvas.clicked) this._clickConsumed = false;
 
-  // --- Character preview ---
+  switch (this.createCharStage) {
+    case 'raceSelect':
+      this._drawRaceSelect(canvas, mx, my, clicked, msPerTick);
+      break;
+    case 'nameEntry':
+      this._drawNameEntry(canvas, mx, my, clicked);
+      break;
+    case 'charCustomize':
+      this._drawCharCustomize(canvas, camera, mx, my, clicked, msPerTick, tdelta);
+      break;
+  }
+
+  DebugDrag.drawAll(canvas);
+};
+
+// ============ STAGE 1: Race Selection ============
+UILogin._drawRaceSelect = function (canvas: any, mx: number, my: number, clicked: boolean, msPerTick: number) {
+  const raceNode = this.uiLogin.nGet('RaceSelect');
+
+  // "Choose Character Type" header
+  try {
+    const headerImg = raceNode.nGet('textGL').nGet('0').nGetImage();
+    if (headerImg) {
+      canvas.drawImage({ img: headerImg, dx: 300, dy: 55 });
+    }
+  } catch (e) {}
+
+  // Three race buttons
+  const races = [
+    { key: 'knight', btnKey: 'BtKnight', x: 75, y: 110, w: 209, h: 219 },
+    { key: 'normal', btnKey: 'BtNormal', x: 290, y: 110, w: 223, h: 221 },
+    { key: 'aran', btnKey: 'BtAran', x: 520, y: 110, w: 181, h: 222 },
+  ];
+
+  for (const race of races) {
+    try {
+      const raceGroup = raceNode.nGet(race.key);
+      const isSelected = this.selectedRace === race.key;
+
+      // Draw button image (colored if selected, normal otherwise)
+      if (isSelected) {
+        const onImg = raceGroup.nGet('OnAnimation').nGet('0').nGetImage();
+        if (onImg) canvas.drawImage({ img: onImg, dx: race.x, dy: race.y });
+      } else {
+        const btnImg = raceGroup.nGet(race.btnKey).nGet('normal').nGet('0').nGetImage();
+        if (btnImg) canvas.drawImage({ img: btnImg, dx: race.x, dy: race.y, alpha: 0.5 });
+      }
+
+      // Click detection
+      if (clicked && mx >= race.x && mx <= race.x + race.w &&
+          my >= race.y && my <= race.y + race.h) {
+        this.selectedRace = race.key;
+      }
+    } catch (e) {}
+  }
+
+  // Description panel for selected race
+  try {
+    const textImg = raceNode.nGet(this.selectedRace).nGet('text').nGet('0').nGetImage();
+    if (textImg) {
+      canvas.drawImage({ img: textImg, dx: 100, dy: 340 });
+    }
+  } catch (e) {}
+
+  // "Select >>" button
+  try {
+    const selectImg = raceNode.nGet('BtSelect').nGet('normal').nGet('0').nGetImage();
+    if (selectImg) {
+      const sx = 512, sy = 451;
+      canvas.drawImage({ img: selectImg, dx: sx, dy: sy });
+
+      if (clicked && mx >= sx && mx <= sx + 73 && my >= sy && my <= sy + 29) {
+        if (this.selectedRace === 'normal') {
+          // Proceed to name entry for Explorers
+          this.createCharStage = 'nameEntry';
+          this.newCharName = '';
+        } else {
+          // Show "not available" notice for other races
+          this.showNotice(NoticeType.NORMAL, NoticeMessage.AN_ERROR_OCCURRED);
+        }
+      }
+    }
+  } catch (e) {}
+
+};
+
+// ============ STAGE 2: Name Entry ============
+UILogin._drawNameEntry = function (canvas: any, mx: number, my: number, clicked: boolean) {
+  const newCharNode = this.uiLogin.nGet('NewChar');
+
+  // Character preview on platform
   if (this.newChar && this.newChar.baseBody) {
     try {
       const drawableFrames = this.newChar.getDrawableFrames(this.newChar.stance, this.newChar.frame, this.newChar.flipped);
-      DebugDrag.register('newCharPreview', 395, 357, 60, 80);
-      const p = DebugDrag.get('newCharPreview');
+      const cp = { x: 385, y: 357 };
       drawableFrames.forEach((f: any) => {
         canvas.drawImage({
           img: f.img,
-          dx: Math.floor(p.x + f.x),
-          dy: Math.floor(p.y + f.y),
+          dx: Math.floor(cp.x + f.x),
+          dy: Math.floor(cp.y + f.y),
+          flipped: true,
+        });
+      });
+    } catch (e) {}
+  } else if (!this.newChar) {
+    const o = this.newCharOptions;
+    MapleStandingCharacter.fromAppearance({
+      name: '',
+      skinColor: o.skinColors[0],
+      hairId: o.hairs[0] + o.hairColors[0],
+      faceId: o.faces[0],
+      flipped: true,
+      equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
+    }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
+  }
+
+  // "NAME OF CHARACTER" wooden sign (201x224)
+  const sp = { x: 484, y: 116 };
+  try {
+    const charNameImg = newCharNode.nGet('charName').nGetImage();
+    if (charNameImg) {
+      canvas.drawImage({ img: charNameImg, dx: sp.x, dy: sp.y });
+    }
+  } catch (e) {}
+
+  // Name text input on the sign
+  const nameDisplay = (this.newCharName || '') + '_';
+  canvas.drawText({
+    text: nameDisplay,
+    x: sp.x + 100,
+    y: 224,
+    color: '#ffffff',
+    fontSize: 13,
+    fontFamily: 'Arial',
+    align: 'center',
+  });
+
+  // OK button
+  try {
+    const okImg = newCharNode.nGet('BtYes').nGet('normal').nGet('0').nGetImage();
+    if (okImg) {
+      const bp = { x: 519, y: 294 };
+      canvas.drawImage({ img: okImg, dx: bp.x, dy: bp.y });
+
+      if (clicked && mx >= bp.x && mx <= bp.x + 81 && my >= bp.y && my <= bp.y + 41) {
+        if (this.newCharName.trim().length > 0) {
+          this.createCharStage = 'charCustomize';
+          const o = this.newCharOptions;
+          MapleStandingCharacter.fromAppearance({
+            name: this.newCharName,
+            skinColor: o.skinColors[0],
+            hairId: o.hairs[0] + o.hairColors[0],
+            faceId: o.faces[0],
+            flipped: true,
+            equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
+          }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
+        } else {
+          this.showNotice(NoticeType.NORMAL, NoticeMessage.CANNOT_USE_NAME);
+        }
+      }
+    }
+  } catch (e) {}
+
+  // Cancel button
+  try {
+    const cancelImg = newCharNode.nGet('BtNo').nGet('normal').nGet('0').nGetImage();
+    if (cancelImg) {
+      const bp = { x: 598, y: 294 };
+      canvas.drawImage({ img: cancelImg, dx: bp.x, dy: bp.y });
+
+      if (clicked && mx >= bp.x && mx <= bp.x + 81 && my >= bp.y && my <= bp.y + 41) {
+        this.createCharStage = 'raceSelect';
+      }
+    }
+  } catch (e) {}
+};
+
+// ============ STAGE 3: Character Customization ============
+UILogin._drawCharCustomize = function (canvas: any, camera: any, mx: number, my: number, clicked: boolean, msPerTick: number, tdelta: number) {
+  const newCharNode = this.uiLogin.nGet('NewChar');
+
+  // Character preview on platform
+  if (this.newChar && this.newChar.baseBody) {
+    try {
+      const drawableFrames = this.newChar.getDrawableFrames(this.newChar.stance, this.newChar.frame, this.newChar.flipped);
+      const charX = 385, charY = 357;
+      drawableFrames.forEach((f: any) => {
+        canvas.drawImage({
+          img: f.img,
+          dx: Math.floor(charX + f.x),
+          dy: Math.floor(charY + f.y),
           flipped: true,
         });
       });
     } catch (e) {}
   }
 
-  // ============ RIGHT PANEL: charSet (225x377) — name + stats + dice ============
-  const rpx = 475; // right panel x
-  const rpy = 103;  // right panel y
+  // "CHARACTER SETTINGS" panel (charSet: 225x377)
+  const panelX = 484, panelY = 116;
   try {
     const charSetImg = newCharNode.nGet('charSet').nGetImage();
     if (charSetImg) {
-      DebugDrag.register('charSet', rpx, rpy, 225, 377);
-      const p = DebugDrag.get('charSet');
-      canvas.drawImage({ img: charSetImg, dx: p.x, dy: p.y });
-    }
-  } catch (e) {}
-  const rp = DebugDrag.get('charSet');
-
-  // Name input
-  const nameDisplay = (this.newCharName || '') + '_';
-  canvas.drawText({
-    text: nameDisplay,
-    x: rp.x + 15,
-    y: rp.y + 55,
-    color: '#000000',
-    fontSize: 13,
-    fontFamily: 'Arial',
-    align: 'left',
-  });
-
-  // BtCheck ("CHECK") button — top right of charSet panel
-  try {
-    const checkImg = newCharNode.nGet('BtCheck').nGet('normal').nGet('0').nGetImage();
-    if (checkImg) {
-      DebugDrag.register('btCheck', rp.x + 160, rp.y + 10, 50, 24);
-      const cp = DebugDrag.get('btCheck');
-      canvas.drawImage({ img: checkImg, dx: cp.x, dy: cp.y });
+      canvas.drawImage({ img: charSetImg, dx: panelX, dy: panelY });
     }
   } catch (e) {}
 
-  // Stats
-  const stats = this.newCharStats || [4, 4, 4, 4];
-  const statLabels = ['STR', 'DEX', 'INT', 'LUK'];
-  const statsX = rp.x + 20;
-  const statsY = rp.y + 95;
-  for (let i = 0; i < 4; i++) {
-    canvas.drawText({
-      text: statLabels[i],
-      x: statsX,
-      y: statsY + i * 25,
-      color: '#000000',
-      fontSize: 14,
-      fontFamily: 'Arial',
-      fontWeight: 'bold',
-      align: 'left',
-    });
-    canvas.drawText({
-      text: String(stats[i]),
-      x: statsX + 55,
-      y: statsY + i * 25,
-      color: '#000000',
-      fontSize: 14,
-      fontFamily: 'Arial',
-      align: 'left',
-    });
-  }
+  // Appearance rows on the charSet panel
+  const rowLabels = ['FACE', 'HAIR STYLE', 'HAIR COLOR', 'SKIN COLOR', 'TOP', 'BOTTOM', 'SHOES', 'WEAPON', 'GENDER'];
+  const indexKeys = ['faceIndex', 'hairIndex', 'hairColorIndex', 'skinIndex', 'topIndex', 'bottomIndex', 'shoesIndex', 'weaponIndex', 'gender'];
+  const optionKeys = ['faces', 'hairs', 'hairColors', 'skinColors', 'tops', 'bottoms', 'shoes', 'weapons', null];
+  // Exact row Y positions from debug
+  const rowPositions = [217, 238, 257, 273, 295, 314, 333, 350, 369];
+  const ROW_X = 496;
 
-  // "GENERATE!!" label
-  canvas.drawText({
-    text: 'GENERATE!!',
-    x: rp.x + 115,
-    y: statsY + 5,
-    color: '#663300',
-    fontSize: 11,
-    fontFamily: 'Arial',
-    fontWeight: 'bold',
-    align: 'left',
-  });
+  const nameMap: Record<string, Record<number, string>> = {
+    faces: { 20000: 'Male 2 (Black)', 20001: 'Male 1 (Brown)', 20002: 'Male 3 (Blue)', 21000: 'Female 1 (Black)', 21001: 'Female 2 (Brown)', 21002: 'Female 3 (Blue)' },
+    hairs: { 30030: 'Buzz Hair', 30020: 'Sammy', 30000: 'Toben', 31000: 'Angelica', 31010: 'Ariel', 31020: 'Connie' },
+    tops: { 1040002: 'White Undershirt', 1040006: 'Undershirt', 1040010: 'Grey T-Shirt' },
+    bottoms: { 1060002: 'Blue Jean Shorts', 1060006: 'Red-Striped Shorts' },
+    shoes: { 1072001: 'Red Rubber Boots', 1072005: 'Leather Sandals', 1072037: 'Yellow Sneakers', 1072038: 'Blue Sneakers' },
+    weapons: { 1302000: 'Sword', 1322005: 'Wooden Club', 1312004: 'Long Sword' },
+  };
 
-  // Dice (animated)
-  try {
-    if (this._diceRolling) {
-      this._diceAnimDelay += msPerTick;
-      if (this._diceAnimDelay > 80) {
-        this._diceAnimDelay = 0;
-        this._diceAnimFrame++;
-        if (this._diceAnimFrame >= 4) {
-          this._diceAnimFrame = 0;
-          this._diceRolling = false;
-          this.newCharStats = Random.generateDiceRollStats();
+  for (let i = 0; i < rowLabels.length; i++) {
+    const rp = { x: ROW_X, y: rowPositions[i] };
+    try {
+      const rowBgImg = newCharNode.nGet('avatarSel').nGet(String(i)).nGet('normal').nGetImage();
+      if (rowBgImg) {
+        canvas.drawImage({ img: rowBgImg, dx: rp.x, dy: rp.y });
+      }
+    } catch (e) {}
+
+    // Get current value display text
+    let displayText = '';
+    if (i === 8) {
+      // Gender row
+      displayText = this.newCharOptions.gender === 0 ? 'Male' : 'Female';
+    } else {
+      const o = this.newCharOptions;
+      const currentIdx = o[indexKeys[i]] as number;
+      const optKey = optionKeys[i];
+      if (optKey) {
+        const currentVal = (o[optKey] as number[])[currentIdx];
+        if (optKey === 'skinColors') {
+          const skinMap: Record<number, string> = { 0: 'Light', 1: 'Tan', 2: 'Dark', 3: 'Pale', 4: 'Blue', 5: 'White', 9: 'Mercedes' };
+          displayText = skinMap[currentVal] || String(currentVal);
+        } else if (optKey === 'hairColors') {
+          displayText = ['Black', 'Red', 'Orange', 'Blonde', 'Green', 'Blue', 'Purple', 'Brown'][currentVal] || String(currentVal);
+        } else if (nameMap[optKey] && nameMap[optKey][currentVal]) {
+          displayText = nameMap[optKey][currentVal];
+        } else {
+          displayText = String(currentVal);
         }
       }
     }
-    const diceFrame = this._diceRolling ? this._diceAnimFrame : 3;
-    const diceImg = newCharNode.nGet('dice').nGet(String(diceFrame)).nGetImage();
-    if (diceImg) {
-      DebugDrag.register('dice', rp.x + 155, statsY + 40, 30, 45);
-      const dp = DebugDrag.get('dice');
-      canvas.drawImage({ img: diceImg, dx: dp.x, dy: dp.y });
 
-      if (clicked && !this._diceRolling &&
-          mx >= dp.x && mx <= dp.x + 30 &&
-          my >= dp.y && my <= dp.y + 45) {
-        this._diceRolling = true;
-        this._diceAnimFrame = 0;
-        this._diceAnimDelay = 0;
-      }
-    }
-  } catch (e) {}
-
-  // ============ LEFT PANEL: scroll (242x210) — appearance options ============
-  const lpx = 120; // left panel x
-  const lpy = 151; // left panel y
-  try {
-    const scrollImg = newCharNode.nGet('scroll').nGet('0').nGet('3').nGetImage();
-    if (scrollImg) {
-      DebugDrag.register('scroll', lpx, lpy, 242, 210);
-      const sp = DebugDrag.get('scroll');
-      canvas.drawImage({ img: scrollImg, dx: sp.x, dy: sp.y });
-    }
-  } catch (e) {}
-  const lp = DebugDrag.get('scroll');
-
-  // Appearance rows on the scroll panel
-  const rowLabels = ['FACE', 'HAIR STYLE', 'HAIR COLOR', 'SKIN COLOR', 'TOP', 'BOTTOM', 'SHOES'];
-  const indexKeys = ['faceIndex', 'hairIndex', 'hairColorIndex', 'skinIndex', 'topIndex', 'bottomIndex', 'shoesIndex'];
-  const optionKeys = ['faces', 'hairs', 'hairColors', 'skinColors', 'tops', 'bottoms', 'shoes'];
-  const rowStartY = lp.y + 12;
-  const rowSpacing = 25;
-
-  for (let i = 0; i < rowLabels.length; i++) {
-    const rowY = rowStartY + i * rowSpacing;
-
-    // Category label
-    canvas.drawText({
-      text: rowLabels[i],
-      x: lp.x + 12,
-      y: rowY + 3,
-      color: '#000000',
-      fontSize: 11,
-      fontFamily: 'Arial',
-      fontWeight: 'bold',
-      align: 'left',
-    });
-
-    // BtLeft arrow
+    // Left arrow
     try {
       const leftImg = newCharNode.nGet('BtLeft').nGet('normal').nGet('0').nGetImage();
       if (leftImg) {
-        const lbx = lp.x + 100;
-        const lby = rowY + 1;
-        canvas.drawImage({ img: leftImg, dx: lbx, dy: lby });
+        const lx = rp.x + 77, ly = rp.y + 1;
+        canvas.drawImage({ img: leftImg, dx: lx, dy: ly });
 
-        if (clicked && mx >= lbx && mx <= lbx + 15 &&
-            my >= lby && my <= lby + 16) {
-          const o = this.newCharOptions;
-          const arr = o[optionKeys[i]] as number[];
-          o[indexKeys[i]] = ((o[indexKeys[i]] as number) - 1 + arr.length) % arr.length;
-          this.updateNewCharAppearance();
+        if (clicked && mx >= lx && mx <= lx + 15 && my >= ly && my <= ly + 16) {
+          if (i === 8) {
+            this.newCharOptions.gender = this.newCharOptions.gender === 0 ? 1 : 0;
+            // Switch face/hair options for gender
+            if (this.newCharOptions.gender === 0) {
+              this.newCharOptions.faces = [20000, 20001, 20002];
+              this.newCharOptions.hairs = [30030, 30020, 30000];
+            } else {
+              this.newCharOptions.faces = [21000, 21001, 21002];
+              this.newCharOptions.hairs = [31000, 31010, 31020];
+            }
+            this.newCharOptions.faceIndex = 0;
+            this.newCharOptions.hairIndex = 0;
+            this.updateNewCharAppearance();
+          } else if (optionKeys[i]) {
+            const o = this.newCharOptions;
+            const arr = o[optionKeys[i]!] as number[];
+            o[indexKeys[i]] = ((o[indexKeys[i]] as number) - 1 + arr.length) % arr.length;
+            this.updateNewCharAppearance();
+          }
         }
       }
     } catch (e) {}
 
-    // Current selection name (centered between arrows)
-    const o = this.newCharOptions;
-    const currentIdx = o[indexKeys[i]] as number;
-    const currentVal = (o[optionKeys[i]] as number[])[currentIdx];
-    let displayText = String(currentVal);
-    // Friendly names for known values
-    const nameMap: Record<string, Record<number, string>> = {
-      faces: { 20000: 'Motivated', 20001: 'Perplexed', 20002: 'Leisure' },
-      hairs: { 30030: 'Buzz', 30020: 'Sammy', 30000: 'Toben' },
-      tops: { 1040002: 'White Undershirt', 1040006: 'Blue T-Shirt', 1040010: 'Orange T-Shirt' },
-      bottoms: { 1060002: 'Blue Jean Shorts', 1060006: 'Red-Striped Shorts' },
-      shoes: { 1072001: 'Red Rubber Boots', 1072005: 'Leather Sandals', 1072037: 'Yellow Sneakers', 1072038: 'Blue Sneakers' },
-    };
-    if (optionKeys[i] === 'skinColors') {
-      const skinNames = ['Light', 'Tan', 'Dark', 'Pale', 'Blue', 'White', 'Green', 'Pink'];
-      displayText = skinNames[currentVal] || String(currentVal);
-    } else if (optionKeys[i] === 'hairColors') {
-      const colorNames = ['Black', 'Red', 'Orange', 'Blonde', 'Green', 'Blue', 'Purple', 'Brown'];
-      displayText = colorNames[currentVal] || String(currentVal);
-    } else if (nameMap[optionKeys[i]] && nameMap[optionKeys[i]][currentVal]) {
-      displayText = nameMap[optionKeys[i]][currentVal];
-    }
+    // Selection text
     canvas.drawText({
       text: displayText,
-      x: lp.x + 155,
-      y: rowY + 3,
+      x: rp.x + 137,
+      y: rp.y + 2,
       color: '#000000',
       fontSize: 11,
       fontFamily: 'Arial',
       align: 'center',
     });
 
-    // BtRight arrow
+    // Right arrow
     try {
       const rightImg = newCharNode.nGet('BtRight').nGet('normal').nGet('0').nGetImage();
       if (rightImg) {
-        const rbx = lp.x + 215;
-        const rby = rowY + 1;
-        canvas.drawImage({ img: rightImg, dx: rbx, dy: rby });
+        const rx = rp.x + 187, ry = rp.y + 1;
+        canvas.drawImage({ img: rightImg, dx: rx, dy: ry });
 
-        if (clicked && mx >= rbx && mx <= rbx + 15 &&
-            my >= rby && my <= rby + 16) {
-          const o2 = this.newCharOptions;
-          const arr = o2[optionKeys[i]] as number[];
-          o2[indexKeys[i]] = ((o2[indexKeys[i]] as number) + 1) % arr.length;
-          this.updateNewCharAppearance();
+        if (clicked && mx >= rx && mx <= rx + 15 && my >= ry && my <= ry + 16) {
+          if (i === 8) {
+            this.newCharOptions.gender = this.newCharOptions.gender === 0 ? 1 : 0;
+            // Switch face/hair options for gender
+            if (this.newCharOptions.gender === 0) {
+              this.newCharOptions.faces = [20000, 20001, 20002];
+              this.newCharOptions.hairs = [30030, 30020, 30000];
+            } else {
+              this.newCharOptions.faces = [21000, 21001, 21002];
+              this.newCharOptions.hairs = [31000, 31010, 31020];
+            }
+            this.newCharOptions.faceIndex = 0;
+            this.newCharOptions.hairIndex = 0;
+            this.updateNewCharAppearance();
+          } else if (optionKeys[i]) {
+            const o = this.newCharOptions;
+            const arr = o[optionKeys[i]!] as number[];
+            o[indexKeys[i]] = ((o[indexKeys[i]] as number) + 1) % arr.length;
+            this.updateNewCharAppearance();
+          }
         }
       }
     } catch (e) {}
   }
 
-  // ============ BOTTOM: OK + Cancel buttons ============
+  // OK button
   try {
-    const okNode = newCharNode.nGet('BtYes').nGet('normal').nGet('0');
-    const okImg = okNode.nGetImage();
-    const okW = (okNode as any).nWidth || 81;
-    const okH = (okNode as any).nHeight || 41;
+    const okImg = newCharNode.nGet('BtYes').nGet('normal').nGet('0').nGetImage();
     if (okImg) {
-      DebugDrag.register('btYes', 506, 434, okW, okH);
-      const bp = DebugDrag.get('btYes');
-      canvas.drawImage({ img: okImg, dx: bp.x, dy: bp.y });
+      const okp = { x: 516, y: 447 };
+      canvas.drawImage({ img: okImg, dx: okp.x, dy: okp.y });
 
-      if (clicked && mx >= bp.x && mx <= bp.x + okW &&
-          my >= bp.y && my <= bp.y + okH) {
+      if (clicked && mx >= okp.x && mx <= okp.x + 81 && my >= okp.y && my <= okp.y + 41) {
         this.confirmCreateCharacter();
       }
     }
   } catch (e) {}
 
+  // Cancel button
   try {
-    const cancelNode = newCharNode.nGet('BtNo').nGet('normal').nGet('0');
-    const cancelImg = cancelNode.nGetImage();
-    const cancelW = (cancelNode as any).nWidth || 81;
-    const cancelH = (cancelNode as any).nHeight || 41;
+    const cancelImg = newCharNode.nGet('BtNo').nGet('normal').nGet('0').nGetImage();
     if (cancelImg) {
-      DebugDrag.register('btNo', 585, 434, cancelW, cancelH);
-      const bp = DebugDrag.get('btNo');
-      canvas.drawImage({ img: cancelImg, dx: bp.x, dy: bp.y });
+      const cnp = { x: 590, y: 447 };
+      canvas.drawImage({ img: cancelImg, dx: cnp.x, dy: cnp.y });
 
-      if (clicked && mx >= bp.x && mx <= bp.x + cancelW &&
-          my >= bp.y && my <= bp.y + cancelH) {
+      if (clicked && mx >= cnp.x && mx <= cnp.x + 81 && my >= cnp.y && my <= cnp.y + 41) {
         LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
       }
     }
   } catch (e) {}
 
-  DebugDrag.drawAll(canvas);
 };
 
 UILogin.startSelectWorldChannelImgSlideIn = function () {
@@ -1474,11 +1681,49 @@ UILogin.stepImage = function (stepId: number) {
   return null;
 };
 
+UILogin.loadCharactersFromServer = async function () {
+  const worldId = this.selectedWorldId ?? 0;
+  const result = await MySocket.getCharacters(worldId);
+  const charList = result.characters || [];
+
+  // Build MapleStandingCharacter array from server data
+  this.characters = [];
+  this.selectedCharIndex = 0;
+  this.charSelected = false;
+
+  for (const c of charList) {
+    try {
+      // Map equipped items to equip IDs array
+      const equipIds = (c.equipped || []).map((eq: any) => eq.item_id);
+      const ch = await MapleStandingCharacter.fromAppearance({
+        name: c.name,
+        skinColor: c.skin ?? 0,
+        hairId: c.hair ?? 30030,
+        faceId: c.face ?? 20000,
+        flipped: true,
+        equipIds,
+      });
+      // Store server ID on the character for select/delete
+      (ch as any)._serverId = c.id;
+      this.characters.push(ch);
+    } catch (e) {
+      console.error('Failed to load character preview:', c.name, e);
+    }
+  }
+};
+
 UILogin.showNotice = function (noticeType: NoticeType, noticeMessage: NoticeMessage | null) {
   if (!this.uiLoginNotice) {
     console.error('UILoginNotice is not initialized.');
     return;
   }
+  // Hide HTML inputs so they don't render on top of the notice
+  if (this.inputUsn?.input) this.inputUsn.input.style.visibility = 'hidden';
+  if (this.inputPwd?.input) this.inputPwd.input.style.visibility = 'hidden';
+  this.uiLoginNotice.okHandler = () => {
+    if (this.inputUsn?.input) this.inputUsn.input.style.visibility = 'visible';
+    if (this.inputPwd?.input) this.inputPwd.input.style.visibility = 'visible';
+  };
   this.uiLoginNotice.setIsHidden(false);
   this.uiLoginNotice.setNoticeType(noticeType);
   this.uiLoginNotice.setNoticeMessage(noticeMessage);

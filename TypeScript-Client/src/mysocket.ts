@@ -70,6 +70,8 @@ class MySocket {
   otherPlayers: Map<string, MapleCharacter> = new Map();
   isMobHost: boolean = false;
   isConnected: boolean = false;
+  isLoggedIn: boolean = false;
+  userId: number = 0;
   reconnectAttempts: number = 0;
   maxReconnectAttempts: number = 5;
   reconnectInterval: number = 3000; // 3 seconds
@@ -77,7 +79,14 @@ class MySocket {
   lastUpdate: number = 0;
   updateInterval: number = 50; // 50ms = 20 updates per second
   connectionStatusElement: HTMLElement | null = null;
-  
+
+  // Callbacks for login flow
+  private _loginCallback: ((result: { success: boolean; error?: string; userId?: number }) => void) | null = null;
+  private _characterListCallback: ((data: any) => void) | null = null;
+  private _createCharCallback: ((result: any) => void) | null = null;
+  private _deleteCharCallback: ((result: any) => void) | null = null;
+  private _selectCharCallback: ((result: any) => void) | null = null;
+
   constructor() {}
 
   // Send a log message to the server for display in server console
@@ -119,29 +128,157 @@ class MySocket {
     });
   }
 
-  async initialize() {
-    console.log("Initializing WebSocket connection...");
-    
-    // Create a connection status indicator
-    this.createConnectionStatusIndicator();
-    
-    // Check if we are in production and use the appropriate server URL
+  private resolveServerUrl() {
     if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
-      // Use production server (deployed WebSocket server)
-      // Fix: Use the same hostname but different port
       this.serverUrl = `ws://${window.location.hostname}:3001`;
-      
-      // If the site is served over HTTPS, WebSocket should use WSS
       if (window.location.protocol === 'https:') {
         this.serverUrl = `wss://${window.location.hostname}:3001`;
       }
     }
+  }
+
+  // Connect early for login — does NOT send player info or start update loop
+  async connectForLogin(): Promise<void> {
+    if (this.isConnected) return;
+    this.resolveServerUrl();
+    console.log(`Connecting to server for login at ${this.serverUrl}`);
+    return new Promise<void>((resolve) => {
+      this._onConnectedForLogin = resolve;
+      this.connectSocket();
+    });
+  }
+  private _onConnectedForLogin: (() => void) | null = null;
+
+  // Send login credentials, returns result via promise
+  sendLogin(username: string, password: string): Promise<{ success: boolean; error?: string; userId?: number }> {
+    return new Promise((resolve) => {
+      this._loginCallback = resolve;
+      this.sendMessage({ type: 'login', data: { username, password } });
+    });
+  }
+
+  // Request character list for a world
+  getCharacters(worldId: number): Promise<any> {
+    return new Promise((resolve) => {
+      this._characterListCallback = resolve;
+      this.sendMessage({ type: 'get_characters', data: { worldId } });
+    });
+  }
+
+  // Create a character
+  createCharacter(data: { worldId: number; name: string; hair: number; face: number; skin: number; gender: number }): Promise<any> {
+    return new Promise((resolve) => {
+      this._createCharCallback = resolve;
+      this.sendMessage({ type: 'create_character', data });
+    });
+  }
+
+  // Delete a character
+  deleteCharacter(characterId: number): Promise<any> {
+    return new Promise((resolve) => {
+      this._deleteCharCallback = resolve;
+      this.sendMessage({ type: 'delete_character', data: { characterId } });
+    });
+  }
+
+  // Select a character (load full data)
+  selectCharacter(characterId: number): Promise<any> {
+    return new Promise((resolve) => {
+      this._selectCharCallback = resolve;
+      this.sendMessage({ type: 'select_character', data: { characterId } });
+    });
+  }
+
+  // Save current character state to server
+  saveCharacterToServer() {
+    const charId = (MyCharacter as any)._serverCharId;
+    if (!charId || !this.isConnected) return;
+
+    const inv = MyCharacter.inventory;
+    const serializeTab = (items: any[]) =>
+      (items || []).map((item: any) =>
+        item ? { itemId: item.itemId, quantity: item.quantity ?? 1 } : null
+      ).filter(Boolean);
+
+    const equipped: { slot: number; itemId: number }[] = [];
+    if (MyCharacter.equippedItemIds) {
+      for (const [slot, itemId] of Object.entries(MyCharacter.equippedItemIds)) {
+        if (itemId) equipped.push({ slot: Number(slot), itemId: itemId as number });
+      }
+    }
+
+    const quests: { questId: number; state: number }[] = [];
+    if (MyCharacter.questManager) {
+      const qm = MyCharacter.questManager;
+      if (qm.activeQuests) {
+        for (const qId of qm.activeQuests.keys()) {
+          quests.push({ questId: qId, state: 1 });
+        }
+      }
+      if (qm.completedQuests) {
+        for (const qId of qm.completedQuests) {
+          quests.push({ questId: qId, state: 2 });
+        }
+      }
+    }
+
+    this.sendMessage({
+      type: 'save_character',
+      data: {
+        level: MyCharacter.stats?.level ?? 1,
+        exp: MyCharacter.exp ?? 0,
+        str: MyCharacter.stats?.str ?? 12,
+        dex: MyCharacter.stats?.dex ?? 5,
+        int: MyCharacter.stats?.int ?? 4,
+        luk: MyCharacter.stats?.luk ?? 4,
+        ap: MyCharacter.stats?.abilityPoints ?? 0,
+        hp: MyCharacter.hp,
+        maxHp: MyCharacter.maxHp,
+        mp: MyCharacter.mp,
+        maxMp: MyCharacter.maxMp,
+        jobId: MyCharacter.stats?.jobId ?? 0,
+        mapId: Number(MapleMap.id) || 10000,
+        posX: Math.round(MyCharacter.pos.x),
+        posY: Math.round(MyCharacter.pos.y),
+        mesos: inv?.mesos ?? 0,
+        fame: MyCharacter.fame ?? 0,
+        equipped,
+        inventory: {
+          equip: serializeTab(inv?.equip),
+          use: serializeTab(inv?.use),
+          setup: serializeTab(inv?.setup),
+          etc: serializeTab(inv?.etc),
+          cash: serializeTab(inv?.cash),
+        },
+        quests,
+      },
+    });
+  }
+
+  async initialize() {
+    console.log("Initializing WebSocket connection...");
+
+    // Create a connection status indicator
+    this.createConnectionStatusIndicator();
+
+    this.resolveServerUrl();
 
     console.log(`Connecting to WebSocket server at ${this.serverUrl}`);
-    this.connectSocket();
-    
+    if (!this.isConnected) {
+      this.connectSocket();
+    } else {
+      // Already connected from login — register with game server now
+      this.sendPlayerInfo();
+      this.sendMessage({ type: "get_player_list" });
+    }
+
     // Start the game loop for sending position updates
     this.startUpdateLoop();
+
+    // Save character on page close/refresh
+    window.addEventListener('beforeunload', () => {
+      this.saveCharacterToServer();
+    });
 
     // Add window error handler to prevent crashes
     window.addEventListener('error', (event) => {
@@ -223,13 +360,18 @@ class MySocket {
 
     console.log("Connected to WebSocket server");
 
-    // Initial registration with the server
-    this.sendPlayerInfo();
-    
-    // Also request the current player list
-    this.sendMessage({
-      type: "get_player_list"
-    });
+    // If connecting for login, resolve the promise and wait for auth
+    if (this._onConnectedForLogin) {
+      this._onConnectedForLogin();
+      this._onConnectedForLogin = null;
+      return;
+    }
+
+    // If already logged in (reconnect), register with game server
+    if (this.isLoggedIn) {
+      this.sendPlayerInfo();
+      this.sendMessage({ type: "get_player_list" });
+    }
   }
   
   handleSocketMessage(event: MessageEvent) {
@@ -293,6 +435,40 @@ class MySocket {
           break;
         case "reactor_respawn":
           this.handleReactorRespawn(data.data);
+          break;
+        case "login_result":
+          if (this._loginCallback) {
+            this._loginCallback(data);
+            this._loginCallback = null;
+          }
+          if (data.success) {
+            this.isLoggedIn = true;
+            this.userId = data.userId;
+          }
+          break;
+        case "character_list":
+          if (this._characterListCallback) {
+            this._characterListCallback(data);
+            this._characterListCallback = null;
+          }
+          break;
+        case "create_character_result":
+          if (this._createCharCallback) {
+            this._createCharCallback(data);
+            this._createCharCallback = null;
+          }
+          break;
+        case "delete_character_result":
+          if (this._deleteCharCallback) {
+            this._deleteCharCallback(data);
+            this._deleteCharCallback = null;
+          }
+          break;
+        case "select_character_result":
+          if (this._selectCharCallback) {
+            this._selectCharCallback(data);
+            this._selectCharCallback = null;
+          }
           break;
         case "error":
           console.error("Server error:", data.message);
@@ -1122,6 +1298,17 @@ class MySocket {
         console.error("Error in mob broadcast loop:", error);
       }
     }, 66);
+
+    // Auto-save character every 60 seconds
+    setInterval(() => {
+      try {
+        if (this.isConnected && this.isLoggedIn) {
+          this.saveCharacterToServer();
+        }
+      } catch (error) {
+        console.error("Error in auto-save:", error);
+      }
+    }, 60000);
   }
 }
 

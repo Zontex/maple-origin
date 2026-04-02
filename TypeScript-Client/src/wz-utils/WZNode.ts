@@ -42,21 +42,10 @@ class WZNode {
     }
   }
 
-  /**
-   * Retrieves a value from the node by key, otherwise returns a default value.
-   * @param key - Key to retrieve.
-   * @param defaultValue - Default value to return if the key is not found.
-   * @returns Value corresponding to the key or the default value.
-   */
   nGet(key: string, defaultValue: WZNode = new WZNode({ $imgdir: "" })) {
     return key in this ? this[key as keyof this] : defaultValue;
   }
 
-  /**
-   * Retrieves a child node based on the callback provided.
-   * @param childCallback - Callback function to evaluate children.
-   * @returns The first child node that satisfies the callback condition, otherwise null.
-   */
   nGetChild(childCallback: (node: WZNode) => boolean) {
     for (const child of this.nChildren) {
       if (!!childCallback(child)) {
@@ -66,10 +55,6 @@ class WZNode {
     return null;
   }
 
-  /**
-   * Resolves Uniform Object Location (UOL) paths within the WZNode.
-   * @returns Resolved WZNode.
-   */
   nResolveUOL() {
     if (this.nTagName === "uol") {
       let ret = `${this.nValue}`.split("/").reduce((pointer: any, pathName) => {
@@ -84,10 +69,6 @@ class WZNode {
     }
   }
 
-  /**
-   * Retrieves the path of the current WZNode.
-   * @returns The path of the WZNode.
-   */
   nGetPath() {
     let ret = "";
     let pointer: WZNode | null = this;
@@ -98,10 +79,6 @@ class WZNode {
     return ret.slice(1, -1);
   }
 
-  /**
-   * Retrieves audio data from the WZNode.
-   * @returns Audio data represented as an HTMLAudioElement or a string.
-   */
   nGetAudio() {
     if (typeof this.nBasedata === "string") {
       this.nBasedata = new Audio(`${BASE64_HEADERS.MP3}${this.nBasedata}`);
@@ -109,10 +86,6 @@ class WZNode {
     return this.nBasedata;
   }
 
-  /**
-   * Retrieves image data from the WZNode.
-   * @returns Image data represented as an HTMLImageElement or a string.
-   */
   nGetImage() {
     if (typeof this.nBasedata === "string") {
       const img = new Image();

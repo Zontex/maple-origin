@@ -31,7 +31,19 @@ const WZManager: WZManager = {
    * @example WZManager.load('Map.wz/Map/Map1/100000000.img');
    * @example WZManager.load('Character.wz/Cap/01002357.img');
    */
+  _loading: new Map<string, Promise<void>>(),
+
   async load(filename) {
+    // Deduplicate concurrent loads of the same file
+    if (this._loading.has(filename)) {
+      return this._loading.get(filename);
+    }
+    const promise = this._doLoad(filename);
+    this._loading.set(filename, promise);
+    try { await promise; } finally { this._loading.delete(filename); }
+  },
+
+  async _doLoad(filename: string) {
     const json = await fetch(`wz_client/${filename}.json`).then((res) =>
       res.json()
     );
