@@ -230,8 +230,8 @@ class MapleCharacter {
     const smap: any = await WZManager.get("Base.wz/smap.img");
     const nonNullSmapNodes = smap.nChildren.filter((n: any) => !!n.nValue);
     const smapDict = nonNullSmapNodes.reduce((acc: any, node: any) => {
-      return acc;
       acc[node.nName] = node.nValue;
+      return acc;
     }, {});
     const reverseSmapDict = nonNullSmapNodes.reduce((acc: any, node: any) => {
       if (!acc[node.nValue]) {
@@ -251,6 +251,20 @@ class MapleCharacter {
     await this.setFace(this.face);
     await this.setHair(this.hair);
     this.setStance(this.stance);
+
+    // Re-attach equipment visuals — equips may have been set before load()
+    // was called, and the body/head reload above needs matching equip data
+    if (this.equippedItemIds && Object.keys(this.equippedItemIds).length > 0) {
+      const savedEquips = { ...this.equippedItemIds };
+      this.equips = [];
+      for (const [slot, itemId] of Object.entries(savedEquips)) {
+        try {
+          await this.attachEquip(Number(slot), itemId as number);
+        } catch (e) {
+          console.error('[Load] Failed to re-attach equip slot', slot, 'item', itemId, e);
+        }
+      }
+    }
 
     // Load chat balloon images (same as in NPC class)
     try {
@@ -508,11 +522,11 @@ class MapleCharacter {
 
   addExp(exp: number, showEffect: boolean = false) {
     if (exp > 0 && showEffect) this.playIncExp();
-    if (this.exp + exp >= this.maxExp) {
-      this.exp = this.exp + exp - this.maxExp;
+    this.exp += exp;
+    // Level up as many times as needed (handles multi-level gains)
+    while (this.exp >= this.maxExp && this.maxExp > 0) {
+      this.exp -= this.maxExp;
       this.levelUp();
-    } else {
-      this.exp += exp;
     }
   }
 
@@ -1223,6 +1237,7 @@ isCloseToMob = (inAllDirections = true) => {
   }
 
   applyFallDamage(fallDistance: number) {
+    return; // Fall damage disabled
     // Fall damage only triggers after falling a significant height
     // Normal jump = ~100-150px. Platform gaps = ~200-300px.
     // Only high drops (500+ pixels) should cause damage.
@@ -1308,9 +1323,11 @@ isCloseToMob = (inAllDirections = true) => {
             const knowbackYdirection = this.pos.y > monster.pos.y ? 1 : -1;
             this.pos.applyKnockback(knowbackXdirection, knowbackYdirection);
 
-            const finalTakenDamage =
-              (mobInfo.PADamage?.nValue ?? 1) -
-              this.stats.getWeaponDefense(this.equips);
+            // v83 mob contact damage: random range around PAD, minus player defense
+            const pad = mobInfo.PADamage?.nValue ?? 1;
+            const rawDamage = Math.floor(pad * (0.8 + Math.random() * 0.4));
+            const pdd = this.stats.getWeaponDefense(this.equips);
+            const finalTakenDamage = Math.max(1, rawDamage - pdd);
             this.takeDamage(finalTakenDamage);
 
             this.DamageIndicator.addDamageIndicator(
@@ -1472,6 +1489,32 @@ isCloseToMob = (inAllDirections = true) => {
     this.checkForMobsHit();
 
     this.pos.update(msPerTick);
+
+    // Clamp player to map boundaries — prevent falling off left/right edges
+    if (this.map && this.map.boundaries) {
+      const b = this.map.boundaries;
+      if (this.pos.x < b.left) {
+        this.pos.x = b.left;
+        this.pos.vx = 0;
+      } else if (this.pos.x > b.right) {
+        this.pos.x = b.right;
+        this.pos.vx = 0;
+      }
+      // If player falls below the map, respawn at center
+      if (this.pos.y > b.bottom + 300) {
+        const spawnPos = this.map.getCenterFootholdLocation?.();
+        if (spawnPos) {
+          this.pos.x = spawnPos.x;
+          this.pos.y = spawnPos.y;
+        } else {
+          this.pos.x = (b.left + b.right) / 2;
+          this.pos.y = b.top;
+        }
+        this.pos.vx = 0;
+        this.pos.vy = 0;
+        this.pos.fh = null;
+      }
+    }
 
     // Fall damage: check if we just landed after a long fall
     if (this.pos.fallDistance > 0 && this.pos.fh) {
@@ -1711,8 +1754,6 @@ isCloseToMob = (inAllDirections = true) => {
             this.setStance(Stance.walk1);
           } else {
             this.setStance(Stance.stand1);
-            // this here usefull to test stance
-            // this.setStance(Stance.proneStab);
           }
         }
       }

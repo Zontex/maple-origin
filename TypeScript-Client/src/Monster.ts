@@ -498,9 +498,8 @@ async addDrops() {
     if (timeSinceLastChange > this.delayBetweenDirectionChange) {
       // if not jumping
       if (this.pos.fh) {
-        if (Math.random() < this.jumpProbability) {
-          this.jump();
-        } else if (Math.random() < 0.2) {
+        // Mobs don't randomly jump — prevents them from landing on wrong platforms
+        if (Math.random() < 0.2) {
           this.stand();
         } else if (Math.random() < 0.5) {
           this.left();
@@ -583,18 +582,21 @@ async addDrops() {
         this.changeDirectionRandomly();
       }
 
-      // ajust movement by range
-      if (this.pos.x < this.minX) {
-        this.pos.x = this.minX;
-        this.right();
-      } else if (this.pos.x > this.maxX) {
-        this.pos.x = this.maxX;
-        this.left();
-      }
     }
 
     if (this.isMovementEnabled) {
       this.pos.update(msPerTick);
+    }
+
+    // Enforce spawn boundaries AFTER physics update
+    if (this.pos.x < this.minX) {
+      this.pos.x = this.minX;
+      this.pos.vx = 0;
+      this.right();
+    } else if (this.pos.x > this.maxX) {
+      this.pos.x = this.maxX;
+      this.pos.vx = 0;
+      this.left();
     }
 
     this.centerPosition = {

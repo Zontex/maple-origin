@@ -158,9 +158,6 @@ class NPC {
                this.strings.name.toLowerCase().includes('driver'))) {
       this.isTaxi = true;
       this.setupTaxiDestinations();
-    } else if (this.id === 1022000) { // Special case: Henesys regular cab
-      this.isTaxi = true;
-      this.setupTaxiDestinations();
     }
 
     // Some NPCs "float"

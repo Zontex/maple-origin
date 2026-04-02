@@ -60,6 +60,7 @@ let fadeDirection: 'out' | 'none' = 'none'; // 'out' = revealing
 const fadeDuration = 500; // ms
 let fadeTimer = 0;
 let fadeWaitForDoneLoading = false; // Wait for map to finish loading before fading in
+let oobRespawning = false; // Out-of-bounds respawn in progress
 
 // Call before map.load() — holds black screen until doneLoading
 export function fadeToBlack() {
@@ -139,6 +140,7 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
   MyCharacter.pos.fallStartY = MyCharacter.pos.y;
   MyCharacter.pos.fallDistance = 0;
   MyCharacter.pos.landingImpactVy = 0;
+  oobRespawning = false;
   // Fade-in will be triggered automatically when doneLoading becomes true
 }
 
@@ -470,6 +472,46 @@ MapStateInstance.doUpdate = function (
     this.previousKeyboardState.down = canvas.isKeyDown("down");
     this.previousKeyboardState.left = canvas.isKeyDown("left");
     this.previousKeyboardState.right = canvas.isKeyDown("right");
+
+    // Out-of-bounds detection: if player falls below map bottom, fade + respawn
+    if (!oobRespawning && MapleMap.boundaries && !MyCharacter.isDead) {
+      const bottomLimit = MapleMap.boundaries.bottom + 300;
+      if (MyCharacter.pos.y > bottomLimit || !MapleMap.isPositionValid(MyCharacter.pos.x, MyCharacter.pos.y)) {
+        oobRespawning = true;
+        fadeAlpha = 1;
+        fadeDirection = 'none';
+
+        // Find a safe position: spawn portal or nearest foothold
+        let safePos: { x: number; y: number } | null = null;
+        if (MapleMap.portals?.length > 0) {
+          const spawnPortal = MapleMap.portals.find((p: any) => p.type === 0);
+          if (spawnPortal) safePos = { x: spawnPortal.x, y: spawnPortal.y };
+        }
+        if (!safePos) {
+          safePos = MapleMap.getCenterFootholdLocation?.() || null;
+        }
+        if (safePos) {
+          MyCharacter.pos.x = safePos.x;
+          MyCharacter.pos.y = safePos.y;
+        }
+        MyCharacter.pos.vx = 0;
+        MyCharacter.pos.vy = 0;
+        MyCharacter.pos.fh = null;
+        MyCharacter.pos.lf = null;
+        MyCharacter.pos.djump = null;
+        MyCharacter.pos.isClimbing = false;
+        MyCharacter.pos.fallStartY = MyCharacter.pos.y;
+        MyCharacter.pos.fallDistance = 0;
+        MyCharacter.pos.landingImpactVy = 0;
+
+        // Short delay then fade in
+        setTimeout(() => {
+          fadeDirection = 'out';
+          fadeTimer = 0;
+          oobRespawning = false;
+        }, 300);
+      }
+    }
 
     Camera.lookAt(MyCharacter.pos.x, MyCharacter.pos.y - 78);
 

@@ -282,14 +282,21 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         MyChar.stats.abilityPoints = charData.stats.ap;
         MyChar.stats.maxHp = charData.stats.maxHp;
         MyChar.stats.maxMp = charData.stats.maxMp;
-        MyChar.stats.jobId = charData.stats.jobId;
+        MyChar.stats.setJobId(charData.stats.jobId);
+        MyChar.job = charData.stats.jobId;
       }
 
-      // Apply equipped items
+      // Apply equipped items — clear and reload from DB
       MyChar.equips = [];
+      MyChar.equippedItemIds = {};
       if (charData.equipped) {
         for (const eq of charData.equipped) {
-          await MyChar.attachEquip(eq.slot, eq.item_id);
+          try {
+            await MyChar.attachEquip(eq.slot, eq.item_id);
+            console.log('[Login] Equipped slot', eq.slot, 'item', eq.item_id);
+          } catch (e) {
+            console.error('[Login] Failed to equip slot', eq.slot, 'item', eq.item_id, e);
+          }
         }
       }
 
@@ -324,6 +331,7 @@ UILogin.initialize = async function (canvas: GameCanvas) {
 
       // Store server character ID for saving later
       (MyChar as any)._serverCharId = charData.id;
+      console.log('[Login] Set _serverCharId =', charData.id);
       // Set starting map from saved data
       (MyChar as any)._startMapId = charData.mapId;
       (MyChar as any)._startPosX = charData.posX;
@@ -374,7 +382,9 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       y: -620 + row * 30,
       img: this.uiLogin.nGet('WorldSelect')?.nGet('channel')[i].nChildren,
       onClick: async () => {
-        console.log(`Channel ${i} selected!`);
+        const now = Date.now();
+        const isDoubleClick = this.selectedChannelIndex === i && (now - (uiLoginRef._lastChannelClickTime || 0)) < 400;
+        uiLoginRef._lastChannelClickTime = now;
 
         this.selectedChannelIndex = i;
         this.channelSelectAnimation = new FrameAnimation(
@@ -383,7 +393,11 @@ UILogin.initialize = async function (canvas: GameCanvas) {
           -620 + row * 30 - 10
         );
         this.channelSelectAnimation.active = true;
-        // @todo: handle double click
+
+        if (isDoubleClick) {
+          await uiLoginRef.loadCharactersFromServer();
+          await LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
+        }
       },
       isHidden: true
     });
@@ -1055,7 +1069,7 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
           ];
           // Right column values: Fame, (empty), INT, LUK
           const rightValues = [
-            '0', // fame not tracked on standing character
+            `${stats?.fame ?? 0}`,
             '',
             `${stats?.int || 4}`,
             `${stats?.luk || 4}`,
@@ -1196,7 +1210,7 @@ UILogin.confirmCreateCharacter = async function () {
   const face = o.faces[o.faceIndex];
   const skin = o.skinColors[o.skinIndex];
 
-  // Save to server
+  // Save to server with selected equipment
   const result = await MySocket.createCharacter({
     worldId: this.selectedWorldId ?? 0,
     name,
@@ -1204,6 +1218,12 @@ UILogin.confirmCreateCharacter = async function () {
     face,
     skin,
     gender: 0,
+    equips: [
+      { slot: 4, itemId: o.tops[o.topIndex] },
+      { slot: 5, itemId: o.bottoms[o.bottomIndex] },
+      { slot: 6, itemId: o.shoes[o.shoesIndex] },
+      { slot: 10, itemId: o.weapons?.[o.weaponIndex] },
+    ].filter(e => e.itemId),
   });
 
   if (!result.success) {
@@ -1703,8 +1723,17 @@ UILogin.loadCharactersFromServer = async function () {
         flipped: true,
         equipIds,
       });
-      // Store server ID on the character for select/delete
+      // Store server ID and stats on the character for select/delete and info card
       (ch as any)._serverId = c.id;
+      (ch as any).stat = {
+        job: (await import('../Constants/Jobs')).getJobNameById(c.job_id ?? 0),
+        level: c.level,
+        str: c.str,
+        dex: c.dex,
+        int: c.int,
+        luk: c.luk,
+        fame: c.fame ?? 0,
+      };
       this.characters.push(ch);
     } catch (e) {
       console.error('Failed to load character preview:', c.name, e);

@@ -238,6 +238,11 @@ class GameCanvas {
       return;
     }
 
+    // Skip broken or not-yet-loaded images
+    if (img instanceof HTMLImageElement && (!img.complete || img.naturalWidth === 0)) {
+      return;
+    }
+
     const sx = opts.sx !== undefined ? opts.sx : 0;
     const sy = opts.sy !== undefined ? opts.sy : 0;
     const sw = opts.sw !== undefined ? opts.sw : img.width - sx;

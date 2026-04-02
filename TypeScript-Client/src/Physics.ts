@@ -1,4 +1,9 @@
-import MapleMap from "./MapleMap";
+// Lazy reference to break circular dependency:
+// MyCharacter → MapleCharacter → Physics → MapleMap → Monster → mysocket → MyCharacter
+import type MapleMapType from "./MapleMap";
+let _MapleMap: typeof MapleMapType | null = null;
+export function _setMapleMap(m: typeof MapleMapType) { _MapleMap = m; }
+function getMapleMap() { return _MapleMap!; }
 
 /// https://github.com/NoLifeDev/NoLifeStory/blob/master/src/client/physics.cpp
 const down_jump_multiplier = 0.35355339;
@@ -95,7 +100,7 @@ class Physics {
         this.down &&
         !fh.cantThrough &&
         !fh.forbit &&
-        Object.values(MapleMap.footholds || {}).some((f: any) => {
+        Object.values(getMapleMap().footholds || {}).some((f: any) => {
           return f.id != fh.id && f.x1 < x && f.x2 > x && f.y1 > y && f.y2 > y;
         })
       ) {
@@ -283,9 +288,17 @@ class Physics {
             ny = y + vy * delta;
           if (nx > fh.x2) {
             if (!fh.next) {
-              (nx = fh.x2 + epsilon), (ny = fh.y2);
-              fh = null;
-              delta *= 1 - (nx - x) / (vx * delta);
+              // Check if this is a map edge — stop the player instead of falling
+              const mapBounds = getMapleMap()?.boundaries;
+              if (mapBounds && fh.x2 >= mapBounds.right - 50) {
+                (nx = fh.x2 - epsilon), (ny = fh.y2);
+                (vx = 0), (vy = 0);
+                delta = 0;
+              } else {
+                (nx = fh.x2 + epsilon), (ny = fh.y2);
+                fh = null;
+                delta *= 1 - (nx - x) / (vx * delta);
+              }
             } else if (fh.next.x1 < fh.next.x2) {
               fh = fh.next;
               let fx = fh.x2 - fh.x1,
@@ -305,9 +318,17 @@ class Physics {
             }
           } else if (nx < fh.x1) {
             if (!fh.prev) {
-              (nx = fh.x1 - epsilon), (ny = fh.y1);
-              fh = null;
-              delta *= 1 - (nx - x) / (vx * delta);
+              // Check if this is a map edge — stop the player instead of falling
+              const mapBounds2 = getMapleMap()?.boundaries;
+              if (mapBounds2 && fh.x1 <= mapBounds2.left + 50) {
+                (nx = fh.x1 + epsilon), (ny = fh.y1);
+                (vx = 0), (vy = 0);
+                delta = 0;
+              } else {
+                (nx = fh.x1 - epsilon), (ny = fh.y1);
+                fh = null;
+                delta *= 1 - (nx - x) / (vx * delta);
+              }
             } else if (fh.prev.x1 < fh.prev.x2) {
               fh = fh.prev;
               let fx = fh.x2 - fh.x1,
@@ -336,7 +357,7 @@ class Physics {
           let nnx = x + dx1;
           let nny = y + dy1;
 
-          for (let f of Object.values<any>(MapleMap.footholds || {})) {
+          for (let f of Object.values<any>(getMapleMap().footholds || {})) {
             let dx2 = f.x2 - f.x1,
               dy2 = f.y2 - f.y1;
             let dx3 = x - f.x1,

@@ -126,7 +126,10 @@ export default class QuestManager {
   }
 
   completeQuest(questId: number): boolean {
-    if (!this.canCompleteQuest(questId)) return false;
+    if (!this.canCompleteQuest(questId)) {
+      console.warn(`[Quest] Cannot complete quest ${questId} — requirements not met`);
+      return false;
+    }
 
     // Apply rewards
     const rewards = QuestData.rewards.get(questId);
@@ -247,9 +250,20 @@ export default class QuestManager {
     const questIds = QuestData.npcToQuests.get(npcId);
     if (!questIds) return result;
 
+    // Filter out Korean-only quests (Hangul characters)
+    const hasKorean = (text: string) => /[\uAC00-\uD7AF]/.test(text);
+
     for (const questId of questIds) {
       const reqs = QuestData.requirements.get(questId);
       if (!reqs) continue;
+
+      // Skip quests with Korean-only names (KMS quests not localized for GMS)
+      const questName = QuestData.quests.get(questId)?.name || '';
+      if (hasKorean(questName)) continue;
+
+      // Skip medal/title quests (29xxx) and event quests (19xxx) — need server-side validation
+      if (questId >= 19000 && questId < 20000) continue;
+      if (questId >= 29000 && questId < 30000) continue;
 
       const state = this.getQuestState(questId);
 
@@ -271,9 +285,9 @@ export default class QuestManager {
         }
       } else if (state === QuestState.NOT_STARTED) {
         if (reqs.start.npc === npcId) {
-          // Script-based quests show as available if this NPC starts them
+          // Script-based quests still need to meet prerequisites (level, pre-quests, job)
           const hasScript = reqs.start.startscript || reqs.complete.endscript;
-          if (hasScript || this.canStartQuest(questId)) {
+          if (hasScript ? this.meetsRequirement(reqs.start) : this.canStartQuest(questId)) {
             result.available.push(questId);
           }
         }
@@ -326,17 +340,18 @@ export default class QuestManager {
     const id = typeof itemId === 'string' ? parseInt(itemId as any, 10) : itemId;
     const inv = this.character.inventory;
     const tabs = [inv.equip, inv.use, inv.setup, inv.etc, inv.cash];
+    let total = 0;
     for (const tab of tabs) {
       if (!tab) continue;
       for (const item of tab) {
         if (!item) continue;
         const storedId = typeof item.itemId === 'string' ? parseInt(item.itemId, 10) : item.itemId;
         if (storedId === id) {
-          return item.quantity || 1;
+          total += item.quantity || 1;
         }
       }
     }
-    return 0;
+    return total;
   }
 
   removeItems(itemId: number, count: number): void {

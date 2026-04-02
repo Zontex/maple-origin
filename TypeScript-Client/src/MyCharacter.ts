@@ -2,9 +2,7 @@
 import MapleCharacter from "./MapleCharacter";
 import Stats from "./Stats/Stats";
 import { JobId } from "./Constants/Jobs";
-import MapleMap from "./MapleMap";
 import Inventory from "./Inventory/Inventory";
-import Item from "./Inventory/Item";
 import QuestManager from "./Quest/QuestManager";
 
 const MyCharacter = new MapleCharacter({
@@ -46,26 +44,5 @@ declare global {
 }
 
 window.charecter = MyCharacter;
-
-// Attach beginner equipment
-window.charecter.attachEquip(4, 1040002);   // Coat (white undershirt)
-window.charecter.attachEquip(5, 1060002);   // Pants (blue)
-window.charecter.attachEquip(10, 1302000);  // Weapon (sword)
-
-// Example of adding an item to the equipment inventory.
-const addInventory = async () => {
-  try {
-    MyCharacter.inventory.use = [
-      await Item.fromOpts({ itemId: 2000000, quantity: 5 }), // red potion
-      await Item.fromOpts({ itemId: 2000001, quantity: 3 }), // orange potion
-      await Item.fromOpts({ itemId: 2000002, quantity: 10 }), // white potion
-    ];
-    MyCharacter.inventory.etc = [];
-  } catch (e) {
-    console.error('Error loading test inventory items:', e);
-  }
-};
-
-addInventory();
 
 export default MyCharacter;

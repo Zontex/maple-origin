@@ -251,9 +251,19 @@ node tools/wz-to-json.js <input.wz> <output_dir>
 - `nGetImage()` on non-canvas WZ nodes corrupts rendering — always verify node type
 - HTML inputs positioned in CSS pixels don't align with canvas-drawn elements when canvas is scaled
 - Camera easing means `setTopLeft` doesn't jump instantly — `Camera.update()` must be called every frame
-- `MyCharacter.load()` is async — must await before rendering character sprites
+- `MyCharacter.load()` is async — must await before rendering character sprites; it also re-attaches equipment from `equippedItemIds`
 - WZ `charInfo2` image already contains stat labels (JOB, LV, STR, etc.) — only draw values, not labels
 - Login map backgrounds repeat vertically — the map extends well below y=-3000
+- **Circular dependency**: `MyCharacter → MapleCharacter → Physics → MapleMap → Monster → mysocket → MyCharacter`. Broken by lazy-loading MapleMap in Physics.ts via `_setMapleMap()` registration pattern.
+- **NPC click priority**: NPCs with scripts AND quests — if only in-progress quests exist, run NPC script directly (handles warps, shops). If available/completable quests exist, show GMS-style quest listing with "ETC" for conversation.
+- **Quest script re-run bug**: Do NOT re-run startscripts when quest is in-progress (state=1) on the start NPC. The start script already ran — the NPC's own script should handle the next action.
+- **Job loading**: Use `stats.setJobId(id)` not `stats.jobId = id` — the setter also updates `jobType` and `job` name.
+- **Item count across stacks**: `QuestManager.getItemCount()` must sum ALL matching stacks, not just the first one.
+- **Format codes**: `#t` and `#c` regexes need `#?` (optional closing hash) — some quest texts omit the closing `#`.
+- **Map name resolution in NPC scripts**: `preloadMapNames()` must scan for all 6-9 digit numbers in script text, not just `#m<id>#` patterns — scripts build map codes dynamically via string concatenation.
+- **Consume protection**: Only items 2000000-2049999 (potions/food) are consumable via double-click. Cards, arrows, scrolls, throwing stars must be blocked.
+- **Korean quest filter**: Skip quests with Hangul characters (`\uAC00-\uD7AF`) in names — KMS quests not localized for GMS. Also skip medal quests (29xxx) and event quests (19xxx).
+- **Player equipment sync**: `sendPlayerInfo` and `sendPlayerUpdate` must include `equipped` array. Remote characters use this to render correct gear. Equipment changes detected via key comparison in `handlePlayerUpdate`.
 
 ## Quest Script Engine
 Backend quest scripts (`backend/scripts/quest/*.js`, 253 files) are plain JavaScript that run client-side via `new Function()`. They are copied to `TypeScript-Client/public/scripts/quest/`.

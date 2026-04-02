@@ -133,7 +133,13 @@ export default class NpcScriptEngine {
     while ((match = regex.exec(scriptCode)) !== null) {
       mapIds.add(parseInt(match[1]));
     }
-    // Also find warp() calls with map IDs
+    // Also find map IDs in arrays/variables (e.g. `var imaps = [104000000, ...]`)
+    // and warp() calls — any 6-9 digit number is likely a map ID
+    const numRegex = /\b(\d{6,9})\b/g;
+    while ((match = numRegex.exec(scriptCode)) !== null) {
+      const id = parseInt(match[1]);
+      if (id >= 100000 && id <= 999999999) mapIds.add(id);
+    }
     if (mapIds.size === 0) return;
     const mapState = (window as any).MapStateInstance;
     if (!mapState?.getMapName) return;

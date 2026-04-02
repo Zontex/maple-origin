@@ -96,18 +96,19 @@ npm start
 - **Login flow** — authentic v83 login screen, world/channel select, character select with equipment preview, 3-stage character creation (race select → name → customize)
 - **User accounts** — SQLite database with bcrypt authentication, character persistence (stats, inventory, equipment, quests, map position)
 - **Character creation** — race selection (Explorers/Cygnus Knights/Aran), name validation, face/hair/skin/clothes/weapon/gender customization with live preview
-- **Auto-save** — character state saved on map change, every 60s, on disconnect, and on browser close
+- **Auto-save** — character state saved on map change, every 30s, on disconnect (with full inventory/equipment data), and on browser close
+- **Job advancement** — first job advancement NPCs (Warrior, Magician, Bowman, Thief, Pirate) with stat requirement checks
 - **Death system** — dead stance, tombstone animation + SFX, revival dialog, respawn at nearest town
 - **Stats menu** with AP allocation
 - **EXP and leveling** with level-up animation and sound
 
 ### Combat
 - **All 16 weapon types** — swords, axes, maces, daggers, wands, staves, 2H swords/axes/maces, spears, polearms, bows, crossbows, claws, knucklers, pistols — each with correct attack stances, range, and sound effects
-- **v83 damage formulas** — proper per-weapon stat multipliers (STR/DEX/LUK scaling), attack type variants (stab vs swing), monster defense reduction, miss chance from evasion
+- **v83 damage formulas** — proper per-weapon stat multipliers (STR/DEX/LUK scaling), attack type variants (stab vs swing), monster defense reduction, accuracy/evasion hit chance, level-gap mob miss scaling
 - **Projectile system** — bows, crossbows, claws, and pistols fire projectiles with auto-targeting, homing physics, and proper damage calculation
 - **Weapon-range-based hit detection** with monster-width awareness, directional filtering, and per-weapon melee range
 - **Randomized attack stances** — each attack picks a random stance from the weapon's stance pool for visual variety
-- **Monster AI** — random patrol, boundary bouncing, jump probability
+- **Monster AI** — random patrol, boundary enforcement (clamped after physics), map-edge containment
 - **Monster HP bars** — show on hit, fade after 6 seconds
 - **Damage numbers** — player-hit-mob (red), mob-hit-player (violet), miss indicators
 - **Reactors** — breakable map objects from Reactor.wz, multi-state hit animations, item drops (163 reactors, 1126 drop entries), quest-gated drops, respawn timers
@@ -133,7 +134,8 @@ npm start
 - **5-tab inventory** (Equip, Use, Setup, Etc, Cash) with WZ grid alignment, rounded tab styling, scrollbar, WZ digit quantity sprites
 - **Equipment window** (E key) — paper doll with 16+ equipment slots, WZ background, item icons, double-click to unequip, tooltip on hover
 - **Equip/unequip system** — double-click equip tab items to wear them (with slot swap), double-click equipped items to unequip back to inventory, character visuals update in real-time
-- **Item consumption** — double-click Use items for HP/MP recovery from WZ spec data
+- **Item consumption** — double-click Use items for HP/MP recovery from WZ spec data (only potions/food 2000000-2049999; arrows, cards, scrolls protected)
+- **NPC shops** — buy items with mesos, sell items for WZ-based prices (price/3 formula)
 - **Item tooltips** — hover to see name, icon, description with `#c` colored text support
 - **Drop dialogs** — WZ Notice4 frame for meso/item quantity input
 - **Quest item protection** — quest items cannot be dropped
@@ -144,7 +146,7 @@ Real-time multiplayer via WebSocket with **host-client architecture**:
 
 | Feature | How It Works |
 |---------|-------------|
-| **Player sync** | Position, stance, animation synced via lerp interpolation (~30 updates/sec) |
+| **Player sync** | Position, stance, animation, and equipment synced via lerp interpolation (~30 updates/sec) |
 | **Monster sync** | Host-client model — one player per map runs mob AI, broadcasts state ~15/s to others |
 | **Combat sync** | Attack animations, mob damage, and contact damage visible to all players |
 | **Item drops** | Drops visible to all players, pickups broadcast and animated across clients |
@@ -285,14 +287,14 @@ MapleWeb/
 - [x] Job advancement NPCs (quest scripts 1048-1054 written)
 - [ ] Equipment stat application (STR, DEX, etc. affect damage)
 - [ ] Skill system foundation (Skill.wz data, skill UI, hotkey bar)
-- [ ] NPC shops (buy/sell items)
-- [ ] Quest state persistence (localStorage)
+- [x] NPC shops (buy/sell items)
+- [x] Quest state persistence (SQLite)
 - [ ] Facial expressions (F1-F7 hotkeys)
 - [ ] Passive HP/MP regen
 - [ ] Map name display on entry
 
 #### Medium Term
-- [ ] Multiple map connectivity (portal network between towns)
+- [x] Multiple map connectivity (portal network between towns)
 - [ ] Party system (shared EXP, party HP display)
 - [ ] Proper chat system (history, whisper, party chat)
 - [x] Equipment window (paper doll)

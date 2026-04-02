@@ -11,7 +11,7 @@ import Monster from "./Monster";
 import AudioManager from "./Audio/AudioManager";
 import Camera, { CameraInterface } from "./Camera"; // debugging
 import Timer from "./Timer";
-import MapleCharacter from "./MapleCharacter";
+import type MapleCharacter from "./MapleCharacter";
 import DropItemSprite from "./DropItem/DropItemSprite";
 import GameCanvas from "./GameCanvas";
 import UINpcTalk from './UI/UINpcTalk';
@@ -21,6 +21,7 @@ import NpcScriptEngine from './NpcScriptEngine';
 import QuestData from './Quest/QuestData';
 import Reactor from './Reactor';
 import UIMiniMap from './UI/UIMiniMap';
+import { _setMapleMap } from './Physics';
 
 export interface MapleMap {
   id: number | string;
@@ -53,6 +54,8 @@ export interface MapleMap {
   getHorizontalFootHolds: () => any;
   getLocationAboveRandomFoothold: () => any;
   getCenterFootholdLocation: () => any;
+  getNearestFootholdPosition: (x: number, y: number) => { x: number; y: number } | null;
+  isPositionValid: (x: number, y: number) => boolean;
   loadBoundaries: (wzNode: any, footholds: any) => any;
   getNearbyTownMapId: () => any;
   loadBackgrounds: (wzNode: any) => Promise<any>;
@@ -85,6 +88,7 @@ export interface MapleMap {
 }
 
 const MapleMap = {} as MapleMap;
+_setMapleMap(MapleMap);
 const minLoadTimeInSeconds = 1;
 
 MapleMap.load = async function (id: number | string) {
@@ -240,6 +244,50 @@ MapleMap.getCenterFootholdLocation = function () {
   }
 
   return { x: centerX, y: (this.boundaries.top + this.boundaries.bottom) / 2 };
+};
+
+// Find the nearest valid position on a foothold to the given point
+MapleMap.getNearestFootholdPosition = function (x: number, y: number) {
+  const allFhs: any[] = Object.values(this.footholds || {});
+  if (allFhs.length === 0) return null;
+
+  let bestX = 0, bestY = 0;
+  let bestDist = Infinity;
+
+  for (const fh of allFhs) {
+    // Skip walls and ceilings
+    if (fh.x1 === fh.x2 || fh.x1 > fh.x2) continue;
+
+    // Clamp x to the foothold's horizontal range
+    const clampedX = Math.max(fh.x1, Math.min(fh.x2, x));
+    // Interpolate y on the foothold at that x
+    const t = (fh.x2 - fh.x1) === 0 ? 0 : (clampedX - fh.x1) / (fh.x2 - fh.x1);
+    const fhY = fh.y1 + t * (fh.y2 - fh.y1);
+
+    const dx = clampedX - x;
+    const dy = fhY - y;
+    const dist = dx * dx + dy * dy;
+
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestX = clampedX;
+      bestY = fhY;
+    }
+  }
+
+  return bestDist < Infinity ? { x: bestX, y: bestY } : null;
+};
+
+// Check if a position is within the map boundaries (with margin)
+MapleMap.isPositionValid = function (x: number, y: number) {
+  if (!this.boundaries) return true;
+  const margin = 200; // extra tolerance beyond boundaries
+  return (
+    x >= this.boundaries.left - margin &&
+    x <= this.boundaries.right + margin &&
+    y >= this.boundaries.top - margin &&
+    y <= this.boundaries.bottom + margin
+  );
 };
 
 MapleMap.loadBackgrounds = async function (wzNode) {
@@ -634,7 +682,6 @@ MapleMap.render = function (
   }
 
   const notInAnyLayer = (obj: any) => !(obj.layer >= 0 && obj.layer <= 7);
-  currentMonsters.filter(notInAnyLayer).forEach(draw);
   this.monsters.filter(notInAnyLayer).forEach(draw);
   (this.reactors as any[]).filter(notInAnyLayer).forEach(draw);
   this.characters.filter(notInAnyLayer).forEach(draw);
@@ -753,13 +800,17 @@ MapleMap.handleClick = function (
           // If started and this NPC completes it, run end()
           let phase: 'start' | 'end' | null = null;
           if (state === 0 && reqs.start.npc === npc.id) {
+            // Check prerequisite quests before offering this quest
+            const prereqsMet = !reqs.start.quests || reqs.start.quests.every(
+              (pq: any) => questManager?.getQuestState(pq.id) >= pq.state
+            );
+            if (!prereqsMet) continue;
             phase = 'start';
           } else if (state === 1 && reqs.complete.npc === npc.id) {
             phase = 'end';
-          } else if (state === 1 && reqs.start.npc === npc.id) {
-            // Start NPC clicked while in-progress — run start() for in-progress dialog
-            phase = 'start';
           }
+          // Note: do NOT re-run startscript when quest is in-progress (state=1) on the start NPC.
+          // The quest is already started — the NPC's own script should handle the next action (warp, etc.).
 
           if (phase && await this.scriptEngine.hasScript(questId)) {
             const questName = QuestData.quests.get(questId)?.name || '';
@@ -804,11 +855,20 @@ MapleMap.handleClick = function (
         }
 
         if (!scriptHandled) {
-          const npcHasScript = await this.npcScriptEngine.hasScript(npc.id);
+          let npcHasScript = false;
+          try { npcHasScript = await this.npcScriptEngine.hasScript(npc.id); } catch {}
           const hasQuests = questManager && quests &&
             (quests.available.length > 0 || quests.inProgress.length > 0 || quests.completable.length > 0);
 
           if (hasQuests) {
+            // If NPC has a script and ONLY in-progress quests (no available/completable),
+            // prefer the NPC script — these quests just say "go talk to X" and the script
+            // handles the actual action (warp, etc.). Otherwise show GMS-style quest listing.
+            if (npcHasScript && quests.available.length === 0 && quests.completable.length === 0) {
+              await this.tryNpcScript(npc);
+              return;
+            }
+
             // Build quest listing selections like the original game
             const selections: any[] = [];
             let idx = 0;

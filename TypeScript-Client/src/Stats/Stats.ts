@@ -260,18 +260,11 @@ class Stats {
 
   getAvoidability() {
     let avoidability = 0;
-    if (
-      [
-        JobsMainType.Magician,
-        JobsMainType.Swordman,
-        JobsMainType.Archer,
-        JobsMainType.Thief,
-        JobsMainType.Rogue,
-      ].includes(this.jobType)
-    ) {
-      avoidability = this.dex * 0.25 + this.luk * 0.5;
-    } else if (this.jobType === JobsMainType.Brawler) {
+    if (this.jobType === JobsMainType.Brawler) {
       avoidability = this.dex * 1.5 + this.luk * 0.5;
+    } else {
+      // All classes including Beginner: v83 base avoidability
+      avoidability = this.dex * 0.25 + this.luk * 0.5;
     }
 
     return Math.floor(avoidability);
@@ -347,21 +340,14 @@ class Stats {
   // monster.eva = monsterAvoidability
   // between 1 - 0
   getChanceToHitMonster(monsterLevel: number, monsterAvoidability: number) {
+    // v83: hitRate = accuracy / ((1.84 + 0.07 * levelDiff) * mobAvoid)
+    if (monsterAvoidability <= 0) return 1;
     const levelDifference = Math.max(0, monsterLevel - this.level);
     const ChancetoHit =
       this.getAccuracy() /
-        ((1.84 + 0.07 * levelDifference) * monsterAvoidability) -
-      1;
+        ((1.84 + 0.07 * levelDifference) * monsterAvoidability);
 
-    // console.log(ChancetoHit);
-
-    if (ChancetoHit > 1) {
-      return 1;
-    } else if (ChancetoHit < 0) {
-      return 0;
-    } else {
-      return ChancetoHit;
-    }
+    return Math.max(0, Math.min(1, ChancetoHit));
   }
 
   getRandomIsMiss(monsterLevel: number, monsterAvoidability: number) {
@@ -382,17 +368,14 @@ class Stats {
     monsterLevel: number,
     monsterAccuracy: number
   ) {
-    const levelDifference = monsterLevel - this.level;
-    const ajustedAvoidability = this.getAvoidability() - levelDifference / 2;
-    const ChanceToMiss = ajustedAvoidability / (4.5 * monsterAccuracy);
-
-    if (ChanceToMiss > 1) {
-      return 1;
-    } else if (ChanceToMiss < 0) {
-      return 0;
-    } else {
-      return ChanceToMiss;
-    }
+    // v83 hit/miss: level gap heavily penalizes low-level mobs hitting higher-level players
+    const levelGap = Math.max(0, this.level - monsterLevel);
+    const playerAvoid = this.getAvoidability();
+    // Each level of gap adds ~5% miss chance; avoid vs acc adds additional miss
+    const levelMissBonus = levelGap * 5;
+    const avoidMissBonus = Math.max(0, playerAvoid - monsterAccuracy) * 0.5;
+    const chanceToMiss = Math.min(95, levelMissBonus + avoidMissBonus) / 100;
+    return chanceToMiss;
   }
 
   // this is only for touch damage

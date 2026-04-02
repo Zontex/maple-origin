@@ -192,7 +192,8 @@ class MySocket {
   // Save current character state to server
   saveCharacterToServer() {
     const charId = (MyCharacter as any)._serverCharId;
-    if (!charId || !this.isConnected) return;
+    if (!charId) { console.warn('[Save] No _serverCharId — character not saved'); return; }
+    if (!this.isConnected) return;
 
     const inv = MyCharacter.inventory;
     const serializeTab = (items: any[]) =>
@@ -238,8 +239,10 @@ class MySocket {
         maxMp: MyCharacter.maxMp,
         jobId: MyCharacter.stats?.jobId ?? 0,
         mapId: Number(MapleMap.id) || 10000,
-        posX: Math.round(MyCharacter.pos.x),
-        posY: Math.round(MyCharacter.pos.y),
+        posX: (MapleMap.isPositionValid?.(MyCharacter.pos.x, MyCharacter.pos.y))
+          ? Math.round(MyCharacter.pos.x) : 0,
+        posY: (MapleMap.isPositionValid?.(MyCharacter.pos.x, MyCharacter.pos.y))
+          ? Math.round(MyCharacter.pos.y) : 0,
         mesos: inv?.mesos ?? 0,
         fame: MyCharacter.fame ?? 0,
         equipped,
@@ -274,6 +277,9 @@ class MySocket {
 
     // Start the game loop for sending position updates
     this.startUpdateLoop();
+
+    // Initial save so server has full data immediately (for disconnect recovery)
+    setTimeout(() => this.saveCharacterToServer(), 2000);
 
     // Save character on page close/refresh
     window.addEventListener('beforeunload', () => {
@@ -532,6 +538,14 @@ class MySocket {
     const mapId = Number(MapleMap.id);
     console.log(`Sending player info with mapId=${mapId} (${typeof mapId})`);
     
+    // Collect equipped item IDs for other players to see
+    const equippedItems: { slot: number; itemId: number }[] = [];
+    if (MyCharacter.equippedItemIds) {
+      for (const [slot, itemId] of Object.entries(MyCharacter.equippedItemIds)) {
+        if (itemId) equippedItems.push({ slot: Number(slot), itemId: itemId as number });
+      }
+    }
+
     const playerInfo: PlayerState = {
       id: this.playerId || "unregistered",
       x: MyCharacter.pos.x,
@@ -548,7 +562,8 @@ class MySocket {
       job: MyCharacter.stats.jobId,
       hp: MyCharacter.hp,
       maxHp: MyCharacter.maxHp,
-      attacking: false
+      attacking: false,
+      equipped: equippedItems,
     };
     
     console.log("Sending player info:", playerInfo);
@@ -569,6 +584,14 @@ class MySocket {
     // Always convert mapId to number
     const mapId = Number(MapleMap.id);
     
+    // Collect equipped item IDs
+    const equippedItems: { slot: number; itemId: number }[] = [];
+    if (MyCharacter.equippedItemIds) {
+      for (const [slot, itemId] of Object.entries(MyCharacter.equippedItemIds)) {
+        if (itemId) equippedItems.push({ slot: Number(slot), itemId: itemId as number });
+      }
+    }
+
     const update: PlayerUpdate = {
       x: MyCharacter.pos.x,
       y: MyCharacter.pos.y,
@@ -577,10 +600,10 @@ class MySocket {
       flipped: MyCharacter.flipped,
       mapId: mapId,
       attacking: MyCharacter.isInAttack || false,
-      onGround: !!MyCharacter.pos.fh, // Add this to indicate if player is on ground
-      // Add more physics state if needed
+      onGround: !!MyCharacter.pos.fh,
       vx: MyCharacter.pos.vx,
-      vy: MyCharacter.pos.vy
+      vy: MyCharacter.pos.vy,
+      equipped: equippedItems,
     };
     
     this.sendMessage({
@@ -803,11 +826,19 @@ class MySocket {
         character.stance = '';  // Clear so setStance actually runs
         character.setStance(playerData.stance || 'stand1', 0);
 
-        // Attach basic equips
+        // Attach actual equipped items from player data
         try {
-          await character.attachEquip(5, 1060002);
-          await character.attachEquip(4, 1040002);
-          await character.attachEquip(10, 1302000);
+          const equipped = (playerData as any).equipped;
+          if (Array.isArray(equipped) && equipped.length > 0) {
+            for (const eq of equipped) {
+              await character.attachEquip(eq.slot, eq.itemId);
+            }
+          } else {
+            // Fallback to beginner defaults if no equip data received
+            await character.attachEquip(4, 1040002);
+            await character.attachEquip(5, 1060002);
+            await character.attachEquip(10, 1302000);
+          }
         } catch (error) {
           console.error("Failed to attach equipment to player:", error);
         }
@@ -918,6 +949,23 @@ class MySocket {
 
       if (playerData.flipped !== undefined) {
         character.flipped = playerData.flipped;
+      }
+
+      // Update equipment if changed
+      if (Array.isArray(playerData.equipped)) {
+        const newEquipKey = playerData.equipped.map((e: any) => `${e.slot}:${e.itemId}`).sort().join(',');
+        const oldEquipKey = (character as any)._lastEquipKey || '';
+        if (newEquipKey !== oldEquipKey) {
+          (character as any)._lastEquipKey = newEquipKey;
+          // Re-attach all equips
+          character.equips = [];
+          character.equippedItemIds = {};
+          (async () => {
+            for (const eq of playerData.equipped) {
+              try { await character.attachEquip(eq.slot, eq.itemId); } catch {}
+            }
+          })();
+        }
       }
     }
   }
@@ -1299,7 +1347,7 @@ class MySocket {
       }
     }, 66);
 
-    // Auto-save character every 60 seconds
+    // Auto-save character every 30 seconds
     setInterval(() => {
       try {
         if (this.isConnected && this.isLoggedIn) {
@@ -1308,7 +1356,7 @@ class MySocket {
       } catch (error) {
         console.error("Error in auto-save:", error);
       }
-    }, 60000);
+    }, 30000);
   }
 }
 

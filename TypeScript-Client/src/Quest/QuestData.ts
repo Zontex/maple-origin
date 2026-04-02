@@ -96,8 +96,8 @@ function getItemDescSync(itemId: number): string {
 // Resolve deferred #t and #c codes in text (call after ensureItemNames)
 export function resolveItemCodes(text: string, questManager?: any): string {
   return text
-    .replace(/#t(\d+)#/g, (_, id) => getItemNameSync(parseInt(id)))
-    .replace(/#c(\d+)#/g, (_, id) => {
+    .replace(/#t(\d+)#?/g, (_, id) => getItemNameSync(parseInt(id)))
+    .replace(/#c(\d+)#?/g, (_, id) => {
       if (questManager) {
         return String(questManager.getItemCount(parseInt(id)));
       }

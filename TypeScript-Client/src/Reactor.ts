@@ -267,8 +267,9 @@ export default class Reactor {
       }
 
       // Chance check — higher chance value = rarer (1 = 100%, 2 = 50%, 10 = 10%)
-      // Formula from Cosmic: Math.random() < (dropRate / chance)
-      if (Math.random() >= (1 / drop.chance)) continue;
+      // Quest items with chance=1 get a realistic drop rate (~30%)
+      const effectiveChance = (drop.questId > 0 && drop.chance <= 1) ? 3 : drop.chance;
+      if (Math.random() >= (1 / effectiveChance)) continue;
 
       // Create the drop using DropItemSprite.fromOpts (same pattern as Monster)
       const offsetX = (dropIndex - 1) * spacing;

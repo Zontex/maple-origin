@@ -6,6 +6,7 @@ const MAX_CHARACTERS_PER_WORLD = 3;
 const DEFAULT_EQUIPS = [
   { slot: 4, itemId: 1040002 },   // White undershirt
   { slot: 5, itemId: 1060002 },   // Blue pants
+  { slot: 6, itemId: 1072001 },   // Red Sneakers
   { slot: 10, itemId: 1302000 },  // Sword
 ];
 
@@ -13,7 +14,7 @@ const DEFAULT_EQUIPS = [
 const DEFAULT_ITEMS = [];
 
 class Character {
-  static create(userId, { worldId, name, hair, face, skin, gender }) {
+  static create(userId, { worldId, name, hair, face, skin, gender, equips }) {
     if (typeof worldId !== 'number') {
       return { success: false, error: 'Invalid world' };
     }
@@ -59,8 +60,9 @@ class Character {
       );
       const charId = result.lastInsertRowid;
 
-      // Add default equipment
-      for (const eq of DEFAULT_EQUIPS) {
+      // Add equipment — use player-selected equips if provided, otherwise defaults
+      const charEquips = (Array.isArray(equips) && equips.length > 0) ? equips : DEFAULT_EQUIPS;
+      for (const eq of charEquips) {
         insertEquip.run(charId, eq.slot, eq.itemId);
       }
 
@@ -98,7 +100,8 @@ class Character {
   static getByUserAndWorld(userId, worldId) {
     const db = getDb();
     const chars = db.prepare(`
-      SELECT id, name, level, job_id, hair, face, skin, gender, map_id
+      SELECT id, name, level, job_id, hair, face, skin, gender, map_id,
+             str, dex, int, luk, fame
       FROM characters WHERE user_id = ? AND world_id = ?
       ORDER BY created_at ASC
     `).all(userId, worldId);

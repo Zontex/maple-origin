@@ -41,6 +41,8 @@ class Background {
 
     const bS = wzNode.bS?.nValue ?? wzNode.nGet('bS')?.nValue;
     const no = wzNode.no?.nValue ?? wzNode.nGet('no')?.nValue;
+    (this as any)._bS = bS;
+    (this as any)._no = no;
     if (!bS && bS !== 0) { this.frames = []; return; }
     const backFile: any = await WZManager.get(`Map.wz/Back/${bS}.img`);
     if (!backFile) { this.frames = []; return; }
@@ -128,6 +130,14 @@ class Background {
     const currentFrame = this.frames[this.frame];
     if (!currentFrame) return;
     const currentImage = currentFrame.nGetImage();
+    if (!currentImage || !(currentImage instanceof HTMLImageElement) || !currentImage.complete || currentImage.naturalWidth === 0) {
+      // Image not loaded or broken — log once and skip
+      if (!(this as any)._loggedBroken) {
+        (this as any)._loggedBroken = true;
+        console.warn('[BG] Broken image for background z=' + this.z, 'bS=' + (this as any)._bS, 'no=' + (this as any)._no);
+      }
+      return;
+    }
     let dx = this.x;
     let dy = this.y;
 

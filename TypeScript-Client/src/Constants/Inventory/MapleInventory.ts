@@ -41,13 +41,8 @@ const getMesosItemId = (mesoAmount: number) => {
 };
 
 const isMeso = (itemId: string) => {
-  console.log(itemId, "isMeso");
-  return (
-    itemId === "09000000" ||
-    itemId === "09000001" ||
-    itemId === "09000002" ||
-    itemId === "09000003"
-  );
+  const id = parseInt(itemId, 10);
+  return id >= 9000000 && id <= 9000003;
 };
 
 const getWzNameFromInventoryId = (id: string): WzInventoryType => {

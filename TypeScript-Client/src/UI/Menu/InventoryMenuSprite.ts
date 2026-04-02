@@ -911,6 +911,11 @@ class InventoryMenuSprite extends DragableMenu {
   consumeItem(item: any, slotIndex: number) {
     if (!item || !this.charecter) return;
 
+    // Only potions/food are consumable (2000000-2049999)
+    // Scrolls, arrows, throwing stars, cards, etc. are NOT consumable via double-click
+    const id = item.itemId;
+    if (id < 2000000 || id >= 2050000) return;
+
     // Access spec via WZ node — try both property access and nGet
     const spec = item.node?.spec || item.node?.nGet?.('spec');
     if (!spec || (!spec.nChildren && !spec.hp && !spec.mp)) {

@@ -126,12 +126,29 @@ const LoginState: LoginState = {
     await StateManager.setState(MapState);
     MapleMap.PlayerCharacter = MyCharacter;
 
-    // Set saved position if available
+    // Use saved position only if it's valid (within map boundaries and near a foothold)
     const posX = (MyCharacter as any)._startPosX;
     const posY = (MyCharacter as any)._startPosY;
-    if (posX !== undefined && posY !== undefined) {
-      MyCharacter.pos.x = posX;
-      MyCharacter.pos.y = posY;
+    if (posX && posY && (posX !== 0 || posY !== 0)) {
+      const MapleMap = (await import('./MapleMap')).default;
+      if (MapleMap.isPositionValid && MapleMap.isPositionValid(posX, posY)) {
+        MyCharacter.pos.x = posX;
+        MyCharacter.pos.y = posY;
+      } else {
+        // Saved position is out of bounds — snap to nearest foothold
+        const safe = MapleMap.getNearestFootholdPosition?.(posX, posY)
+          || MapleMap.getCenterFootholdLocation?.();
+        if (safe) {
+          MyCharacter.pos.x = safe.x;
+          MyCharacter.pos.y = safe.y;
+        }
+        console.warn(`Saved position (${posX}, ${posY}) was out of bounds — respawned at (${MyCharacter.pos.x}, ${MyCharacter.pos.y})`);
+      }
+      // Reset physics so character lands on nearest foothold
+      MyCharacter.pos.vx = 0;
+      MyCharacter.pos.vy = 0;
+      MyCharacter.pos.fh = null;
+      MyCharacter.pos.lf = null;
     }
 
     // Initialize multiplayer (update loop, player info) — socket is already connected from login

@@ -83,12 +83,33 @@ function handleSelectCharacter(playerId, data) {
 function handleSaveCharacter(playerId, data) {
   const player = players.get(playerId);
   if (!player || !player.characterId) return;
+  // Store full save data so disconnect handler has it
+  player.lastSaveData = data;
   const result = Character.saveCharacter(player.characterId, data);
   sendToPlayer(player.ws, { type: 'save_character_result', ...result });
 }
 
 function autoSaveCharacter(player) {
-  if (!player.characterId || !player.info) return;
+  if (!player.characterId) return;
+
+  // Prefer the last full save from the client (has equipped/inventory/quests)
+  // Fall back to player.info (position updates only) if no full save received yet
+  if (player.lastSaveData) {
+    // Update position from latest player.info if available
+    if (player.info) {
+      player.lastSaveData.mapId = Number(player.info.mapId || player.lastSaveData.mapId || 10000);
+      player.lastSaveData.posX = Math.round(player.info.x || player.lastSaveData.posX || 0);
+      player.lastSaveData.posY = Math.round(player.info.y || player.lastSaveData.posY || 0);
+    }
+    const result = Character.saveCharacter(player.characterId, player.lastSaveData);
+    if (result.success) {
+      console.log(`[Save] Auto-saved ${player.characterName || player.characterId} (full data)`);
+    }
+    return;
+  }
+
+  // Fallback: save from player.info only (no inventory/equip data)
+  if (!player.info) return;
   const info = player.info;
   const saveData = {
     mapId: Number(info.mapId || player.mapId || 10000),
@@ -107,7 +128,7 @@ function autoSaveCharacter(player) {
   };
   const result = Character.saveCharacter(player.characterId, saveData);
   if (result.success) {
-    console.log(`[Save] Auto-saved ${player.characterName || player.characterId}`);
+    console.log(`[Save] Auto-saved ${player.characterName || player.characterId} (fallback)`);
   }
 }
 
