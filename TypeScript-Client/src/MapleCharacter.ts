@@ -510,6 +510,48 @@ class MapleCharacter {
     this.stats.level += 1;
     this.maxExp = ExpTable.getExpNeededForLevel(this.stats.level);
     this.stats.addAbilityPoints();
+
+    // v83 HP/MP gains per level based on job
+    const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+    const jobId = this.stats.jobId;
+    let hpGain = 0;
+    let mpGain = 0;
+
+    if (jobId === 0) {
+      // Beginner
+      hpGain = rand(12, 16);
+      mpGain = rand(10, 12);
+    } else if (jobId >= 100 && jobId < 200) {
+      // Warrior
+      hpGain = rand(24, 28);
+      mpGain = rand(4, 6);
+    } else if (jobId >= 200 && jobId < 300) {
+      // Magician
+      hpGain = rand(10, 14);
+      mpGain = rand(22, 24);
+    } else if (jobId >= 300 && jobId < 400) {
+      // Bowman
+      hpGain = rand(20, 24);
+      mpGain = rand(14, 16);
+    } else if (jobId >= 400 && jobId < 500) {
+      // Thief
+      hpGain = rand(20, 24);
+      mpGain = rand(14, 16);
+    } else if (jobId >= 500 && jobId < 600) {
+      // Pirate
+      hpGain = rand(22, 28);
+      mpGain = rand(18, 22);
+    } else {
+      // Default / Cygnus / Aran
+      hpGain = rand(12, 16);
+      mpGain = rand(10, 12);
+    }
+
+    this.maxHp += hpGain;
+    this.maxMp += mpGain;
+    this.stats.maxHp = this.maxHp;
+    this.stats.maxMp = this.maxMp;
+
     // Restore HP/MP to full on level up
     this.hp = this.maxHp;
     this.mp = this.maxMp;
@@ -723,7 +765,7 @@ async executeAttackDamage() {
       const monsterDef = monster.mobFile?.info?.PDDamage?.nValue ?? 0;
       const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
       const defRange = this.stats.getAttackDamageRangeAfterMonsterDefense(rawRange, monsterDef, monsterLevel);
-      const isMiss = this.stats.getRandomIsMiss(monsterLevel, monster.mobFile?.info?.eva?.nValue ?? 0);
+      const isMiss = this.stats.getRandomIsMiss(monsterLevel, monster.eva ?? 0);
       const damage = isMiss ? 0 : Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
       const knockbackDirection = isCharacterFacingRight ? 1 : -1;
       monster.hit(damage, knockbackDirection, this);
@@ -1295,12 +1337,9 @@ isCloseToMob = (inAllDirections = true) => {
         if (monster) {
           this.lastHitTime = currentTime;
 
-          const mobInfo = monster.mobFile?.info;
-          if (!mobInfo) return;
-
           const isMiss = this.stats.getRandomMonsterTouchMiss(
-            mobInfo.level?.nValue ?? 1,
-            mobInfo.acc?.nValue ?? 0
+            monster.mobLevel,
+            monster.acc
           );
 
           const minXYPosition = findMinXY(this.bodyRects);
@@ -1324,7 +1363,7 @@ isCloseToMob = (inAllDirections = true) => {
             this.pos.applyKnockback(knowbackXdirection, knowbackYdirection);
 
             // v83 mob contact damage: random range around PAD, minus player defense
-            const pad = mobInfo.PADamage?.nValue ?? 1;
+            const pad = monster.pad || 1;
             const rawDamage = Math.floor(pad * (0.8 + Math.random() * 0.4));
             const pdd = this.stats.getWeaponDefense(this.equips);
             const finalTakenDamage = Math.max(1, rawDamage - pdd);

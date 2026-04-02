@@ -39,6 +39,10 @@ class Monster {
   maxMp: number = 0;
   hp: number = 0;
   mp: number = 0;
+  acc: number = 0;
+  eva: number = 0;
+  pad: number = 0;
+  mobLevel: number = 1;
   name: string = "";
   DamageIndicator: any = null;
   destroyed: boolean = false;
@@ -147,6 +151,10 @@ class Monster {
     this.maxMp = this.mobFile.info.maxMP.nValue;
     this.hp = this.maxHp;
     this.mp = this.maxMp;
+    this.acc = this.mobFile.info.acc?.nValue ?? 0;
+    this.eva = this.mobFile.info.eva?.nValue ?? 0;
+    this.pad = this.mobFile.info.PADamage?.nValue ?? 0;
+    this.mobLevel = this.mobFile.info.level?.nValue ?? 1;
     // await WZManager.get("String.wz/Map.img");
     const mobStringNode: any = await WZManager.get(
       `${WZFiles.String}/Mob.img/${strId}`
