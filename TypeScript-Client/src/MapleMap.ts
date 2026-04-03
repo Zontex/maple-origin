@@ -764,17 +764,7 @@ MapleMap.handleClick = function (
       mouseY <= npcY + 70
     ) {
       console.log(`Clicked on NPC ${npc.id}:`, npc);
-      if (npc.isTaxi) {
-        console.log("This is a taxi NPC!");
-        // Make sure TaxiUI is loaded before showing dialog
-        import('./UI/TaxiUI').then(() => {
-          npc.showTaxiDialog();
-        }).catch(err => {
-          console.error("Error loading TaxiUI:", err);
-          npc.showDialog = true;
-          npc.lastDialogTime = npc.dialogTimer;
-        });
-      } else {
+      {
         // Close all open UI menus when interacting with NPC
         const mapState = (window as any).MapStateInstance;
         mapState?.closeAllMenus?.();

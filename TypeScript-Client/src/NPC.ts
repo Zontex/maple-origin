@@ -2,7 +2,6 @@ import WZManager from "./wz-utils/WZManager";
 import Random from "./Random";
 import GameCanvas from "./GameCanvas";
 import { CameraInterface } from "./Camera";
-import TaxiUI, { TaxiDestination } from "./UI/TaxiUI";
 import QuestData from "./Quest/QuestData";
 
 class NPC {
@@ -22,9 +21,6 @@ class NPC {
   strings: any = {};
   floating: number = 0;
   
-  // NPC type flags
-  isTaxi: boolean = false;
-  taxiDestinations: TaxiDestination[] = [];
 
   // Quest indicator
   isQuestGiver: boolean = false;
@@ -146,19 +142,6 @@ class NPC {
       }
     }
 
-    // Check if this is a taxi NPC based on function or name
-    if (this.strings.func && 
-        (this.strings.func.toLowerCase().includes('taxi') || 
-         this.strings.func.toLowerCase().includes('cab'))) {
-      this.isTaxi = true;
-      this.setupTaxiDestinations();
-    } else if (this.strings.name && 
-              (this.strings.name.toLowerCase().includes('taxi') || 
-               this.strings.name.toLowerCase().includes('cab') ||
-               this.strings.name.toLowerCase().includes('driver'))) {
-      this.isTaxi = true;
-      this.setupTaxiDestinations();
-    }
 
     // Some NPCs "float"
     this.floating = npcFile.info.nGet("float").nGet("nValue", 0);
@@ -281,130 +264,6 @@ class NPC {
     }
   }
 
-  // Define taxi destinations based on the current map and NPC's location
-  // Replace the setupTaxiDestinations method in NPC.ts with this implementation
-
-// Define taxi destinations based on the current map and NPC's location
-setupTaxiDestinations() {
-  // Clear existing destinations
-  this.taxiDestinations = [];
-  
-  // Get the current map ID (ensure it's a number)
-  const currentMapId = Number(this.opts?.map?.id || 0);
-  
-  console.log("Setting up taxi destinations for map ID:", currentMapId);
-  
-  // First digit of map ID determines region
-  const firstDigit = Math.floor(currentMapId / 100000000);
-  
-  // Victoria Island Taxi destinations (100000000 series)
-  if (firstDigit === 1) {
-    // Default Victoria Island destinations
-    const victoriaDestinations = [
-      { mapId: 100000000, name: "Henesys", cost: 1000 },
-      { mapId: 101000000, name: "Ellinia", cost: 1000 },
-      { mapId: 102000000, name: "Perion", cost: 1000 },
-      { mapId: 103000000, name: "Kerning City", cost: 1000 },
-      { mapId: 104000000, name: "Lith Harbor", cost: 800 },
-      { mapId: 120000000, name: "Nautilus Harbor", cost: 1200 }
-    ];
-    
-    // Remove the current map from destinations
-    this.taxiDestinations = victoriaDestinations.filter(dest => dest.mapId !== currentMapId);
-  }
-  // Ossyria Taxi destinations (200000000 series)
-  else if (firstDigit === 2) {
-    const ossyriaDestinations = [
-      { mapId: 200000000, name: "Orbis", cost: 1200 },
-      { mapId: 211000000, name: "El Nath", cost: 1200 },
-      { mapId: 220000000, name: "Ludibrium", cost: 1200 },
-      { mapId: 221000000, name: "Omega Sector", cost: 1500 },
-      { mapId: 230000000, name: "Aquarium", cost: 1500 },
-      { mapId: 240000000, name: "Leafre", cost: 1500 }
-    ];
-    
-    // Remove the current map from destinations
-    this.taxiDestinations = ossyriaDestinations.filter(dest => dest.mapId !== currentMapId);
-  }
-  // Default case: if we're in an unknown area, offer a mix of popular destinations
-  else {
-    this.taxiDestinations = [
-      { mapId: 100000000, name: "Henesys", cost: 1500 },
-      { mapId: 101000000, name: "Ellinia", cost: 1500 },
-      { mapId: 102000000, name: "Perion", cost: 1500 },
-      { mapId: 103000000, name: "Kerning City", cost: 1500 },
-      { mapId: 104000000, name: "Lith Harbor", cost: 1500 },
-      { mapId: 200000000, name: "Orbis", cost: 2000 }
-    ];
-  }
-  
-  // Always ensure we have at least one destination
-  if (this.taxiDestinations.length === 0) {
-    console.warn("No valid destinations found, adding default destinations");
-    this.taxiDestinations = [
-      { mapId: 100000000, name: "Henesys", cost: 1000 },
-      { mapId: 104000000, name: "Lith Harbor", cost: 800 }
-    ];
-  }
-  
-  console.log("Taxi destinations set up:", this.taxiDestinations);
-}
-  
-  // Handle taxi functionality when this NPC is clicked
-  showTaxiDialog() {
-    if (!this.isTaxi) return;
-
-    const win = window as any;
-    let gameCanvas = win.ClickManager?.GameCanvas || null;
-
-    if (!gameCanvas && win.MapStateInstance?.doRender) {
-      const doRenderOriginal = win.MapStateInstance.doRender;
-      let capturedCanvas: any = null;
-
-      win.MapStateInstance.doRender = function(canvas: any, ...args: any[]) {
-        capturedCanvas = canvas;
-        win.MapStateInstance.doRender = doRenderOriginal;
-        doRenderOriginal.call(win.MapStateInstance, canvas, ...args);
-      };
-
-      setTimeout(() => {
-        if (capturedCanvas) {
-          this.continueTaxiDialog(capturedCanvas);
-        } else {
-          this.showDialog = true;
-        }
-      }, 50);
-      return;
-    }
-
-    if (gameCanvas) {
-      this.continueTaxiDialog(gameCanvas);
-    } else {
-      this.showDialog = true;
-    }
-  }
-
-  continueTaxiDialog(gameCanvas: any) {
-    if (!this.taxiDestinations || this.taxiDestinations.length === 0) {
-      this.setupTaxiDestinations();
-    }
-
-    const win = window as any;
-    if (win.TaxiUI) {
-      try {
-        if (!this.opts.map && win.MapStateInstance) {
-          this.opts.map = win.MapStateInstance;
-        }
-        win.TaxiUI.show(gameCanvas, this.taxiDestinations, this.id, this.strings.name || 'Regular Cab');
-        this.showDialog = false;
-      } catch (error) {
-        console.error("Error showing TaxiUI:", error);
-        this.showDialog = true;
-      }
-    } else {
-      this.showDialog = true;
-    }
-  }
 
   loadStance(wzNode: any = {}, stance: string = "stand") {
     if (!wzNode[stance]) {
@@ -832,10 +691,7 @@ update(msPerTick: number) {
     }
     return; // Skip the rest of the logic if already showing dialog
   }
-  
-  // Skip dialog updates for taxi NPCs - they don't show automatic dialogue
-  if (this.isTaxi) return;
-  
+
   // Update dialog timer for NPCs with dialogue
   if (this.strings && (this.strings.speak || (this.strings.dialogues && this.strings.dialogues.length > 0))) {
     this.dialogTimer += msPerTick;

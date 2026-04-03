@@ -13,7 +13,6 @@ import TouchJoyStick, {
   JoyStickDirections,
 } from "./UI/TouchJoyStick";
 import ClickManager from "./UI/ClickManager";
-import TaxiUI from "./UI/TaxiUI";
 import ShopUI from "./UI/ShopUI";
 import WZManager from "./wz-utils/WZManager";
 import UIMiniMap from "./UI/UIMiniMap";
@@ -245,7 +244,6 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     this.UIMenus.forEach((menu: any) => menu.setIsHidden(true));
   };
 
-  // Set a reference to the player character for TaxiUI
   this.PlayerCharacter = MyCharacter;
 
   // Initialize previous keyboard state with all keys set to false.
@@ -324,11 +322,6 @@ MapStateInstance.doUpdate = function (
   if (!!MapleMap.doneLoading) {
     MapleMap.update(msPerTick);
 
-    // Update TaxiUI
-    if (TaxiUI.isVisible) {
-      TaxiUI.update(msPerTick);
-    }
-
     // Update ShopUI
     if (ShopUI.isVisible) {
       ShopUI.update(msPerTick);
@@ -387,7 +380,7 @@ MapStateInstance.doUpdate = function (
       MyCharacter.update(msPerTick);
     } else {
       const questDialogOpen = MapleMap.questDialog && !MapleMap.questDialog.isHidden;
-      const dialogOpen = !MapleMap.npcDialog.isHidden || TaxiUI.isVisible || ShopUI.isVisible || questDialogOpen;
+      const dialogOpen = !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen;
 
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
@@ -435,8 +428,6 @@ MapStateInstance.doUpdate = function (
           MapleMap.questDialog.hide();
         } else if (!MapleMap.npcDialog.isHidden) {
           MapleMap.npcDialog.setIsHidden(true);
-        } else if (TaxiUI.isVisible) {
-          TaxiUI.hide();
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
         } else {
@@ -550,11 +541,6 @@ MapStateInstance.doRender = function (
     this.UIMenus.forEach((menu) => {
       menu.draw(canvas, camera, lag, msPerTick, tdelta);
     });
-
-    // Draw TaxiUI on top of game elements
-    if (TaxiUI.isVisible) {
-      TaxiUI.render(canvas, camera);
-    }
 
     // Draw ShopUI on top of game elements
     if (ShopUI.isVisible) {

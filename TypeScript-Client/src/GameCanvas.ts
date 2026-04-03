@@ -114,6 +114,7 @@ class GameCanvas {
       throw new Error("GameCanvas: getContext is null");
     }
     this.context = this.game.getContext("2d")!;
+    this.context.imageSmoothingEnabled = false;
 
     this.listenMouse();
     this.listenKeyboard();
