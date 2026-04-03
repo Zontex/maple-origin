@@ -1264,7 +1264,7 @@ class MySocket {
     const spawnDefs = MapleMap.getMonsterSpawnDefs();
     const spawnDef = spawnDefs.find((s: any) => s.oId === data.oId);
     if (spawnDef) {
-      await MapleMap.spawnMonster({ ...spawnDef });
+      await MapleMap.spawnMonster({ ...spawnDef, fadeIn: true });
       // Mark newly spawned mob as remote
       const mob = MapleMap.findMonsterByOId(data.oId);
       if (mob) {

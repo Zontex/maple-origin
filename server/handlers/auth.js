@@ -119,7 +119,7 @@ function autoSaveCharacter(player) {
     exp: info.exp,
     str: info.str, dex: info.dex, int: info.int, luk: info.luk, ap: info.ap,
     hp: info.hp, maxHp: info.maxHp, mp: info.mp, maxMp: info.maxMp,
-    jobId: info.jobId,
+    jobId: info.job ?? info.jobId,
     mesos: info.mesos,
     fame: info.fame,
     equipped: info.equipped,

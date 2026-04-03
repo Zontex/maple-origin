@@ -119,6 +119,17 @@ class Portal {
     }
 
     this.setFrame(0);
+
+    // Invisible/non-drawn portals still need a collision rect
+    // so checkForPortal() can detect the player standing in them
+    if (!this.frames && this.toMap !== 999999999) {
+      this.rect = {
+        x: this.x - 20,
+        y: this.y - 40,
+        width: 40,
+        height: 40,
+      };
+    }
   }
 
   setFrame(frame = 0, carryOverDelay = 0) {

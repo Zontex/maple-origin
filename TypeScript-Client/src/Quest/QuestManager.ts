@@ -313,6 +313,17 @@ export default class QuestManager {
   }
 
   private meetsRequirement(req: QuestRequirement): boolean {
+    // Time-limited quest check — filter out expired event quests
+    if (req.endDate) {
+      // WZ format: YYYYMMDDHH (e.g., "2010012000" = Jan 20 2010 00:00)
+      const y = parseInt(req.endDate.slice(0, 4));
+      const m = parseInt(req.endDate.slice(4, 6)) - 1;
+      const d = parseInt(req.endDate.slice(6, 8));
+      const h = parseInt(req.endDate.slice(8, 10)) || 0;
+      const endTime = new Date(y, m, d, h).getTime();
+      if (Date.now() > endTime) return false;
+    }
+
     // Level check
     if (req.lvmin && this.character.stats.level < req.lvmin) return false;
     if (req.lvmax && this.character.stats.level > req.lvmax) return false;

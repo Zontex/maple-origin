@@ -29,6 +29,8 @@ export interface QuestRequirement {
   quests?: { id: number; state: QuestState }[];
   startscript?: string;
   endscript?: string;
+  startDate?: string;  // WZ format: YYYYMMDDHH
+  endDate?: string;    // WZ format: YYYYMMDDHH
 }
 
 export interface QuestReward {
@@ -331,6 +333,12 @@ class QuestDataManager {
           break;
         case 'endscript':
           req.endscript = prop.nValue;
+          break;
+        case 'start':
+          req.startDate = String(prop.nValue);
+          break;
+        case 'end':
+          req.endDate = String(prop.nValue);
           break;
       }
     }

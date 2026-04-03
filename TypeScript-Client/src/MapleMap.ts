@@ -390,11 +390,14 @@ async function initializeMonster(opts: any) {
   const whichFoothold = footholds[mob.fh];
   if (whichFoothold) {
     mob.layer = whichFoothold.layer;
+    // Place mob on its foothold so it doesn't fall from the air
+    mob.pos.fh = whichFoothold;
+    mob.pos.vy = 0;
   }
   return mob;
 }
 
-MapleMap.spawnMonster = async function (opts = {}) {
+MapleMap.spawnMonster = async function (opts: any = {}) {
   const mob = await initializeMonster(opts);
   // Set remote mode based on current host status
   const isMobHost = (window as any).__mySocket?.isMobHost ?? true;
@@ -402,6 +405,11 @@ MapleMap.spawnMonster = async function (opts = {}) {
     mob.isRemote = true;
     mob._targetX = mob.pos.x;
     mob._targetY = mob.pos.y;
+  }
+  // GMS fade-in effect for respawning mobs (effect -2)
+  if (opts.fadeIn) {
+    mob._spawnAlpha = 0;
+    mob._spawning = true;
   }
   this.monsters.push(mob);
 };
@@ -427,7 +435,7 @@ MapleMap.getMonsterSpawnDefs = function () {
 // Store original spawn definitions for respawning
 let monsterSpawnDefs: any[] = [];
 let respawnTimers: any[] = [];
-const RESPAWN_DELAY = 7000; // 7 seconds, similar to v83
+const DEFAULT_MOB_INTERVAL = 7560; // v83 default for mobTime=0 (milliseconds)
 
 MapleMap.clearRespawnTimers = function () {
   for (const timer of respawnTimers) clearTimeout(timer);
@@ -447,15 +455,18 @@ MapleMap.loadMonsters = async function (wzNode) {
   for (const mobNode of wzNode.nChildren.filter(
     (n: any) => n.type.nValue === "m"
   )) {
+    const mobTime = mobNode.mobTime?.nValue ?? mobNode.nGet('mobTime').nGet('nValue', 0);
+    const cy = mobNode.cy?.nValue ?? mobNode.y.nValue;
     const spawnDef = {
       oId: spawnIndex++,
       id: mobNode.id.nValue,
       x: mobNode.x.nValue,
-      y: mobNode.y.nValue,
+      y: cy,              // Use cy (foothold Y) so mob spawns on ground, not mid-air
       stance: "",
       fh: mobNode.fh.nValue,
       minX: mobNode.rx0.nValue,
       maxX: mobNode.rx1.nValue,
+      mobTime,            // Respawn time in seconds (-1 = no respawn, 0 = default)
       map: this,
     };
     monsterSpawnDefs.push(spawnDef);
@@ -603,17 +614,18 @@ MapleMap.update = function (msPerTick) {
       if (!isMobHost) continue; // Non-host waits for mob_respawn message
       // Find the matching spawn definition to respawn from
       const spawnDef = monsterSpawnDefs.find((s: any) => s.oId === mob.oId);
-      if (spawnDef) {
-        const timer = setTimeout(async () => {
-          // Only respawn if we're still on the same map
-          if (mapRef.mapId === spawnDef.map?.mapId) {
-            await mapRef.spawnMonster({ ...spawnDef });
-            // Broadcast respawn to non-host clients
-            try { (window as any).__mySocket?.sendMobRespawn(spawnDef.oId); } catch {}
-          }
-        }, RESPAWN_DELAY);
-        respawnTimers.push(timer);
-      }
+      if (!spawnDef || spawnDef.mobTime < 0) continue; // mobTime -1 = no respawn
+      // v83: mobTime > 0 = respawn after N seconds, mobTime 0 = default interval
+      const delay = spawnDef.mobTime > 0 ? spawnDef.mobTime * 1000 : DEFAULT_MOB_INTERVAL;
+      const timer = setTimeout(async () => {
+        // Only respawn if we're still on the same map
+        if (mapRef.mapId === spawnDef.map?.mapId) {
+          await mapRef.spawnMonster({ ...spawnDef, fadeIn: true });
+          // Broadcast respawn to non-host clients
+          try { (window as any).__mySocket?.sendMobRespawn(spawnDef.oId); } catch {}
+        }
+      }, delay);
+      respawnTimers.push(timer);
     }
   }
   this.monsters = this.monsters.filter((m: Monster) => !m.destroyed);
@@ -738,7 +750,7 @@ MapleMap.render = function (
 // --- New: Simple click handler for NPCs ---
 // When a click occurs, convert mouse coordinates into canvas coordinates,
 // check each NPC (assumed to be a 56x70 rectangle), and if clicked, log the NPC and set its dialogue flag.
-MapleMap.handleClick = function (
+MapleMap.handleClick = async function (
   event: MouseEvent,
   canvasElement: HTMLElement,
   camera: CameraInterface
@@ -750,8 +762,8 @@ MapleMap.handleClick = function (
   const mouseY = (event.clientY - rect.top) / scaleY;
   console.log("Click detected at:", mouseX, mouseY);
 
-  this.npcs.forEach(async (npc: any) => {
-    if (!npc.pos) return;
+  for (const npc of this.npcs as any[]) {
+    if (!npc.pos) continue;
     // Convert NPC's world position to canvas coordinates
     const npcX = npc.x - camera.x - 25; // Center the hitbox
     const npcY = npc.cy - camera.y - 70; // Adjust for NPC height
@@ -970,8 +982,9 @@ MapleMap.handleClick = function (
           }
         }
       }
+      break; // Only handle the first NPC clicked
     }
-  });
+  }
 };
 
 

@@ -61,6 +61,8 @@ class Monster {
   flipped: boolean = false;
   layer: number = 0;
   isRemote: boolean = false; // Network-controlled mob — skip local AI
+  _spawning: boolean = false;  // GMS fade-in effect on respawn
+  _spawnAlpha: number = 1;
   _targetX: number = 0;
   _targetY: number = 0;
 
@@ -258,12 +260,13 @@ async addDrops() {
         if (!reqs?.complete.items) continue;
         // Check if this quest requires killing this mob type
         const requiresThisMob = reqs.complete.mobs?.some((m: any) => m.id === this.id);
+        // Only drop quest items from mobs the quest actually requires
+        if (!requiresThisMob) continue;
         // Drop quest items that haven't been fully collected yet
         for (const item of reqs.complete.items) {
           const currentCount = questManager.getItemCount(item.id);
           if (currentCount >= item.count) continue;
-          // Drop with high probability (70%) if quest requires this mob, or low (15%) otherwise
-          const dropChance = requiresThisMob ? 0.7 : 0.15;
+          const dropChance = 0.7;
           if (Math.random() < dropChance) {
             try {
               const offsetX = (monsterDropEntries.length) * dropSpacing;
@@ -592,6 +595,28 @@ async addDrops() {
 
     }
 
+    // Prevent mobs from walking off foothold edges (GMS behavior)
+    // Mobs stay on their foothold — reverse direction at edges
+    if (this.isMovementEnabled && this.pos.fh && !this.dying) {
+      const fh = this.pos.fh;
+      const margin = 2;
+      if (this.pos.x >= fh.x2 - margin && this.pos.vx > 0) {
+        // At right edge of foothold — only reverse if no connected next foothold
+        if (!fh.next || fh.next.x1 >= fh.next.x2) {
+          this.pos.x = fh.x2 - margin;
+          this.pos.vx = 0;
+          this.left();
+        }
+      } else if (this.pos.x <= fh.x1 + margin && this.pos.vx < 0) {
+        // At left edge of foothold — only reverse if no connected prev foothold
+        if (!fh.prev || fh.prev.x1 >= fh.prev.x2) {
+          this.pos.x = fh.x1 + margin;
+          this.pos.vx = 0;
+          this.right();
+        }
+      }
+    }
+
     if (this.isMovementEnabled) {
       this.pos.update(msPerTick);
     }
@@ -773,11 +798,20 @@ async addDrops() {
 
     const adjustX = !this.flipped ? originX : currentFrame.nWidth - originX;
 
+    // GMS fade-in effect on respawn (effect -2)
+    let alpha = 1;
+    if (this._spawning) {
+      this._spawnAlpha = Math.min(1, (this._spawnAlpha || 0) + 0.03);
+      alpha = this._spawnAlpha;
+      if (alpha >= 1) this._spawning = false;
+    }
+
     canvas.drawImage({
       img: currentImage,
       dx: this.pos.x - camera.x - adjustX,
       dy: this.pos.y - camera.y - originY,
       flipped: !!this.flipped,
+      alpha,
     });
 
     this.height = currentFrame.nHeight;
