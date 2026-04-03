@@ -194,7 +194,8 @@ export default class QuestManager {
   }
 
   // Force start a quest (used by script engine — bypasses requirement checks)
-  forceStartQuest(questId: number): void {
+  // savedMobProgress: optional Record<mobId, killCount> to restore from DB
+  forceStartQuest(questId: number, savedMobProgress?: Record<string, number>): void {
     if (this.activeQuests.has(questId) || this.completedQuests.has(questId)) return;
 
     const reqs = QuestData.requirements.get(questId);
@@ -202,13 +203,14 @@ export default class QuestManager {
 
     if (reqs?.complete.mobs) {
       for (const mob of reqs.complete.mobs) {
-        active.mobProgress.set(mob.id, 0);
+        const saved = savedMobProgress ? (savedMobProgress[String(mob.id)] ?? 0) : 0;
+        active.mobProgress.set(mob.id, saved);
       }
     }
 
     this.activeQuests.set(questId, active);
-    this.character.playQuestStart();
-    console.log(`Quest force-started: ${QuestData.quests.get(questId)?.name} (#${questId})`);
+    if (!savedMobProgress) this.character.playQuestStart();
+    console.log(`Quest force-started: ${QuestData.quests.get(questId)?.name} (#${questId})${savedMobProgress ? ' (restored)' : ''}`);
   }
 
   // Force complete a quest (used by script engine — bypasses requirement checks)

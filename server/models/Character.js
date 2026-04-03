@@ -133,7 +133,7 @@ class Character {
     ).all(characterId);
 
     const quests = db.prepare(
-      'SELECT quest_id, state FROM quests WHERE character_id = ?'
+      'SELECT quest_id, state, mob_progress FROM quests WHERE character_id = ?'
     ).all(characterId);
 
     return {
@@ -196,7 +196,7 @@ class Character {
 
     const deleteQuests = db.prepare('DELETE FROM quests WHERE character_id = ?');
     const insertQuest = db.prepare(
-      'INSERT INTO quests (character_id, quest_id, state) VALUES (?, ?, ?)'
+      'INSERT INTO quests (character_id, quest_id, state, mob_progress) VALUES (?, ?, ?, ?)'
     );
 
     const saveTransaction = db.transaction(() => {
@@ -235,7 +235,7 @@ class Character {
       deleteQuests.run(characterId);
       if (data.quests) {
         for (const q of data.quests) {
-          insertQuest.run(characterId, q.questId, q.state);
+          insertQuest.run(characterId, q.questId, q.state, q.mobProgress || '{}');
         }
       }
     });

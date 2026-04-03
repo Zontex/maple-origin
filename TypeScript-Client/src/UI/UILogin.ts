@@ -327,7 +327,11 @@ UILogin.initialize = async function (canvas: GameCanvas) {
           if (q.state === 2) {
             MyChar.questManager.forceCompleteQuest(q.quest_id);
           } else if (q.state === 1) {
-            MyChar.questManager.forceStartQuest(q.quest_id);
+            let mobProgress: Record<string, number> | undefined;
+            try {
+              if (q.mob_progress) mobProgress = JSON.parse(q.mob_progress);
+            } catch {}
+            MyChar.questManager.forceStartQuest(q.quest_id, mobProgress);
           }
         }
       }

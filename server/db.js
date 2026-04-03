@@ -80,6 +80,7 @@ function initSchema() {
       character_id INTEGER NOT NULL,
       quest_id INTEGER NOT NULL,
       state INTEGER DEFAULT 0,
+      mob_progress TEXT DEFAULT '{}',
       UNIQUE(character_id, quest_id),
       FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
     );
@@ -89,6 +90,13 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_equipped_character ON equipped_items(character_id);
     CREATE INDEX IF NOT EXISTS idx_quests_character ON quests(character_id);
   `);
+
+  // Migration: add mob_progress column if missing (existing DBs)
+  try {
+    db.exec(`ALTER TABLE quests ADD COLUMN mob_progress TEXT DEFAULT '{}'`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
 
   console.log('[DB] SQLite schema initialized');
 }

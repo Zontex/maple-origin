@@ -208,12 +208,18 @@ class MySocket {
       }
     }
 
-    const quests: { questId: number; state: number }[] = [];
+    const quests: { questId: number; state: number; mobProgress?: string }[] = [];
     if (MyCharacter.questManager) {
       const qm = MyCharacter.questManager;
       if (qm.activeQuests) {
-        for (const qId of qm.activeQuests.keys()) {
-          quests.push({ questId: qId, state: 1 });
+        for (const [qId, active] of qm.activeQuests) {
+          const mp: Record<string, number> = {};
+          if (active.mobProgress) {
+            for (const [mobId, count] of active.mobProgress) {
+              mp[String(mobId)] = count;
+            }
+          }
+          quests.push({ questId: qId, state: 1, mobProgress: JSON.stringify(mp) });
         }
       }
       if (qm.completedQuests) {
