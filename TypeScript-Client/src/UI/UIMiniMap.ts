@@ -156,9 +156,19 @@ UIMiniMap._buildCache = function () {
   const md = this.mapData;
   const fr = this.frame;
 
-  const mapImgW = md.canvas.width || 0;
-  const mapImgH = md.canvas.height || 0;
-  if (mapImgW === 0 || mapImgH === 0) return;
+  const rawImgW = md.canvas.width || 0;
+  const rawImgH = md.canvas.height || 0;
+  if (rawImgW === 0 || rawImgH === 0) return;
+
+  // Cap minimap image size to keep it compact like the original v83 client
+  const MAX_MAP_W = 200;
+  const MAX_MAP_H = 200;
+  let mapScale = 1;
+  if (rawImgW > MAX_MAP_W || rawImgH > MAX_MAP_H) {
+    mapScale = Math.min(MAX_MAP_W / rawImgW, MAX_MAP_H / rawImgH);
+  }
+  const mapImgW = Math.round(rawImgW * mapScale);
+  const mapImgH = Math.round(rawImgH * mapScale);
 
   const nwW = fr.nw.width || 6;
   const nwH = fr.nw.height || 72;
@@ -324,7 +334,12 @@ UIMiniMap._buildCache = function () {
   ctx.beginPath();
   ctx.rect(nwW, nwH, innerW, innerH);
   ctx.clip();
-  draw(md.canvas, mapDrawX, mapDrawY);
+  // Draw minimap image scaled to fit the cap
+  if (mapScale < 1) {
+    ctx.drawImage(md.canvas, mapDrawX, mapDrawY, mapImgW, mapImgH);
+  } else {
+    draw(md.canvas, mapDrawX, mapDrawY);
+  }
 
   // Draw static icons (portals, NPCs) — they don't move
   if (this.icons && MapleMap.portals) {

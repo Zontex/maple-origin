@@ -13,6 +13,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **WZ asset eviction** — `WZManager.unloadTransient()` frees map-specific assets (Map.wz, Mob.wz, Npc.wz sprites) on map change, reducing memory growth on mobile
 - **NPC hitbox from sprite** — NPC click detection now uses actual sprite dimensions and origin instead of hardcoded 56×70 rectangle
 - **Resolution upgrade to 1024×768** — matches original v83 windowed resolution; status bar extends to full width via clipped right-aligned copy; buttons repositioned for wider viewport
+- **Minimap size cap** — large maps (e.g., Lith Harbor) now scale down to max 200×200px, matching original v83 compact minimap size
 - **Character name availability check** — new `check_name` server endpoint validates name on the name entry screen before advancing to customization
 - **Quest log item progress** — item requirements now shown in green/red like mob progress (e.g., "Jr. Sentinel Shellpiece: 0/1")
 - **Character select sound effect** — plays `Sound.wz/UI.img/CharSelect` when clicking a character
