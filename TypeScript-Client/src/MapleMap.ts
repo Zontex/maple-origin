@@ -781,7 +781,7 @@ MapleMap.render = function (
     drop.draw(canvas, camera);
   });
 
-  Object.values(this.footholds).forEach(draw);
+  // Object.values(this.footholds).forEach(draw); // debug: draw foothold lines
 };
 
 // --- New: Simple click handler for NPCs ---
