@@ -260,6 +260,7 @@ class MySocket {
           ? Math.round(MyCharacter.pos.y) : 0,
         mesos: inv?.mesos ?? 0,
         fame: MyCharacter.fame ?? 0,
+        sp: MyCharacter.stats?.sp ?? 0,
         equipped,
         inventory: {
           equip: serializeTab(inv?.equip),
@@ -269,6 +270,8 @@ class MySocket {
           cash: serializeTab(inv?.cash),
         },
         quests,
+        skills: MyCharacter.skillManager?.serialize() || [],
+        keymap: (window as any).__uiHotkeyBar?.serialize() || [],
       },
     });
   }
@@ -515,6 +518,14 @@ class MySocket {
     console.log("WebSocket connection closed:", event.code, event.reason);
     this.isConnected = false;
     this.updateConnectionStatus('disconnected');
+
+    // Idle timeout — go back to login instead of reconnecting
+    if (event.code === 4000 || event.reason === 'idle_timeout') {
+      console.log('Disconnected due to idle timeout — returning to login');
+      window.location.reload();
+      return;
+    }
+
     this.handleReconnect();
   }
   

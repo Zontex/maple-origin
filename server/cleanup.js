@@ -7,7 +7,7 @@ function startCleanupTasks(wss) {
   // Remove inactive players every 30s
   setInterval(() => {
     const now = Date.now();
-    const inactiveTimeout = 60000;
+    const inactiveTimeout = 600000; // 10 minutes
 
     for (const [id, player] of players.entries()) {
       if (now - player.lastUpdate > inactiveTimeout) {
@@ -16,7 +16,7 @@ function startCleanupTasks(wss) {
           broadcastToMap(player.mapId, { type: 'player_left', id });
         }
         if (player.ws.readyState === 1) { // WebSocket.OPEN
-          player.ws.close();
+          player.ws.close(4000, 'idle_timeout');
         }
         players.delete(id);
       }
