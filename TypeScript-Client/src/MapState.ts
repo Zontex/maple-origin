@@ -18,6 +18,7 @@ import WZManager from "./wz-utils/WZManager";
 import UIMiniMap from "./UI/UIMiniMap";
 import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
 import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
+import UIHotkeyBar from "./UI/UIHotkeyBar";
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 
@@ -249,6 +250,10 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
 
   this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu];
 
+  // Initialize hotkey bar
+  UIHotkeyBar.initialize();
+  (window as any).__uiHotkeyBar = UIHotkeyBar;
+
   // Close all open UI menus (called when NPC/quest dialogs open)
   this.closeAllMenus = () => {
     this.UIMenus.forEach((menu: any) => menu.setIsHidden(true));
@@ -454,6 +459,11 @@ MapStateInstance.doUpdate = function (
         }
       }
 
+      // Check hotkey bar activations
+      if (!dialogOpen) {
+        UIHotkeyBar.checkKeyActivations(canvas);
+      }
+
       MyCharacter.update(msPerTick);
 
       if (!canvas.isKeyDown("up")) {
@@ -565,6 +575,15 @@ MapStateInstance.doRender = function (
     // Draw death dialog on top of game but under cursor
     if (MyCharacter.deathDialogVisible) {
       MyCharacter.drawDeathDialog(canvas);
+    }
+
+    // Hotkey bar above status bar
+    UIHotkeyBar.render(canvas, camera);
+
+    // Buff icons at top-right of screen
+    if (MyCharacter.buffManager?.count > 0) {
+      const buffBarX = canvas.game.width - 30 - (MyCharacter.buffManager.count * 26);
+      MyCharacter.buffManager.renderBuffIcons(canvas, buffBarX, 5);
     }
 
     // Minimap on top of game world

@@ -330,7 +330,19 @@ export default class NpcScriptEngine {
       setSkin(id: number) { /* stub */ },
 
       // Skills/jobs
-      teachSkill(skillId: number, level: number, masterLevel: number) { /* stub */ },
+      teachSkill(skillId: number, level?: number, masterLevel?: number) {
+        if (character?.skillManager) {
+          character.skillManager.changeSkillLevel(skillId, level ?? 1, masterLevel ?? 0);
+        }
+      },
+      changeSkillLevel(skillId: number, level: number, masterLevel: number) {
+        if (character?.skillManager) {
+          character.skillManager.changeSkillLevel(skillId, level, masterLevel);
+        }
+      },
+      getSkillLevel(skillId: number) {
+        return character?.skillManager?.getSkillLevel(skillId) ?? 0;
+      },
       changeJob(job: any) { character?.changeJob(typeof job === 'number' ? job : job?.getId?.() ?? 0); },
       changeJobById(jobId: number) { character?.changeJob(jobId); },
 

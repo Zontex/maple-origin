@@ -2,6 +2,8 @@ import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import MyCharacter from '../MyCharacter';
 import SkillData, { SkillInfo } from '../Skills/SkillData';
+import WZManager from '../wz-utils/WZManager';
+import PLAY_AUDIO from '../Audio/PlayAudio';
 
 // Hotkey slot definition
 interface HotkeySlot {
@@ -144,9 +146,12 @@ const UIHotkeyBar = {
       MyCharacter.useSkill?.(skillId, effect);
     } else if (info.isBuff) {
       // Buff skill — apply buff
-      if ((MyCharacter as any).buffManager) {
-        (MyCharacter as any).buffManager.applyBuff(skillId, effect);
+      if (MyCharacter.buffManager) {
+        MyCharacter.buffManager.applyBuff(skillId, effect);
       }
+      // Play skill-specific sound and effect animation
+      this.playSkillSound(skillId);
+      this.playSkillEffect(skillId);
       console.log(`[HotkeyBar] Activated buff: ${info.name} (${effect.time}s)`);
     }
 
@@ -213,6 +218,47 @@ const UIHotkeyBar = {
       ctx.fillText(slot.label, sx + SLOT_SIZE / 2, sy + SLOT_SIZE - 2);
       ctx.restore();
     }
+  },
+
+  async playSkillSound(skillId: number) {
+    try {
+      // Pad skill ID to match WZ key format (e.g. 1002 → "0001002")
+      const paddedSkillId = String(skillId).padStart(7, '0');
+      const soundNode = await WZManager.get('Sound.wz/Skill.img');
+      if (soundNode) {
+        let skillSound = (soundNode as any).nGet?.(paddedSkillId);
+        if (skillSound?.nChildren?.length > 0) {
+          let useNode = skillSound.nChildren[0];
+          // Resolve UOL references
+          if (useNode.nTagName === 'uol') {
+            useNode = useNode.nResolveUOL();
+          }
+          if (useNode?.nGetAudio) {
+            PLAY_AUDIO(useNode.nGetAudio());
+            return;
+          }
+        }
+      }
+    } catch (e) { /* ignore sound errors */ }
+  },
+
+  async playSkillEffect(skillId: number) {
+    try {
+      // Load effect animation from Skill.wz/{jobFile}.img/skill/{skillId}/effect
+      const jobFileId = Math.floor(skillId / 10000);
+      const paddedJobId = String(jobFileId).padStart(3, '0');
+      const skillNode = await WZManager.get(`Skill.wz/${paddedJobId}.img`);
+      if (!skillNode) return;
+
+      const effectNode = (skillNode as any).nGet?.('skill')?.nGet?.(String(skillId))?.nGet?.('effect');
+      if (!effectNode?.nChildren || effectNode.nChildren.length === 0) return;
+
+      // Set up animation frames on the character
+      MyCharacter.skillEffectFrames = effectNode.nChildren;
+      MyCharacter.skillEffectFrame = 0;
+      MyCharacter.skillEffectDelay = 0;
+      MyCharacter.skillEffectActive = true;
+    } catch (e) { /* ignore */ }
   },
 
   // Serialize for DB save

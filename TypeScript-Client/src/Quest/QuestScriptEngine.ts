@@ -260,7 +260,19 @@ export default class QuestScriptEngine {
           engine.changeMapFn(mapId);
         }
       },
-      teachSkill(skillId: number, level: number, masterLevel: number) { /* TODO */ },
+      teachSkill(skillId: number, level?: number, masterLevel?: number) {
+        if (character?.skillManager) {
+          character.skillManager.changeSkillLevel(skillId, level ?? 1, masterLevel ?? 0);
+        }
+      },
+      changeSkillLevel(skillId: number, level: number, masterLevel: number) {
+        if (character?.skillManager) {
+          character.skillManager.changeSkillLevel(skillId, level, masterLevel);
+        }
+      },
+      getSkillLevel(skillId: number) {
+        return character?.skillManager?.getSkillLevel(skillId) ?? 0;
+      },
       changeJobById(jobId: number) { character?.changeJob(jobId); },
       guideHint(hint: number) { /* TODO */ },
       setQuestProgress(questId: number, progress: string) { /* TODO */ },

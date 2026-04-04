@@ -341,6 +341,16 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         }
       }
 
+      // Apply skills
+      if (MyChar.skillManager && charData.skills) {
+        MyChar.skillManager.deserialize(charData.skills);
+      }
+
+      // Apply SP
+      if (MyChar.stats && charData.stats?.sp !== undefined) {
+        MyChar.stats.sp = charData.stats.sp;
+      }
+
       // Store server character ID for saving later
       (MyChar as any)._serverCharId = charData.id;
       console.log('[Login] Set _serverCharId =', charData.id);

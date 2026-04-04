@@ -725,6 +725,7 @@ MapleMap.render = function (
     if (pc.questClearActive) drawEffect(pc, pc.questClearFrames, pc.questClearFrame);
     if (pc.questStartActive) drawEffect(pc, pc.questStartFrames, pc.questStartFrame);
     if (pc.incExpActive) drawEffect(pc, pc.incExpFrames, pc.incExpFrame);
+    if (pc.skillEffectActive) drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame);
   };
 
   // Player's layer from current or last foothold (persists through jumps/climbs)

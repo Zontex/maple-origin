@@ -30,6 +30,7 @@ class Stats {
   level: number;
   job: string;            // Derived display name from jobId
   abilityPoints: number;
+  sp: number;             // Skill points available to allocate
   criticalChance: number;
   criticalDamage: number;
 
@@ -45,8 +46,8 @@ class Stats {
     this.level = opts.level || 1;
     this.job = opts.job || getJobNameById(this.jobId);
     this.abilityPoints = opts.abilityPoints || 0;
+    this.sp = opts.sp || 0;
 
-    // need to add skills to this
     this.criticalChance = defaultCritChance;
     this.criticalDamage = defaultCritDamagePercent;
   }

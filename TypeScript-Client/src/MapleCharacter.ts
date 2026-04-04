@@ -78,6 +78,12 @@ class MapleCharacter {
   maxExp: number = 0;
   inventory: Inventory = new Inventory({});
   questManager: any = null;
+  skillManager: any = null;
+  buffManager: any = null;
+  skillEffectActive: boolean = false;
+  skillEffectFrames: any[] | null = null;
+  skillEffectFrame: number = 0;
+  skillEffectDelay: number = 0;
   _portalScriptEngine: any = null;
   pos: Physics;
   bodyRects: any = [];
@@ -504,13 +510,25 @@ class MapleCharacter {
   changeJob(jobId: number) {
     this.stats.setJobId(jobId);
     this.job = jobId;
-    // Future: stat gains, SP, equipment checks, animation
+
+    // Grant SP on job advancement (v83: 1st job=1SP, 2nd+=varies, simplified to 1 SP)
+    // In v83, job advancement NPCs grant skills directly via script
+    // SP is primarily earned through leveling (3 SP/level)
+    this.stats.sp += 1;
+
+    // Restore HP/MP to full on job change
+    this.hp = this.maxHp;
+    this.mp = this.maxMp;
   }
 
   levelUp() {
     this.stats.level += 1;
     this.maxExp = ExpTable.getExpNeededForLevel(this.stats.level);
     this.stats.addAbilityPoints();
+
+    // SP gain: Beginners get 1 SP, all other jobs get 3 SP per level
+    const spGain = this.stats.jobId === 0 ? 1 : 3;
+    this.stats.sp += spGain;
 
     // v83 HP/MP gains per level based on job
     const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -785,6 +803,126 @@ async executeAttackDamage() {
   } catch (error) {
     console.error('Error playing hit sound:', error);
   }
+
+  this.checkForItemDropPickup(true);
+}
+
+/**
+ * Execute a skill — handles attack skills with skill damage multiplier,
+ * mob count, attack count, and skill-specific range.
+ */
+async useSkill(skillId: number, effect: any) {
+  if (this.isInAttack) return;
+
+  const info = (await import('./Skills/SkillData')).default.getSkillSync(skillId);
+  if (!info) return;
+
+  if (info.isAttack) {
+    // Attack skill — reuse the normal attack animation but apply skill damage
+    this.isInAttack = true;
+    this.rightClickRelease();
+    this.leftClickRelease();
+    this.isInAlert = false;
+
+    const weaponType = getEquipTypeById(this.weaponEquipId);
+    const config = getWeaponConfig(weaponType);
+    const stancePool = config?.stances?.melee || ['swingO1'];
+    const attackStance = stancePool[Math.floor(Math.random() * stancePool.length)];
+
+    this.setStance(
+      attackStance,
+      0,
+      true,
+      false,
+      () => { this.isInAttack = false; },
+      async () => {
+        await this.executeSkillDamage(skillId, effect);
+      }
+    );
+  } else if (info.isBuff) {
+    // Buff — already handled in UIHotkeyBar.activateSkill
+    if (this.buffManager) {
+      this.buffManager.applyBuff(skillId, effect);
+    }
+  }
+}
+
+/**
+ * Execute skill attack damage with skill-specific multipliers.
+ */
+async executeSkillDamage(skillId: number, effect: any) {
+  const weaponType = getEquipTypeById(this.weaponEquipId);
+  const skillRange = effect.range > 0 ? effect.range : (getWeaponConfig(weaponType)?.meleeRange ?? 70);
+  const mobCount = effect.mobCount || 1;
+  const attackCount = effect.attackCount || 1;
+  const damagePercent = (effect.damage || 100) / 100;
+  const fixDamage = effect.fixdamage || 0;
+
+  try {
+    playAudioForAttackByWeaponType(weaponType);
+  } catch (e) { /* ignore */ }
+
+  const isCharacterFacingRight = this.flipped;
+
+  // Find monsters in range
+  let monsters = this.map?.monsters.filter((monster: Monster) => {
+    if (monster.dying) return false;
+    const dx = monster.pos.x - this.pos.x;
+    const dy = monster.pos.y - this.pos.y;
+    if (isCharacterFacingRight && dx < -20) return false;
+    if (!isCharacterFacingRight && dx > 20) return false;
+    const monsterHalfWidth = (monster.width || 50) / 2;
+    const effectiveDistance = Math.max(0, Math.abs(dx) - monsterHalfWidth);
+    return effectiveDistance <= skillRange && Math.abs(dy) <= 100;
+  }) || [];
+
+  // Limit to mobCount
+  if (monsters.length > mobCount) {
+    monsters = monsters.slice(0, mobCount);
+  }
+
+  if (monsters.length === 0) return;
+
+  const attackType = this.getAttackTypeFromStance();
+
+  for (const monster of monsters) {
+    try {
+      for (let hit = 0; hit < attackCount; hit++) {
+        let damage: number;
+
+        if (fixDamage > 0) {
+          // Fixed damage skills (e.g., Three Snails)
+          damage = fixDamage;
+        } else {
+          const rawRange = this.stats.getAttackRange(this.equips, weaponType, attackType);
+          const monsterDef = monster.mobFile?.info?.PDDamage?.nValue ?? 0;
+          const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
+          const defRange = this.stats.getAttackDamageRangeAfterMonsterDefense(rawRange, monsterDef, monsterLevel);
+          const isMiss = this.stats.getRandomIsMiss(monsterLevel, monster.eva ?? 0);
+          if (isMiss) {
+            damage = 0;
+          } else {
+            const baseDmg = Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
+            damage = Math.floor(baseDmg * damagePercent);
+          }
+        }
+
+        const knockbackDirection = isCharacterFacingRight ? 1 : -1;
+        monster.hit(damage, knockbackDirection, this);
+      }
+      this.createHitEffect(monster.pos.x, monster.pos.y);
+    } catch (e) {
+      console.error('Error processing skill hit:', e);
+    }
+  }
+
+  // Play hit sound
+  try {
+    const hitNode = await WZManager.get('Sound.wz/Game.img/Hit');
+    if (hitNode && (hitNode as any).nGetAudio) {
+      PLAY_AUDIO((hitNode as any).nGetAudio());
+    }
+  } catch (e) { /* ignore */ }
 
   this.checkForItemDropPickup(true);
 }
@@ -1479,6 +1617,11 @@ isCloseToMob = (inAllDirections = true) => {
       return;
     }
 
+    // Update buff timers
+    if (this.buffManager) {
+      this.buffManager.update(msPerTick);
+    }
+
     // Update chat balloon timer
     if (this.showChatBalloon) {
       this.chatBalloonTimer += msPerTick;
@@ -1520,6 +1663,22 @@ isCloseToMob = (inAllDirections = true) => {
         this.questClearActive = false;
         this.questClearFrame = 0;
         this.questClearDelay = 0;
+      }
+    }
+
+    // Skill effect animation (buff/attack visual)
+    if (this.skillEffectActive && this.skillEffectFrames) {
+      this.skillEffectDelay += msPerTick;
+      const curFrame = this.skillEffectFrames[this.skillEffectFrame];
+      const frameDelay = curFrame?.delay?.nValue ?? curFrame?.nGet?.('delay')?.nValue ?? 90;
+      if (this.skillEffectDelay > frameDelay) {
+        this.skillEffectDelay -= frameDelay;
+        this.skillEffectFrame += 1;
+      }
+      if (this.skillEffectFrame >= this.skillEffectFrames.length || !this.skillEffectFrames[this.skillEffectFrame]) {
+        this.skillEffectActive = false;
+        this.skillEffectFrame = 0;
+        this.skillEffectDelay = 0;
       }
     }
 

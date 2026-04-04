@@ -4,6 +4,8 @@ import Stats from "./Stats/Stats";
 import { JobId } from "./Constants/Jobs";
 import Inventory from "./Inventory/Inventory";
 import QuestManager from "./Quest/QuestManager";
+import SkillManager from "./Skills/SkillManager";
+import BuffManager from "./Skills/BuffManager";
 
 const MyCharacter = new MapleCharacter({
   name: "Player",
@@ -36,6 +38,13 @@ MyCharacter.equips = [];
 // Initialize quest manager.
 MyCharacter.questManager = new QuestManager(MyCharacter);
 MyCharacter.questManager.initialize();
+
+// Initialize skill manager.
+MyCharacter.skillManager = new SkillManager(MyCharacter);
+MyCharacter.skillManager.initialize();
+
+// Initialize buff manager.
+(MyCharacter as any).buffManager = new BuffManager();
 
 declare global {
   interface Window {
