@@ -17,6 +17,7 @@ import ShopUI from "./UI/ShopUI";
 import WZManager from "./wz-utils/WZManager";
 import UIMiniMap from "./UI/UIMiniMap";
 import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
+import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 
@@ -35,6 +36,7 @@ export interface MapState extends UIState {
   inventoryMenu: InventoryMenuSprite;
   equipMenu: EquipMenuSprite;
   questLog: QuestLogMenuSprite;
+  skillMenu: SkillMenuSprite;
   UIMenus: any[];
   PlayerCharacter: any; // Reference to MyCharacter
   getMapName: (mapId: number) => Promise<{ streetName: string, mapName: string }>;
@@ -48,6 +50,7 @@ export interface MapState extends UIState {
     q: boolean;
     m: boolean;
     e: boolean;
+    k: boolean;
   };
 }
 
@@ -237,7 +240,14 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     canvas: ClickManager.GameCanvas,
   });
 
-  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog];
+  this.skillMenu = await SkillMenuSprite.fromOpts({
+    x: 600,
+    y: 200,
+    charecter: MyCharacter,
+    isHidden: true,
+  });
+
+  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu];
 
   // Close all open UI menus (called when NPC/quest dialogs open)
   this.closeAllMenus = () => {
@@ -257,7 +267,8 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     q: false,
     m: false,
     e: false,
-  };
+    k: false,
+  } as any;
 
   await initializeMapState(map, true);
 
@@ -423,6 +434,9 @@ MapStateInstance.doUpdate = function (
       if (canvas.isKeyDown("e") && !this.previousKeyboardState.e) {
         this.equipMenu.setIsHidden(!this.equipMenu.isHidden);
       }
+      if (canvas.isKeyDown("k") && !(this.previousKeyboardState as any).k) {
+        this.skillMenu.setIsHidden(!this.skillMenu.isHidden);
+      }
 
       if (canvas.isKeyDown("esc")) {
         // First check if any dialog is open
@@ -461,6 +475,7 @@ MapStateInstance.doUpdate = function (
     this.previousKeyboardState.q = canvas.isKeyDown("q");
     this.previousKeyboardState.m = canvas.isKeyDown("m");
     this.previousKeyboardState.e = canvas.isKeyDown("e");
+    (this.previousKeyboardState as any).k = canvas.isKeyDown("k");
     this.previousKeyboardState.up = canvas.isKeyDown("up");
     this.previousKeyboardState.down = canvas.isKeyDown("down");
     this.previousKeyboardState.left = canvas.isKeyDown("left");
@@ -528,9 +543,7 @@ MapStateInstance.doRender = function (
   if (!!MapleMap.doneLoading) {
     MapleMap.render(canvas, camera, lag, msPerTick, tdelta);
 
-    if (!!MyCharacter.active) {
-      MyCharacter.draw(canvas, camera, lag, msPerTick, tdelta);
-    }
+    // Player character is now drawn within MapleMap.render() at the correct layer
 
     // NPC dialog on top of player
     MapleMap.npcDialog.draw(canvas, camera, lag, msPerTick, tdelta);

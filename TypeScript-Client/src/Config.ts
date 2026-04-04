@@ -7,8 +7,8 @@ interface Config {
   websocketUrl?: string;
 }
 
-const originalHeight: number = 600;
-const originalWidth: number = 800;
+const originalHeight: number = 768;
+const originalWidth: number = 1024;
 
 const config: Config = {
   height: originalHeight,

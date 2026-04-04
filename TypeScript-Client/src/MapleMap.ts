@@ -98,6 +98,9 @@ MapleMap.load = async function (id: number | string) {
   const startTime = new Date().getTime();
   this.doneLoading = false;
 
+  // Free map-specific assets (Mob.wz, Map.wz, Npc.wz) from previous map
+  WZManager.unloadTransient();
+
   let filename = "UI.wz/MapLogin.img";
   if (id !== "MapLogin") {
     const prefix = Math.floor((id as number) / 100000000);
@@ -117,42 +120,57 @@ MapleMap.load = async function (id: number | string) {
     this.PlayerCharacter = null;
   }
 
-  // disabled for debugging other sound
-  await AudioManager.playBackgroundMusic(this.wzNode.info.bgm.nValue);
-
+  // Phase 1: Footholds + boundaries (sync, needed by NPCs/monsters)
   this.footholds = this.loadFootholds(this.wzNode.foothold);
   this.boundaries = this.loadBoundaries(this.wzNode, this.footholds);
-  Camera.setBoundaries(this.boundaries); // debugging
-  Camera.lookAt(this.boundaries.left, this.boundaries.top); // debugging
-  this.backgrounds = await this.loadBackgrounds(this.wzNode.back);
-  this.tiles = await this.loadTiles(this.wzNode);
-  this.objects = await this.loadObjects(this.wzNode);
-  this.portals = await this.loadPortals(this.wzNode.portal);
-  this.names = await this.loadNames(id as number);
-  await this.loadNPCs(this.wzNode.life);
-  await this.loadMonsters(this.wzNode.life);
-  await this.loadReactors(this.wzNode.reactor);
+  Camera.setBoundaries(this.boundaries);
+  Camera.lookAt(this.boundaries.left, this.boundaries.top);
+
+  // Phase 2: All independent asset loads in parallel
+  const [backgrounds, tiles, objects, portals, names] = await Promise.all([
+    this.loadBackgrounds(this.wzNode.back),
+    this.loadTiles(this.wzNode),
+    this.loadObjects(this.wzNode),
+    this.loadPortals(this.wzNode.portal),
+    this.loadNames(id as number),
+  ]);
+  this.backgrounds = backgrounds;
+  this.tiles = tiles;
+  this.objects = objects;
+  this.portals = portals;
+  this.names = names;
+
+  // Phase 3: NPCs, monsters, reactors in parallel (all depend on footholds, not each other)
+  await Promise.all([
+    this.loadNPCs(this.wzNode.life),
+    this.loadMonsters(this.wzNode.life),
+    this.loadReactors(this.wzNode.reactor),
+  ]);
+
+  // BGM can start without blocking — fire and forget
+  AudioManager.playBackgroundMusic(this.wzNode.info.bgm.nValue);
 
   Timer.doReset();
 
   this.id = id;
-
-  const endTime = new Date().getTime();
-  console.log(`MapleMap.load ${id} took ${endTime - startTime}ms`);
-  this.doneLoading = true;
-
   this.itemDrops = [];
 
-  this.npcDialog = await UINpcTalk.fromOpts({
-    isHidden: true,
-    x: 300,
-    y: 200,
-  });
-
-  this.questDialog = await UIQuestDialog.fromOpts();
+  // Dialog/engine init in parallel (independent)
+  const [npcDialog, questDialog] = await Promise.all([
+    UINpcTalk.fromOpts({ isHidden: true, x: 300, y: 200 }),
+    UIQuestDialog.fromOpts(),
+  ]);
+  this.npcDialog = npcDialog;
+  this.questDialog = questDialog;
   this.scriptEngine = new QuestScriptEngine();
   this.npcScriptEngine = new NpcScriptEngine();
   this.mapId = id as number;
+
+  const endTime = new Date().getTime();
+  console.log(`MapleMap.load ${id} took ${endTime - startTime}ms`);
+
+  // Mark done AFTER dialogs are ready — click handlers depend on them
+  this.doneLoading = true;
 
   // Update minimap for the new map
   UIMiniMap.loadMapData();
@@ -683,22 +701,6 @@ MapleMap.render = function (
 
   this.backgrounds.filter((bg: Background) => !bg.front).forEach(draw);
 
-  for (let i = 0; i <= 7; i += 1) {
-    const inCurrentLayer = (obj: Obj) => obj.layer === i;
-    this.objects.filter(inCurrentLayer).forEach(draw);
-    this.tiles.filter(inCurrentLayer).forEach(draw);
-    this.monsters.filter(inCurrentLayer).forEach(draw);
-    (this.reactors as any[]).filter(inCurrentLayer).forEach(draw);
-    this.characters.filter(inCurrentLayer).forEach(draw);
-    this.npcs.filter(inCurrentLayer).forEach(draw);
-  }
-
-  const notInAnyLayer = (obj: any) => !(obj.layer >= 0 && obj.layer <= 7);
-  this.monsters.filter(notInAnyLayer).forEach(draw);
-  (this.reactors as any[]).filter(notInAnyLayer).forEach(draw);
-  this.characters.filter(notInAnyLayer).forEach(draw);
-  this.npcs.filter(notInAnyLayer).forEach(draw);
-
   // Draw character effects (level-up, quest clear, quest start, EXP gain)
   const drawEffect = (c: MapleCharacter, frames: any, frameIndex: number) => {
     const frame = frames?.[frameIndex];
@@ -717,25 +719,60 @@ MapleMap.render = function (
   const drawLevelUp = (c: MapleCharacter) => {
     drawEffect(c, c.levelUpFrames, c.levelUpFrame);
   };
+
+  const drawPlayerEffects = (pc: any) => {
+    if (pc.levelingUp) drawLevelUp(pc);
+    if (pc.questClearActive) drawEffect(pc, pc.questClearFrames, pc.questClearFrame);
+    if (pc.questStartActive) drawEffect(pc, pc.questStartFrames, pc.questStartFrame);
+    if (pc.incExpActive) drawEffect(pc, pc.incExpFrames, pc.incExpFrame);
+  };
+
+  // Player's layer from current or last foothold (persists through jumps/climbs)
+  if (this.PlayerCharacter?.pos?.fh != null) {
+    this._lastPlayerLayer = this.PlayerCharacter.pos.fh.layer;
+  }
+  const playerLayer = this._lastPlayerLayer ?? 0;
+  const isClimbing = this.PlayerCharacter?.pos?.isClimbing === true;
+
+  const drawLayer = (i: number) => {
+    const inCurrentLayer = (obj: Obj) => obj.layer === i;
+    this.objects.filter(inCurrentLayer).forEach(draw);
+    this.tiles.filter(inCurrentLayer).forEach(draw);
+    this.monsters.filter(inCurrentLayer).forEach(draw);
+    (this.reactors as any[]).filter(inCurrentLayer).forEach(draw);
+    this.characters.filter(inCurrentLayer).forEach(draw);
+    this.npcs.filter(inCurrentLayer).forEach(draw);
+  };
+
+  if (isClimbing) {
+    // Climbing: draw ALL layers, then player on top (player in front of rope/chain)
+    for (let i = 0; i <= 7; i++) drawLayer(i);
+
+    if (this.PlayerCharacter) {
+      this.PlayerCharacter.draw(canvas, camera, lag, msPerTick, tdelta);
+      drawPlayerEffects(this.PlayerCharacter);
+    }
+  } else {
+    // Normal/jumping: draw up to player's layer, then player, then higher layers
+    for (let i = 0; i <= playerLayer; i++) drawLayer(i);
+
+    if (this.PlayerCharacter) {
+      this.PlayerCharacter.draw(canvas, camera, lag, msPerTick, tdelta);
+      drawPlayerEffects(this.PlayerCharacter);
+    }
+
+    for (let i = playerLayer + 1; i <= 7; i++) drawLayer(i);
+  }
+
+  const notInAnyLayer = (obj: any) => !(obj.layer >= 0 && obj.layer <= 7);
+  this.monsters.filter(notInAnyLayer).forEach(draw);
+  (this.reactors as any[]).filter(notInAnyLayer).forEach(draw);
+  this.characters.filter(notInAnyLayer).forEach(draw);
+  this.npcs.filter(notInAnyLayer).forEach(draw);
+
   this.characters
     .filter((c: MapleCharacter) => !!c.levelingUp)
     .forEach(drawLevelUp);
-
-  if (this.PlayerCharacter) {
-    this.PlayerCharacter.draw(canvas, camera, lag, msPerTick, tdelta);
-    if (this.PlayerCharacter.levelingUp) {
-      drawLevelUp(this.PlayerCharacter);
-    }
-    if (this.PlayerCharacter.questClearActive) {
-      drawEffect(this.PlayerCharacter, this.PlayerCharacter.questClearFrames, this.PlayerCharacter.questClearFrame);
-    }
-    if (this.PlayerCharacter.questStartActive) {
-      drawEffect(this.PlayerCharacter, this.PlayerCharacter.questStartFrames, this.PlayerCharacter.questStartFrame);
-    }
-    if (this.PlayerCharacter.incExpActive) {
-      drawEffect(this.PlayerCharacter, this.PlayerCharacter.incExpFrames, this.PlayerCharacter.incExpFrame);
-    }
-  }
 
   this.portals.forEach(draw);
   this.backgrounds.filter((bg: Background) => !!bg.front).forEach(draw);
@@ -749,8 +786,21 @@ MapleMap.render = function (
 
 // --- New: Simple click handler for NPCs ---
 // When a click occurs, convert mouse coordinates into canvas coordinates,
-// check each NPC (assumed to be a 56x70 rectangle), and if clicked, log the NPC and set its dialogue flag.
+// check each NPC, and if clicked, log the NPC and set its dialogue flag.
+let _clickHandling = false;
 MapleMap.handleClick = async function (
+  event: MouseEvent,
+  canvasElement: HTMLElement,
+  camera: CameraInterface
+) {
+  // Prevent re-entrant clicks (async handler can overlap with rapid clicks)
+  if (_clickHandling) return;
+  _clickHandling = true;
+  try { await _handleClickInner.call(this, event, canvasElement, camera); }
+  finally { _clickHandling = false; }
+};
+async function _handleClickInner(
+  this: any,
   event: MouseEvent,
   canvasElement: HTMLElement,
   camera: CameraInterface
@@ -764,19 +814,24 @@ MapleMap.handleClick = async function (
 
   for (const npc of this.npcs as any[]) {
     if (!npc.pos) continue;
-    // Convert NPC's world position to canvas coordinates
-    const npcX = npc.x - camera.x - 25; // Center the hitbox
-    const npcY = npc.cy - camera.y - 70; // Adjust for NPC height
-    
-    // Check if the mouse click is within the NPC's bounding box (56x70)
+    // Compute hitbox from the NPC's current sprite frame (same coords as draw())
+    const currentFrame = npc.stances?.[npc.stance]?.frames?.[npc.frame];
+    const spriteW = currentFrame?.nWidth || 56;
+    const spriteH = currentFrame?.nHeight || 70;
+    const originX = currentFrame?.nGet?.("origin")?.nGet?.("nX", 0) || Math.floor(spriteW / 2);
+    const originY = currentFrame?.nGet?.("origin")?.nGet?.("nY", 0) || spriteH;
+    const adjustX = !npc.flipped ? originX : spriteW - originX;
+    const npcX = npc.x - camera.x - adjustX;
+    const npcY = npc.cy - camera.y - originY;
+
     if (
       mouseX >= npcX &&
-      mouseX <= npcX + 56 &&
+      mouseX <= npcX + spriteW &&
       mouseY >= npcY &&
-      mouseY <= npcY + 70
+      mouseY <= npcY + spriteH
     ) {
       console.log(`Clicked on NPC ${npc.id}:`, npc);
-      {
+      try {
         // Close all open UI menus when interacting with NPC
         const mapState = (window as any).MapStateInstance;
         mapState?.closeAllMenus?.();
@@ -785,6 +840,7 @@ MapleMap.handleClick = async function (
         const questManager = (window as any).charecter?.questManager;
         const character = (window as any).charecter;
         const quests = questManager?.getQuestsForNpc(npc.id);
+        console.log(`[NPC Click] questManager=${!!questManager}, quests=`, quests);
 
         // Check for script-based quests first
         const npcQuestIds = QuestData.npcToQuests.get(npc.id) || [];
@@ -793,24 +849,23 @@ MapleMap.handleClick = async function (
         for (const questId of npcQuestIds) {
           const reqs = QuestData.requirements.get(questId);
           if (!reqs) continue;
-          const hasScript = reqs.start.startscript || reqs.complete.endscript;
-          if (!hasScript) continue;
-
           const state = questManager?.getQuestState(questId);
 
           // Determine phase: if not started and this NPC starts it, run start()
           // If started and this NPC completes it, run end()
+          // Only use script path if the matching phase has a script (startscript vs endscript)
           let phase: 'start' | 'end' | null = null;
-          if (state === 0 && reqs.start.npc === npc.id) {
+          if (state === 0 && reqs.start.npc === npc.id && reqs.start.startscript) {
             // Check prerequisite quests before offering this quest
             const prereqsMet = !reqs.start.quests || reqs.start.quests.every(
               (pq: any) => questManager?.getQuestState(pq.id) >= pq.state
             );
             if (!prereqsMet) continue;
             phase = 'start';
-          } else if (state === 1 && reqs.complete.npc === npc.id) {
+          } else if (state === 1 && reqs.complete.npc === npc.id && reqs.complete.endscript) {
             phase = 'end';
           }
+          if (!phase) continue;
           // Note: do NOT re-run startscript when quest is in-progress (state=1) on the start NPC.
           // The quest is already started — the NPC's own script should handle the next action (warp, etc.).
 
@@ -861,6 +916,7 @@ MapleMap.handleClick = async function (
           try { npcHasScript = await this.npcScriptEngine.hasScript(npc.id); } catch {}
           const hasQuests = questManager && quests &&
             (quests.available.length > 0 || quests.inProgress.length > 0 || quests.completable.length > 0);
+          console.log(`[NPC Click] scriptHandled=${scriptHandled}, npcHasScript=${npcHasScript}, hasQuests=${hasQuests}`);
 
           if (hasQuests) {
             // If NPC has a script and ONLY in-progress quests (no available/completable),
@@ -981,6 +1037,8 @@ MapleMap.handleClick = async function (
             await this.tryNpcScript(npc);
           }
         }
+      } catch (err) {
+        console.error(`[NPC Click] Error handling NPC ${npc.id}:`, err);
       }
       break; // Only handle the first NPC clicked
     }

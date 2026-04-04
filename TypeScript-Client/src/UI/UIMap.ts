@@ -78,8 +78,8 @@ UIMap.initialize = async function () {
 };
 
 const startUIPosition = {
-  x: 0,
-  y: config.height - config.originalHeight,
+  x: config.width - 800,   // Offset for wider-than-800 resolutions
+  y: config.height - 600,  // Offset for taller-than-600 resolutions
 };
 
 UIMap.addButtons = function (canvas) {
@@ -87,7 +87,7 @@ UIMap.addButtons = function (canvas) {
   console.log(this.statusBarNode.EquipKey.nChildren);
 
   const quickSlot = new MapleStanceButton(canvas, {
-    x: 768,
+    x: 768 + startUIPosition.x,
     y: 536 + startUIPosition.y,
     img: this.statusBarNode.QuickSlot.nChildren,
     isRelativeToCamera: true,
@@ -101,7 +101,7 @@ UIMap.addButtons = function (canvas) {
   this.buttons.add(quickSlot);
 
   const keyboardlKey = new MapleStanceButton(canvas, {
-    x: 736,
+    x: 736 + startUIPosition.x,
     y: 536 + startUIPosition.y,
     img: this.statusBarNode.KeySet.nChildren,
     isRelativeToCamera: true,
@@ -115,21 +115,22 @@ UIMap.addButtons = function (canvas) {
   this.buttons.add(keyboardlKey);
 
   const skillKey = new MapleStanceButton(canvas, {
-    x: 704,
+    x: 704 + startUIPosition.x,
     y: 536 + startUIPosition.y,
     img: this.statusBarNode.SkillKey.nChildren,
     isRelativeToCamera: true,
     isPartOfUI: true,
     onClick: () => {
-      // console.log("Current stance: ", self.stance);
-      console.log("equip click!");
+      if (MapState.skillMenu) {
+        MapState.skillMenu.setIsHidden(!MapState.skillMenu.isHidden);
+      }
     },
   });
   ClickManager.addButton(skillKey);
   this.buttons.add(skillKey);
 
   const invetoryKey = new MapleStanceButton(canvas, {
-    x: 672,
+    x: 672 + startUIPosition.x,
     y: 536 + startUIPosition.y,
     img: this.statusBarNode.InvenKey.nChildren,
     isRelativeToCamera: true,
@@ -144,7 +145,7 @@ UIMap.addButtons = function (canvas) {
   this.buttons.add(invetoryKey);
 
   const equipKey = new MapleStanceButton(canvas, {
-    x: 640,
+    x: 640 + startUIPosition.x,
     y: 536 + startUIPosition.y,
     img: this.statusBarNode.EquipKey.nChildren,
     isRelativeToCamera: true,
@@ -352,17 +353,24 @@ UIMap.drawNumbers = function (canvas, hp, maxHp, mp, maxMp, exp, maxExp) {
 };
 
 UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
-  canvas.drawImage({
-    img: this.statusBg,
-    dx: 0,
-    dy: 529 + startUIPosition.y,
-  });
+  const barY = 529 + startUIPosition.y;
+  const bgW = this.statusBg.width || 800;
 
-  canvas.drawImage({
-    img: this.statusBg2,
-    dx: 0,
-    dy: 529 + startUIPosition.y,
-  });
+  // Draw the left copy normally
+  canvas.drawImage({ img: this.statusBg, dx: 0, dy: barY });
+  canvas.drawImage({ img: this.statusBg2, dx: 0, dy: barY });
+
+  // Draw a right-aligned copy clipped so only the extra area beyond 800px shows
+  if (startUIPosition.x > 0) {
+    const ctx = canvas.context;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bgW, barY, config.width - bgW, config.height - barY);
+    ctx.clip();
+    canvas.drawImage({ img: this.statusBg, dx: config.width - bgW, dy: barY });
+    canvas.drawImage({ img: this.statusBg2, dx: config.width - bgW, dy: barY });
+    ctx.restore();
+  }
 
   this.drawLevel(canvas, MyCharacter.stats.level);
 

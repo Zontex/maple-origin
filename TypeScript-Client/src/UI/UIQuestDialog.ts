@@ -554,7 +554,12 @@ export default class UIQuestDialog {
 
   // Handle click on selection options — returns true if a selection was clicked
   handleClick(canvasX: number, canvasY: number): boolean {
-    if (this.isHidden || this.selectionRects.length === 0) return false;
+    if (this.isHidden) return false;
+    if (this.selectionRects.length === 0) {
+      console.log(`[QuestDialog] handleClick: no selectionRects, selections=${this.selections.length}, scriptMode=${this.scriptMode}, type=${this.scriptDialogType}`);
+      return false;
+    }
+    console.log(`[QuestDialog] handleClick at (${canvasX}, ${canvasY}), ${this.selectionRects.length} rects:`, this.selectionRects.map(r => `idx=${r.index} (${r.x},${r.y},${r.w},${r.h})`));
     for (const rect of this.selectionRects) {
       if (canvasX >= rect.x && canvasX <= rect.x + rect.w &&
           canvasY >= rect.y && canvasY <= rect.y + rect.h) {

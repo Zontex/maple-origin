@@ -9,6 +9,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Portal script engine** (`PortalScriptEngine.ts`) — 458 portal scripts from backend now execute client-side via `new Function()`, with `pi` API (warp, quest checks, items, messages). Scripted portals (types 7, 8, 9, 11) now work instead of being silently ignored
+- **Lazy-load optimizations** — parallelized `MapleMap.load()` asset fetches (backgrounds, tiles, objects, portals, names, NPCs, monsters, reactors), deferred character model preload so login screen appears faster
+- **WZ asset eviction** — `WZManager.unloadTransient()` frees map-specific assets (Map.wz, Mob.wz, Npc.wz sprites) on map change, reducing memory growth on mobile
+- **NPC hitbox from sprite** — NPC click detection now uses actual sprite dimensions and origin instead of hardcoded 56×70 rectangle
+- **Resolution upgrade to 1024×768** — matches original v83 windowed resolution; status bar extends to full width via clipped right-aligned copy; buttons repositioned for wider viewport
 - **Character name availability check** — new `check_name` server endpoint validates name on the name entry screen before advancing to customization
 - **Quest log item progress** — item requirements now shown in green/red like mob progress (e.g., "Jr. Sentinel Shellpiece: 0/1")
 - **Character select sound effect** — plays `Sound.wz/UI.img/CharSelect` when clicking a character
@@ -22,7 +26,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Character equipment ignored during creation** — server handler didn't pass `equips` to `Character.create()`, defaulting all characters to starter gear
 - **Sub-pixel rendering artifacts** — camera easing produced fractional positions causing flickering lines between tiles; rounded camera to integers in `Camera.update()`
 - **NPC/effect sprite flickering** — physics produces fractional positions; rounded `dx`/`dy` in all `GameCanvas` draw methods
-- **Player renders in front of portals** — moved player draw before portal rendering so portals appear on top
+- **Player renders on wrong layer** — player now draws within their foothold's layer so foreground map objects correctly appear in front; layer persists during jumps
+- **Quest script phase mismatch** — quests with `startscript` but no `endscript` (e.g., quest 1028 "To Lith Harbor!") no longer silently run an empty `end()` function; completion now uses the standard WZ dialog
+- **NPC click handler swallowing errors** — added try/catch and re-entrancy guard to async `handleClick`
 - **NPC click-through dialogs** — clicking dialog buttons would re-trigger NPC behind them; added guard when dialogs are open
 - **Tutorial mobs dealing damage** — tutorial mobs (9300018, 9300328, 9300383, 9409000, 9409001) now always show "MISS" with no damage or knockback
 - **Quest log showing raw `ITEM:4031802`** — `\x01ITEM:id\x02` markers now replaced with item names via `getItemNameSync()`

@@ -1,14 +1,28 @@
 import WZNode from "./WZNode";
 
+// Prefixes that should stay cached permanently (shared across maps)
+const PERSISTENT_PREFIXES = [
+  'UI.wz/', 'String.wz/', 'Character.wz/', 'Base.wz/',
+  'Sound.wz/', 'Skill.wz/', 'Item.wz/',
+];
+
+function isPersistent(filename: string): boolean {
+  return PERSISTENT_PREFIXES.some(p => filename.startsWith(p));
+}
+
 /**
  * WZManager handles the loading and caching of WZ files.
  */
 interface WZManager {
   cache: WZNode;
+  _loadedFiles: Set<string>;
+  _loading: Map<string, Promise<void>>;
+  _doLoad: (filename: string) => Promise<void>;
   initialize: () => void;
   load: (filename: string) => Promise<void>;
   pathExists: (thePath: string) => boolean;
   get: (thePath: string) => Promise<WZNode | undefined>;
+  unloadTransient: () => void;
 }
 
 const WZManager: WZManager = {
@@ -17,11 +31,15 @@ const WZManager: WZManager = {
    */
   cache: new WZNode({ $dir: "" }),
 
+  // Track loaded filenames for eviction
+  _loadedFiles: new Set<string>(),
+
   /**
    * Initializes the WZManager by setting up the cache.
    */
   initialize() {
     this.cache = new WZNode({ $dir: "" });
+    this._loadedFiles = new Set();
   },
 
   /**
@@ -63,6 +81,7 @@ const WZManager: WZManager = {
     const subtree = new WZNode(json, tree);
     tree[subtree.nName] = subtree;
     tree.nChildren.push(subtree);
+    this._loadedFiles.add(filename);
   },
 
   /**
@@ -99,6 +118,38 @@ const WZManager: WZManager = {
       tree = tree[p];
     }
     return tree;
+  },
+
+  /**
+   * Unloads non-persistent (map-specific) assets from cache.
+   * Call on map change to free memory from Mob.wz, Map.wz, Npc.wz sprites.
+   */
+  unloadTransient() {
+    const evicted: string[] = [];
+    for (const filename of this._loadedFiles) {
+      if (isPersistent(filename)) continue;
+
+      // Walk cache tree to the parent, remove the .img node
+      const parts = filename.split("/");
+      let tree: any = this.cache;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!tree[parts[i]]) break;
+        tree = tree[parts[i]];
+      }
+      const leafName = parts[parts.length - 1];
+      if (tree && tree[leafName]) {
+        // Remove from parent's children array
+        tree.nChildren = tree.nChildren.filter((c: any) => c.nName !== leafName);
+        delete tree[leafName];
+        evicted.push(filename);
+      }
+    }
+    for (const f of evicted) {
+      this._loadedFiles.delete(f);
+    }
+    if (evicted.length > 0) {
+      console.log(`[WZManager] Evicted ${evicted.length} transient assets`);
+    }
   },
 };
 

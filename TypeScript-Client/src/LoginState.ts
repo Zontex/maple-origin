@@ -26,6 +26,7 @@ const LOGIN_CAMERA_POSITIONS = {
 
 interface LoginState extends UIState {
   currentSubState: LoginSubState;
+  characterLoadPromise: Promise<void> | null;
   switchToSubState: (subState: LoginSubState) => Promise<void>;
   enterGame: () => Promise<void>;
 }
@@ -33,13 +34,19 @@ interface LoginState extends UIState {
 const LoginState: LoginState = {
   currentSubState: LoginSubState.LOGIN_SCREEN,
 
+  // Promise that resolves when character model is ready (for char select screen)
+  characterLoadPromise: null as Promise<void> | null,
+
   async initialize(canvas?: GameCanvas): Promise<void> {
     MyCharacter.deactivate();
     await MapleMap.load("MapLogin");
 
-    // Load the character early so we can render it on the select screen
+    // Start character preload in background — don't block login screen render.
+    // Character select screen awaits this before rendering characters.
     if (!MyCharacter.baseBody) {
-      await MyCharacter.load();
+      this.characterLoadPromise = MyCharacter.load();
+    } else {
+      this.characterLoadPromise = Promise.resolve();
     }
 
     // Extend camera boundaries to allow scrolling to all login screen sections
@@ -56,6 +63,12 @@ const LoginState: LoginState = {
   async switchToSubState(subState: LoginSubState): Promise<void> {
     const previousState = this.currentSubState;
     this.currentSubState = subState;
+
+    // Ensure character model is loaded before showing character select/create
+    if ((subState === LoginSubState.CHARACTER_SELECT || subState === LoginSubState.CREATE_CHARACTER)
+        && this.characterLoadPromise) {
+      await this.characterLoadPromise;
+    }
 
     if (subState !== LoginSubState.LOGIN_SCREEN) {
       UILogin.removeInputs();

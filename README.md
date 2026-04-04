@@ -57,17 +57,19 @@ npm start                           # Serves client + server on :3001
 | Alt | Jump | E | Equipment |
 | Ctrl | Attack | S | Stats |
 | Z | Pick up | Q | Quest Log |
-| Enter | Chat | M | Minimap |
-| Esc | Close menus | F9 | Debug drag |
+| Enter | Chat | K | Skills |
+| M | Minimap | Esc | Close menus |
+| F9 | Debug drag | | |
 
 ---
 
 ## Features
 
 ### Core Engine
-- 800x600 canvas with fullscreen CSS scaling (4:3 letterboxing)
+- 1024x768 canvas with fullscreen CSS scaling (4:3 letterboxing)
 - 60 FPS game loop with camera easing and integer-snapped rendering
 - Physics: gravity, walking, jumping, climbing, knockback, fall damage
+- Lazy asset loading with parallelized map fetches and automatic eviction of map-specific data on map change
 
 ### Login & Characters
 - Authentic v83 login screen with world/channel select
@@ -158,9 +160,11 @@ See [CHANGELOG.md](CHANGELOG.md) for recent fixes. Major remaining work:
 - **Cash Shop**: Not implemented — blocks Yoona's Shopping Quiz quest chain (8020-8025) which requires purchasing Beginner's Shopping Guide
 - **Quest reward selection**: Quests with "choose one" rewards (e.g., quiz chain final reward: Blue Potion x30 OR Stolen Fence) don't present a choice UI yet
 - **Quiz quests**: `#L` selection codes in Say.img dialogue (530 quests) need full parse+render as clickable options with per-selection responses
+- **Job trial system**: Maple Island job instructors (Dances with Balrog, Athena Pierce, Grendel, etc.) offer job trial quests (1048-1053) that temporarily change job, teach trial skills, and warp to trial maps — requires skill system + temporary job change + trial map instances
+- **Skill system**: No skill data, skill UI, skill hotkey bar, or skill effects — blocks job trials, job advancement skill rewards, and all active combat skills
 - **Quest system**: Fame reward bug (104 quests), item start requirements (488 quests)
 - **Scripts**: 214 broken NPC scripts and 65 broken quest scripts (Java.type calls, missing API methods)
-- **Missing features**: Skill system, party system, facial expressions, passive regen, world map
+- **Missing features**: Party system, facial expressions, passive HP/MP regen, world map
 
 ---
 
