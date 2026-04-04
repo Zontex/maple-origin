@@ -147,6 +147,14 @@ class Character {
       'SELECT quest_id, state, mob_progress FROM quests WHERE character_id = ?'
     ).all(characterId);
 
+    const skills = db.prepare(
+      'SELECT skill_id, skill_level, master_level FROM skills WHERE character_id = ?'
+    ).all(characterId);
+
+    const keymap = db.prepare(
+      'SELECT key_code, bind_type, action_id FROM keymap WHERE character_id = ?'
+    ).all(characterId);
+
     return {
       id: char.id,
       name: char.name,
@@ -159,6 +167,7 @@ class Character {
         int: char.int,
         luk: char.luk,
         ap: char.ap,
+        sp: char.sp || 0,
         maxHp: char.max_hp,
         maxMp: char.max_mp,
         jobId: char.job_id,
@@ -180,6 +189,8 @@ class Character {
       equipped,
       inventory: groupInventory(inventory),
       quests,
+      skills: skills.map(s => ({ skillId: s.skill_id, skillLevel: s.skill_level, masterLevel: s.master_level })),
+      keymap: keymap.map(k => ({ keyCode: k.key_code, bindType: k.bind_type, actionId: k.action_id })),
     };
   }
 
@@ -188,7 +199,7 @@ class Character {
 
     const updateChar = db.prepare(`
       UPDATE characters SET
-        level = ?, exp = ?, str = ?, dex = ?, int = ?, luk = ?, ap = ?,
+        level = ?, exp = ?, str = ?, dex = ?, int = ?, luk = ?, ap = ?, sp = ?,
         hp = ?, max_hp = ?, mp = ?, max_mp = ?,
         job_id = ?, map_id = ?, pos_x = ?, pos_y = ?,
         mesos = ?, fame = ?
@@ -210,11 +221,21 @@ class Character {
       'INSERT INTO quests (character_id, quest_id, state, mob_progress) VALUES (?, ?, ?, ?)'
     );
 
+    const deleteSkills = db.prepare('DELETE FROM skills WHERE character_id = ?');
+    const insertSkill = db.prepare(
+      'INSERT INTO skills (character_id, skill_id, skill_level, master_level) VALUES (?, ?, ?, ?)'
+    );
+
+    const deleteKeymap = db.prepare('DELETE FROM keymap WHERE character_id = ?');
+    const insertKeymap = db.prepare(
+      'INSERT INTO keymap (character_id, key_code, bind_type, action_id) VALUES (?, ?, ?, ?)'
+    );
+
     const saveTransaction = db.transaction(() => {
       // Update character stats
       updateChar.run(
         data.level ?? 1, data.exp ?? 0,
-        data.str ?? 12, data.dex ?? 5, data.int ?? 4, data.luk ?? 4, data.ap ?? 0,
+        data.str ?? 4, data.dex ?? 4, data.int ?? 4, data.luk ?? 4, data.ap ?? 0, data.sp ?? 0,
         data.hp ?? 50, data.maxHp ?? 50, data.mp ?? 5, data.maxMp ?? 5,
         data.jobId ?? 0, data.mapId ?? 10000, data.posX ?? 0, data.posY ?? 0,
         data.mesos ?? 0, data.fame ?? 0,
@@ -247,6 +268,24 @@ class Character {
       if (data.quests) {
         for (const q of data.quests) {
           insertQuest.run(characterId, q.questId, q.state, q.mobProgress || '{}');
+        }
+      }
+
+      // Replace skills
+      deleteSkills.run(characterId);
+      if (data.skills) {
+        for (const s of data.skills) {
+          if (s.skillLevel > 0) {
+            insertSkill.run(characterId, s.skillId, s.skillLevel, s.masterLevel || 0);
+          }
+        }
+      }
+
+      // Replace keymap
+      deleteKeymap.run(characterId);
+      if (data.keymap) {
+        for (const k of data.keymap) {
+          insertKeymap.run(characterId, k.keyCode, k.bindType || 1, k.actionId);
         }
       }
     });

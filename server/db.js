@@ -31,8 +31,8 @@ function initSchema() {
       name TEXT NOT NULL COLLATE NOCASE,
       level INTEGER DEFAULT 1,
       exp INTEGER DEFAULT 0,
-      str INTEGER DEFAULT 12,
-      dex INTEGER DEFAULT 5,
+      str INTEGER DEFAULT 4,
+      dex INTEGER DEFAULT 4,
       int INTEGER DEFAULT 4,
       luk INTEGER DEFAULT 4,
       ap INTEGER DEFAULT 0,
@@ -85,15 +85,44 @@ function initSchema() {
       FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS skills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      character_id INTEGER NOT NULL,
+      skill_id INTEGER NOT NULL,
+      skill_level INTEGER DEFAULT 0,
+      master_level INTEGER DEFAULT 0,
+      UNIQUE(character_id, skill_id),
+      FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS keymap (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      character_id INTEGER NOT NULL,
+      key_code TEXT NOT NULL,
+      bind_type INTEGER NOT NULL DEFAULT 1,
+      action_id INTEGER NOT NULL,
+      UNIQUE(character_id, key_code),
+      FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_characters_user_world ON characters(user_id, world_id);
     CREATE INDEX IF NOT EXISTS idx_inventory_character ON inventory_items(character_id);
     CREATE INDEX IF NOT EXISTS idx_equipped_character ON equipped_items(character_id);
     CREATE INDEX IF NOT EXISTS idx_quests_character ON quests(character_id);
+    CREATE INDEX IF NOT EXISTS idx_skills_character ON skills(character_id);
+    CREATE INDEX IF NOT EXISTS idx_keymap_character ON keymap(character_id);
   `);
 
   // Migration: add mob_progress column if missing (existing DBs)
   try {
     db.exec(`ALTER TABLE quests ADD COLUMN mob_progress TEXT DEFAULT '{}'`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+
+  // Migration: add sp column if missing
+  try {
+    db.exec(`ALTER TABLE characters ADD COLUMN sp INTEGER DEFAULT 0`);
   } catch (e) {
     // Column already exists — ignore
   }

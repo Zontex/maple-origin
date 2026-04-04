@@ -222,7 +222,6 @@ hr {
 }
 
 #game {
-  image-rendering: pixelated;
   width: min(100vw, calc(100vh * 1024 / 768));
   height: min(100vh, calc(100vw * 768 / 1024));
   cursor: none;
