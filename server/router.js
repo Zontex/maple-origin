@@ -5,7 +5,7 @@ const { handleMonsterDamage, handleMobStateBatch, handleMobDamageRequest, handle
 const { handleItemDrop, handleItemPickup } = require('./handlers/item');
 const { handleChatMessage } = require('./handlers/chat');
 const { handleReactorHit, handleReactorRespawn } = require('./handlers/reactor');
-const { handleRegister, handleLogin, handleGetWorlds, handleGetCharacters, handleCreateCharacter, handleDeleteCharacter, handleSelectCharacter, handleSaveCharacter } = require('./handlers/auth');
+const { handleRegister, handleLogin, handleGetWorlds, handleGetCharacters, handleCheckName, handleCreateCharacter, handleDeleteCharacter, handleSelectCharacter, handleSaveCharacter } = require('./handlers/auth');
 
 function handleMessage(playerId, data) {
   switch (data.type) {
@@ -70,6 +70,9 @@ function handleMessage(playerId, data) {
       break;
     case 'get_characters':
       handleGetCharacters(playerId, data.data);
+      break;
+    case 'check_name':
+      handleCheckName(playerId, data.data);
       break;
     case 'create_character':
       handleCreateCharacter(playerId, data.data);

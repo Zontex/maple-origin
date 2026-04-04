@@ -1337,7 +1337,11 @@ isCloseToMob = (inAllDirections = true) => {
         if (monster) {
           this.lastHitTime = currentTime;
 
-          const isMiss = this.stats.getRandomMonsterTouchMiss(
+          // Tutorial mobs always miss the player
+          const TUTORIAL_MOB_IDS = [9300018, 9300328, 9300383, 9409000, 9409001];
+          const isTutorialMob = TUTORIAL_MOB_IDS.includes(monster.id);
+
+          const isMiss = isTutorialMob || this.stats.getRandomMonsterTouchMiss(
             monster.mobLevel,
             monster.acc
           );

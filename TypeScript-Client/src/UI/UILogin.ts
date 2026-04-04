@@ -417,6 +417,7 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     y: -470,
     img: this.uiLogin.nGet('WorldSelect')?.BtGoworld.nChildren,
     onClick: async () => {
+      if (uiLoginRef.selectedChannelIndex === null) return;
       // Fetch characters for selected world from server
       await uiLoginRef.loadCharactersFromServer();
       await LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
@@ -1112,6 +1113,7 @@ UILogin.initCreateCharacter = function () {
   this._diceAnimDelay = 0;
   this._diceRolling = false;
   this._clickConsumed = false;
+  this._checkingName = false;
   this.createCharStage = 'raceSelect';
   this.selectedRace = 'normal';
   DebugDrag.clear();
@@ -1154,18 +1156,28 @@ UILogin.initCreateCharacter = function () {
       // Only confirm on Enter in charCustomize stage
       if (this.createCharStage === 'charCustomize' && this.newCharName.trim().length > 0) {
         this.confirmCreateCharacter();
-      } else if (this.createCharStage === 'nameEntry' && this.newCharName.trim().length > 0) {
-        this.createCharStage = 'charCustomize';
-        // Create preview character when entering customization
-        const o = this.newCharOptions;
-        MapleStandingCharacter.fromAppearance({
-          name: this.newCharName,
-          skinColor: o.skinColors[0],
-          hairId: o.hairs[0] + o.hairColors[0],
-          faceId: o.faces[0],
-          flipped: true,
-          equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
-        }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
+      } else if (this.createCharStage === 'nameEntry' && this.newCharName.trim().length > 0 && !this._checkingName) {
+        this._checkingName = true;
+        const name = this.newCharName.trim();
+        MySocket.checkName(this.selectedWorldId ?? 0, name).then((result: any) => {
+          this._checkingName = false;
+          if (!result.valid) {
+            this.showNotice(NoticeType.NORMAL, NoticeMessage.CANNOT_USE_NAME);
+          } else if (result.taken) {
+            this.showNotice(NoticeType.NORMAL, NoticeMessage.NAME_IN_USE);
+          } else {
+            this.createCharStage = 'charCustomize';
+            const o = this.newCharOptions;
+            MapleStandingCharacter.fromAppearance({
+              name: this.newCharName,
+              skinColor: o.skinColors[0],
+              hairId: o.hairs[0] + o.hairColors[0],
+              faceId: o.faces[0],
+              flipped: true,
+              equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
+            }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
+          }
+        }).catch(() => { this._checkingName = false; });
       }
       e.preventDefault();
       e.stopPropagation();
@@ -1270,9 +1282,10 @@ UILogin.drawCreateCharacter = function (canvas: any, camera: any, lag: number, m
 
   const mx = canvas.mouseX;
   const my = canvas.mouseY;
-  const clicked = canvas.clicked && !this._clickConsumed;
+  const rawClick = canvas.clicked || canvas.wasClicked;
+  const clicked = rawClick && !this._clickConsumed;
   if (clicked) this._clickConsumed = true;
-  if (!canvas.clicked) this._clickConsumed = false;
+  if (!rawClick) this._clickConsumed = false;
 
   switch (this.createCharStage) {
     case 'raceSelect':
@@ -1419,18 +1432,29 @@ UILogin._drawNameEntry = function (canvas: any, mx: number, my: number, clicked:
       canvas.drawImage({ img: okImg, dx: bp.x, dy: bp.y });
 
       if (clicked && mx >= bp.x && mx <= bp.x + 81 && my >= bp.y && my <= bp.y + 41) {
-        if (this.newCharName.trim().length > 0) {
-          this.createCharStage = 'charCustomize';
-          const o = this.newCharOptions;
-          MapleStandingCharacter.fromAppearance({
-            name: this.newCharName,
-            skinColor: o.skinColors[0],
-            hairId: o.hairs[0] + o.hairColors[0],
-            faceId: o.faces[0],
-            flipped: true,
-            equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
-          }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
-        } else {
+        if (this.newCharName.trim().length > 0 && !this._checkingName) {
+          this._checkingName = true;
+          const name = this.newCharName.trim();
+          MySocket.checkName(this.selectedWorldId ?? 0, name).then((result: any) => {
+            this._checkingName = false;
+            if (!result.valid) {
+              this.showNotice(NoticeType.NORMAL, NoticeMessage.CANNOT_USE_NAME);
+            } else if (result.taken) {
+              this.showNotice(NoticeType.NORMAL, NoticeMessage.NAME_IN_USE);
+            } else {
+              this.createCharStage = 'charCustomize';
+              const o = this.newCharOptions;
+              MapleStandingCharacter.fromAppearance({
+                name: this.newCharName,
+                skinColor: o.skinColors[0],
+                hairId: o.hairs[0] + o.hairColors[0],
+                faceId: o.faces[0],
+                flipped: true,
+                equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
+              }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
+            }
+          }).catch(() => { this._checkingName = false; });
+        } else if (this.newCharName.trim().length === 0) {
           this.showNotice(NoticeType.NORMAL, NoticeMessage.CANNOT_USE_NAME);
         }
       }

@@ -4,6 +4,7 @@ class GameCanvas {
   mouseX;
   mouseY;
   clicked;
+  wasClicked;
   rightClicked;
   focusGame;
   focusInput;
@@ -21,6 +22,7 @@ class GameCanvas {
     this.mouseX = 0;
     this.mouseY = 0;
     this.clicked = false;
+    this.wasClicked = false;
     this.rightClicked = false;
     this.focusGame = false;
     this.focusInput = false;
@@ -121,7 +123,8 @@ class GameCanvas {
   }
 
   listenMouse() {
-    this.game.addEventListener("mousemove", (e) => {
+    // Listen on window so cursor tracks even over overlaid DOM elements (e.g. <input>)
+    window.addEventListener("mousemove", (e) => {
       const rect = this.game.getBoundingClientRect();
       this.scaleX = rect.width / this.game.width;
       this.scaleY = rect.height / this.game.height;
@@ -131,6 +134,7 @@ class GameCanvas {
     this.game.addEventListener("mousedown", (e) => {
       if (e.which === 1) {
         this.clicked = true;
+        this.wasClicked = true;
       } else if (e.which === 3) {
         this.rightClicked = true;
       }
@@ -183,6 +187,7 @@ class GameCanvas {
   resetMousewheel() {
     this.scrolledUp = false;
     this.scrolledDown = false;
+    this.wasClicked = false;
   }
   releaseFocusInput() {
     this.pressedKeys[this.keys.enter] = false;
@@ -249,8 +254,8 @@ class GameCanvas {
     const sw = opts.sw !== undefined ? opts.sw : img.width - sx;
     const sh = opts.sh !== undefined ? opts.sh : img.height - sy;
 
-    const dx = opts.dx !== undefined ? opts.dx : 0;
-    const dy = opts.dy !== undefined ? opts.dy : 0;
+    const dx = Math.round(opts.dx !== undefined ? opts.dx : 0);
+    const dy = Math.round(opts.dy !== undefined ? opts.dy : 0);
     const dw = opts.dw !== undefined ? opts.dw : sw;
     const dh = opts.dh !== undefined ? opts.dh : sh;
 
@@ -361,8 +366,8 @@ class GameCanvas {
     stroke?: string;
     strokeWidth?: number;
   }) {
-    const x = opts.x || 0;
-    const y = opts.y || 0;
+    const x = Math.round(opts.x || 0);
+    const y = Math.round(opts.y || 0);
     const width = opts.width || 0;
     const height = opts.height || 0;
     const angle = opts.angle || 0;
@@ -425,8 +430,8 @@ class GameCanvas {
     strokeWidth?: number;
   }) {
     const text = opts.text || "";
-    const x = opts.x || 0;
-    const y = opts.y || 0;
+    const x = Math.round(opts.x || 0);
+    const y = Math.round(opts.y || 0);
     const color = opts.color || "#000000";
     const fontWeight = opts.fontWeight || "";
     const fontStyle = opts.fontStyle || "";

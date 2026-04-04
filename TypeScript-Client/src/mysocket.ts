@@ -83,6 +83,7 @@ class MySocket {
   // Callbacks for login flow
   private _loginCallback: ((result: { success: boolean; error?: string; userId?: number }) => void) | null = null;
   private _characterListCallback: ((data: any) => void) | null = null;
+  private _checkNameCallback: ((result: any) => void) | null = null;
   private _createCharCallback: ((result: any) => void) | null = null;
   private _deleteCharCallback: ((result: any) => void) | null = null;
   private _selectCharCallback: ((result: any) => void) | null = null;
@@ -162,6 +163,14 @@ class MySocket {
     return new Promise((resolve) => {
       this._characterListCallback = resolve;
       this.sendMessage({ type: 'get_characters', data: { worldId } });
+    });
+  }
+
+  // Check if a character name is available
+  checkName(worldId: number, name: string): Promise<any> {
+    return new Promise((resolve) => {
+      this._checkNameCallback = resolve;
+      this.sendMessage({ type: 'check_name', data: { worldId, name } });
     });
   }
 
@@ -462,6 +471,12 @@ class MySocket {
           if (this._characterListCallback) {
             this._characterListCallback(data);
             this._characterListCallback = null;
+          }
+          break;
+        case "check_name_result":
+          if (this._checkNameCallback) {
+            this._checkNameCallback(data);
+            this._checkNameCallback = null;
           }
           break;
         case "create_character_result":

@@ -5,7 +5,7 @@ import DragableMenu from './DragableMenu';
 import { CameraInterface } from '../../Camera';
 import { Position } from '../../Effects/DamageIndicator';
 import GameCanvas from '../../GameCanvas';
-import QuestData, { mobNames, resolveItemCodes } from '../../Quest/QuestData';
+import QuestData, { mobNames, resolveItemCodes, getItemNameSync } from '../../Quest/QuestData';
 import type MapleCharacter from '../../MapleCharacter';
 
 enum QuestTab {
@@ -625,6 +625,8 @@ class QuestLogMenuSprite extends DragableMenu {
     }
     const qm = (window as any).charecter?.questManager;
     description = resolveItemCodes(description, qm);
+    // Replace inline ITEM markers with item names (icons not supported in text-only renderer)
+    description = description.replace(/\x01ITEM:(\d+)\x02/g, (_, id) => getItemNameSync(parseInt(id)) || `Item #${id}`);
 
     // Word wrap and draw
     const words = description.split(' ');
@@ -648,16 +650,34 @@ class QuestLogMenuSprite extends DragableMenu {
       dy += lineH;
     }
 
-    // Mob progress for in-progress tab
+    // Mob and item progress for in-progress tab
     if (this.currentTab === QuestTab.IN_PROGRESS) {
       const qm = this.charecter?.questManager;
       const progress = qm?.getMobProgress(questId);
+      const reqs = QuestData.requirements.get(questId);
+      const hasProgress = (progress?.length) || (reqs?.complete.items?.length);
+      if (hasProgress) dy += 6;
+
       if (progress?.length) {
-        dy += 6;
         for (const p of progress) {
           const done = p.current >= p.required;
           canvas.drawText({
             text: `${mobNames.get(p.mobId) || `Mob #${p.mobId}`}: ${p.current}/${p.required}`,
+            color: done ? '#00AA00' : '#CC0000',
+            x: rx + DETAIL_PAD, y: dy, fontSize: 11,
+          });
+          dy += lineH;
+        }
+      }
+
+      if (reqs?.complete.items?.length) {
+        for (const item of reqs.complete.items) {
+          if (item.count <= 0) continue;
+          const have = qm?.getItemCount(item.id) ?? 0;
+          const done = have >= item.count;
+          const name = getItemNameSync(item.id) || `Item #${item.id}`;
+          canvas.drawText({
+            text: `${name}: ${have}/${item.count}`,
             color: done ? '#00AA00' : '#CC0000',
             x: rx + DETAIL_PAD, y: dy, fontSize: 11,
           });

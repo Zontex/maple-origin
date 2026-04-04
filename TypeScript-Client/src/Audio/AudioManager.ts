@@ -1,5 +1,4 @@
 import WZManager from "../wz-utils/WZManager";
-import WZNode from "../wz-utils/WZNode";
 
 export interface AudioManager {
   bgm: HTMLAudioElement;
@@ -30,8 +29,19 @@ const currentAudioManager: AudioManager = {
       this.bgm = wzNode.nGetAudio();
       this.bgm.loop = true;
       console.log(`Playing ${name}`);
-      this.bgm.play();
       this.bgm.volume = Volume;
+      this.bgm.play().catch(() => {
+        // Browser blocked autoplay — retry on first user interaction
+        const resume = () => {
+          if (this.bgm && this.bgm.paused && this.bgmName) {
+            this.bgm.play().catch(() => {});
+          }
+          document.removeEventListener('click', resume);
+          document.removeEventListener('keydown', resume);
+        };
+        document.addEventListener('click', resume, { once: false });
+        document.addEventListener('keydown', resume, { once: false });
+      });
     }
   },
 };

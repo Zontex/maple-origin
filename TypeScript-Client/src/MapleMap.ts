@@ -699,9 +699,6 @@ MapleMap.render = function (
   this.characters.filter(notInAnyLayer).forEach(draw);
   this.npcs.filter(notInAnyLayer).forEach(draw);
 
-  this.portals.forEach(draw);
-  this.backgrounds.filter((bg: Background) => !!bg.front).forEach(draw);
-
   // Draw character effects (level-up, quest clear, quest start, EXP gain)
   const drawEffect = (c: MapleCharacter, frames: any, frameIndex: number) => {
     const frame = frames?.[frameIndex];
@@ -739,6 +736,9 @@ MapleMap.render = function (
       drawEffect(this.PlayerCharacter, this.PlayerCharacter.incExpFrames, this.PlayerCharacter.incExpFrame);
     }
   }
+
+  this.portals.forEach(draw);
+  this.backgrounds.filter((bg: Background) => !!bg.front).forEach(draw);
 
   this.itemDrops.forEach((drop: DropItemSprite) => {
     drop.draw(canvas, camera);

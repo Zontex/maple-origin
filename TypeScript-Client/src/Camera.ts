@@ -117,6 +117,10 @@ Camera.update = function () {
 
   if (Math.abs(this.x - targetX) < 0.5) this.x = targetX;
   if (Math.abs(this.y - targetY) < 0.5) this.y = targetY;
+
+  // Round to integers to prevent sub-pixel rendering artifacts (flickering lines/seams)
+  this.x = Math.round(this.x);
+  this.y = Math.round(this.y);
 };
 
 Camera.doReset = function () {

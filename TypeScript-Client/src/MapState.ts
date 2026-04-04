@@ -278,6 +278,8 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
       if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {
         if (MapleMap.questDialog.handleClick(cx, cy)) return;
       }
+      // Block NPC/map clicks when any dialog is open
+      if (!MapleMap.npcDialog.isHidden || (MapleMap.questDialog && !MapleMap.questDialog.isHidden)) return;
       MapleMap.handleClick(event, canvasElement, Camera);
     });
     canvasElement.addEventListener("mousemove", (event) => {

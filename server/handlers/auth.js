@@ -37,6 +37,13 @@ function handleGetCharacters(playerId, data) {
   sendToPlayer(player.ws, { type: 'character_list', worldId: data.worldId, characters });
 }
 
+function handleCheckName(playerId, data) {
+  const player = players.get(playerId);
+  if (!player || !player.userId) return;
+  const result = Character.isNameTaken(data.worldId, data.name);
+  sendToPlayer(player.ws, { type: 'check_name_result', ...result });
+}
+
 function handleCreateCharacter(playerId, data) {
   const player = players.get(playerId);
   if (!player || !player.userId) return;
@@ -47,6 +54,7 @@ function handleCreateCharacter(playerId, data) {
     face: data.face,
     skin: data.skin,
     gender: data.gender,
+    equips: data.equips,
   });
   sendToPlayer(player.ws, { type: 'create_character_result', ...result });
   if (result.success) {
@@ -137,6 +145,7 @@ module.exports = {
   handleLogin,
   handleGetWorlds,
   handleGetCharacters,
+  handleCheckName,
   handleCreateCharacter,
   handleDeleteCharacter,
   handleSelectCharacter,

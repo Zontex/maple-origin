@@ -14,6 +14,17 @@ const DEFAULT_EQUIPS = [
 const DEFAULT_ITEMS = [];
 
 class Character {
+  static isNameTaken(worldId, name) {
+    const db = getDb();
+    if (!NAME_REGEX.test(name)) {
+      return { valid: false, error: 'Name must be 3-12 characters (letters and numbers only)' };
+    }
+    const existing = db.prepare(
+      'SELECT id FROM characters WHERE world_id = ? AND name = ?'
+    ).get(worldId, name);
+    return { valid: true, taken: !!existing };
+  }
+
   static create(userId, { worldId, name, hair, face, skin, gender, equips }) {
     if (typeof worldId !== 'number') {
       return { success: false, error: 'Invalid world' };
