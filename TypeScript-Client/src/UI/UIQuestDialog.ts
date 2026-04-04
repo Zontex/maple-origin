@@ -3,7 +3,7 @@ import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import { MapleStanceButton } from './MapleStanceButton';
 import ClickManager from './ClickManager';
-import QuestData, { QuestDialogue, ensureItemNames, resolveItemCodes } from '../Quest/QuestData';
+import QuestData, { QuestDialogue, ensureItemNames, ensureMapNames, resolveItemCodes } from '../Quest/QuestData';
 import type { ScriptDialogType } from '../Quest/QuestScriptEngine';
 import type { SelectionOption } from '../NpcScriptEngine';
 import config from '../Config';
@@ -153,6 +153,11 @@ export default class UIQuestDialog {
     }
   }
 
+  /** Return the ID of the randomly selected prop item (if any), for consistent quest completion */
+  getSelectedPropItemId(): number | undefined {
+    return this.selectedPropItem?.id;
+  }
+
   /** Get display items for reward section — guaranteed items + one randomly picked prop item */
   private getDisplayRewardItems(reward: { items?: { id: number; count: number; prop?: number }[] }): { id: number; count: number }[] {
     if (!reward?.items) return [];
@@ -217,8 +222,9 @@ export default class UIQuestDialog {
     }
     this.speakerImg = npcFile?.stand?.[0]?.nGetImage?.() || null;
 
-    // Ensure item names are loaded for #t format codes
+    // Ensure item/map names are loaded for #t and #m format codes
     await ensureItemNames();
+    await ensureMapNames();
 
     // Build pages from dialogue text
     this.buildPages();

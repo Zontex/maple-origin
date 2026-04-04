@@ -500,6 +500,9 @@ class MySocket {
         case "error":
           console.error("Server error:", data.message);
           break;
+        case "save_character_result":
+          // Acknowledged — nothing to do
+          break;
         default:
           console.warn("Unknown message type:", data.type);
       }

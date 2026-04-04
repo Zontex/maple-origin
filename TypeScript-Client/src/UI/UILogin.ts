@@ -1,5 +1,6 @@
 import WZManager from "../wz-utils/WZManager";
 import UICommon from "./UICommon";
+import PLAY_AUDIO from "../Audio/PlayAudio";
 import MapleInput from "./MapleInput";
 import Random from "../Random";
 import { MapleStanceButton } from "./MapleStanceButton";
@@ -169,6 +170,10 @@ UILogin.initialize = async function (canvas: GameCanvas) {
   this.charSelectScrollDelay = 0;
   this.charSelectScrollState = 'closed';
   this.uiLogin = await WZManager.get('UI.wz/Login.img');
+
+  // Load character select sound effect
+  const uiSounds: any = await WZManager.get('Sound.wz/UI.img');
+  this.charSelectAudio = uiSounds.CharSelect?.nGetAudio?.() || null;
 
   this.frameImg = this.uiLogin.nGet('Common').nGet('frame').nGetImage();
   this.selectedWorldImage = this.uiLogin.nGet('Common').selectWorld.nGetImage();
@@ -498,8 +503,108 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       channelBackButton.isHidden = false;
     },
   });
+
   ClickManager.addButton(loginButton);
   this.behindFrameButtons.push(loginButton);
+
+  // Login screen buttons — use screen coords (isRelativeToCamera + isPartOfUI)
+  this.loginScreenButtons = [];
+  this.loginFadeIn = { startTime: Date.now(), delay: 500, duration: 1000 };
+  const guestLoginButton = new MapleStanceButton(canvas, {
+    x: 587,
+    y: 260,
+    img: this.uiLogin.nGet('Title').nGet('BtGuestLogin').nChildren,
+    isRelativeToCamera: true,
+    isPartOfUI: true,
+    onClick: () => {
+      this.showNotice(NoticeType.NORMAL, NoticeMessage.TROUBLE_LOGGING_IN);
+    },
+  });
+
+  ClickManager.addButton(guestLoginButton);
+  this.loginScreenButtons.push(guestLoginButton);
+
+  const saveLoginIdButton = new MapleStanceButton(canvas, {
+    x: 383,
+    y: 295,
+    img: this.uiLogin.nGet('Title').nGet('BtLoginIDSave').nChildren,
+    isRelativeToCamera: true,
+    isPartOfUI: true,
+    onClick: () => {},
+  });
+
+  ClickManager.addButton(saveLoginIdButton);
+  this.loginScreenButtons.push(saveLoginIdButton);
+
+  const findLoginIdButton = new MapleStanceButton(canvas, {
+    x: 483,
+    y: 295,
+    img: this.uiLogin.nGet('Title').nGet('BtLoginIDLost').nChildren,
+    isRelativeToCamera: true,
+    isPartOfUI: true,
+    onClick: () => {
+      this.showNotice(NoticeType.NORMAL, NoticeMessage.TROUBLE_LOGGING_IN);
+    },
+  });
+
+  ClickManager.addButton(findLoginIdButton);
+  this.loginScreenButtons.push(findLoginIdButton);
+
+  const findPwButton = new MapleStanceButton(canvas, {
+    x: 588,
+    y: 295,
+    img: this.uiLogin.nGet('Title').nGet('BtPasswdLost').nChildren,
+    isRelativeToCamera: true,
+    isPartOfUI: true,
+    onClick: () => {
+      this.showNotice(NoticeType.NORMAL, NoticeMessage.TROUBLE_LOGGING_IN);
+    },
+  });
+
+  ClickManager.addButton(findPwButton);
+  this.loginScreenButtons.push(findPwButton);
+
+  const registerButton = new MapleStanceButton(canvas, {
+    x: 384,
+    y: 344,
+    img: this.uiLogin.nGet('Title').nGet('BtNew').nChildren,
+    isRelativeToCamera: true,
+    isPartOfUI: true,
+    onClick: () => {
+      this.showNotice(NoticeType.NORMAL, NoticeMessage.TROUBLE_LOGGING_IN);
+    },
+  });
+
+  ClickManager.addButton(registerButton);
+  this.loginScreenButtons.push(registerButton);
+
+  const homepageButton = new MapleStanceButton(canvas, {
+    x: 488,
+    y: 344,
+    img: this.uiLogin.nGet('Title').nGet('BtHomePage').nChildren,
+    isRelativeToCamera: true,
+    isPartOfUI: true,
+    onClick: () => {
+      this.showNotice(NoticeType.NORMAL, NoticeMessage.TROUBLE_LOGGING_IN);
+    },
+  });
+
+  ClickManager.addButton(homepageButton);
+  this.loginScreenButtons.push(homepageButton);
+
+  const quitButton = new MapleStanceButton(canvas, {
+    x: 586,
+    y: 344,
+    img: this.uiLogin.nGet('Title').nGet('BtQuit').nChildren,
+    isRelativeToCamera: true,
+    isPartOfUI: true,
+    onClick: () => {
+      window.close();
+    },
+  });
+
+  ClickManager.addButton(quitButton);
+  this.loginScreenButtons.push(quitButton);
 
   this.uiLoginNotice = await UILoginNotice.fromOpts({
     x: 220,
@@ -669,6 +774,7 @@ UILogin.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
     this.drawCreateCharacter(canvas, camera, lag, msPerTick, tdelta);
   }
 
+
   this.behindFrameButtons.forEach((obj) => {
     obj.draw(canvas, camera, lag, msPerTick, tdelta);
   });
@@ -750,7 +856,30 @@ UILogin.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
     y: 13,
   });
 
+  // Draw login screen buttons (screen-coord based)
+  if (LoginState.currentSubState === LoginSubState.LOGIN_SCREEN && this.loginScreenButtons) {
+    this.loginScreenButtons.forEach((btn: any) => {
+      btn.draw(canvas, camera, lag, msPerTick, tdelta);
+    });
+  }
+
   this.drawMask(canvas);
+
+  // Fade in from black on initial load
+  if (this.loginFadeIn) {
+    const elapsed = Date.now() - this.loginFadeIn.startTime - this.loginFadeIn.delay;
+    const alpha = elapsed < 0 ? 1 : 1 - Math.min(elapsed / this.loginFadeIn.duration, 1);
+    if (alpha > 0) {
+      const ctx = canvas.context;
+      ctx.save();
+      ctx.fillStyle = '#000000';
+      ctx.globalAlpha = alpha;
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.restore();
+    } else {
+      this.loginFadeIn = null;
+    }
+  }
 
   this.uiLoginNotice.draw(canvas, camera, lag, msPerTick, tdelta);
   this.uiLoginTOS.draw(canvas, camera, lag, msPerTick, tdelta);
@@ -988,6 +1117,7 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
             }
             this.selectedCharIndex = i;
             this.charSelected = true;
+            if (this.charSelectAudio) PLAY_AUDIO(this.charSelectAudio);
             this.charSelectEffectFrame = 0;
             this.charSelectEffectDelay = 0;
             this.charSelectScrollState = 'opening';

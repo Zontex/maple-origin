@@ -8,11 +8,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased] - 2026-04-04
 
 ### Added
+- **Portal script engine** (`PortalScriptEngine.ts`) — 458 portal scripts from backend now execute client-side via `new Function()`, with `pi` API (warp, quest checks, items, messages). Scripted portals (types 7, 8, 9, 11) now work instead of being silently ignored
 - **Character name availability check** — new `check_name` server endpoint validates name on the name entry screen before advancing to customization
 - **Quest log item progress** — item requirements now shown in green/red like mob progress (e.g., "Jr. Sentinel Shellpiece: 0/1")
+- **Character select sound effect** — plays `Sound.wz/UI.img/CharSelect` when clicking a character
+- **Map name format code (`#m`)** — resolved from `String.wz/Map.img` instead of showing literal "map" or raw ID
+- **Smart training center portal routing** — `entertraining.js` checks active quests and routes to the correct training center (Red Snails, Stumps, Slimes, Pigs) based on what the player needs
 
 ### Fixed
-- **BGM not playing on first load** — browser autoplay policy blocked initial `audio.play()`; now retries on first user interaction
+- **BGM not playing on first load** — browser autoplay policy blocked initial `audio.play()`; permanent global listener retries on any user interaction
 - **Create character OK button unreliable** — fast clicks missed because `canvas.clicked` is a held-state flag; added `wasClicked` flag that persists until the frame processes it
 - **Cursor freezes over text inputs** — `mousemove` only listened on canvas; overlaid `<input>` elements blocked events; changed to `window` listener
 - **Character equipment ignored during creation** — server handler didn't pass `equips` to `Character.create()`, defaulting all characters to starter gear
@@ -22,7 +26,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **NPC click-through dialogs** — clicking dialog buttons would re-trigger NPC behind them; added guard when dialogs are open
 - **Tutorial mobs dealing damage** — tutorial mobs (9300018, 9300328, 9300383, 9409000, 9409001) now always show "MISS" with no damage or knockback
 - **Quest log showing raw `ITEM:4031802`** — `\x01ITEM:id\x02` markers now replaced with item names via `getItemNameSync()`
+- **Quest dialog duplicate item progress** — removed appended item progress from quest dialog since quest text already includes it via format codes
 - **Enter channel without selection** — button now requires a channel to be selected first
+- **Scripted portals teleporting within same map** — portals with `tm=999999999` and no destination no longer teleport to spawn points
+- **Minimap showing non-functional portals** — invisible portals with no destination or script no longer show portal icons
+- **Quest item removal missing Cash tab** — `removeItems()` now searches all 5 inventory tabs including Cash
+- **Blocked portal script spamming** — added 1-second cooldown after portal script returns false
+- **`save_character_result` unknown message warning** — silenced by adding handler
+- **Random quest reward mismatch** — dialog and quest manager now use the same randomly picked prop item
 
 ---
 

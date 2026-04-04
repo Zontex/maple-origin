@@ -88,10 +88,11 @@ npm start                           # Serves client + server on :3001
 - Reactors: breakable objects, multi-state animations, item drops
 
 ### NPCs & Quests
-- 708 NPC scripts + 253 quest scripts running client-side via `new Function()`
+- 708 NPC scripts + 253 quest scripts + 458 portal scripts running client-side via `new Function()`
+- Portal script engine for scripted portals (quest-gated areas, training centers, dungeons)
 - 2,824 quests from Quest.wz with mob kill tracking and item requirements
-- Quest log UI with Available/In Progress/Complete tabs
-- NPC indicators, GMS-style quest listings, inline format codes
+- Quest log UI with Available/In Progress/Complete tabs, mob/item progress display
+- NPC indicators, GMS-style quest listings, inline format codes (`#m` map names, `#t` item names)
 - Job advancement NPCs with stat requirement checks
 
 ### Inventory & Equipment
@@ -154,9 +155,11 @@ Porting [Cosmic](https://github.com/P0nk/Cosmic) (Java v83 emulator) to TypeScri
 
 See [CHANGELOG.md](CHANGELOG.md) for recent fixes. Major remaining work:
 
-- **Quest system**: Fame reward bug (104 quests), `#L` selection codes (530 quests), item start requirements (488 quests)
+- **Cash Shop**: Not implemented — blocks Yoona's Shopping Quiz quest chain (8020-8025) which requires purchasing Beginner's Shopping Guide
+- **Quest reward selection**: Quests with "choose one" rewards (e.g., quiz chain final reward: Blue Potion x30 OR Stolen Fence) don't present a choice UI yet
+- **Quiz quests**: `#L` selection codes in Say.img dialogue (530 quests) need full parse+render as clickable options with per-selection responses
+- **Quest system**: Fame reward bug (104 quests), item start requirements (488 quests)
 - **Scripts**: 214 broken NPC scripts and 65 broken quest scripts (Java.type calls, missing API methods)
-- **Portal scripts**: 458 scripts exist but engine not built yet
 - **Missing features**: Skill system, party system, facial expressions, passive regen, world map
 
 ---

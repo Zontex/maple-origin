@@ -334,7 +334,8 @@ UIMiniMap._buildCache = function () {
     const mw = md.width;
     const mh = md.height;
     for (const portal of MapleMap.portals) {
-      if (portal.type === 0) continue;
+      if (portal.type === 0) continue; // spawn points
+      if (portal.toMap >= 999999999 && !portal.script) continue; // non-functional portals
       const px = mapDrawX + (portal.x + cx) * mapImgW / mw - (portalIcon.width || 4) / 2;
       const py = mapDrawY + (portal.y + cy) * mapImgH / mh - (portalIcon.height || 4) / 2;
       draw(portalIcon, px, py);

@@ -12,6 +12,7 @@ class Portal {
   y: number = 0;
   toMap: number = 0;
   toName: string = "";
+  script: string = "";
   image: string = "";
   frames: any = null;
   frame: number = 0;
@@ -41,6 +42,8 @@ class Portal {
     this.y = wzNode.y.nValue;
     this.toMap = wzNode.tm.nValue;
     this.toName = wzNode.tn.nValue;
+    this.script = wzNode.script?.nValue || "";
+    if (this.script) console.log(`[Portal] "${this.name}" has script: "${this.script}"`);
 
     this.image = wzNode.nGet("image").nGet("nValue", "default");
 
@@ -122,7 +125,7 @@ class Portal {
 
     // Invisible/non-drawn portals still need a collision rect
     // so checkForPortal() can detect the player standing in them
-    if (!this.frames && this.toMap !== 999999999) {
+    if (!this.frames && (this.toMap !== 999999999 || this.script)) {
       this.rect = {
         x: this.x - 20,
         y: this.y - 40,

@@ -5,7 +5,7 @@ import DragableMenu from './DragableMenu';
 import { CameraInterface } from '../../Camera';
 import { Position } from '../../Effects/DamageIndicator';
 import GameCanvas from '../../GameCanvas';
-import QuestData, { mobNames, resolveItemCodes, getItemNameSync } from '../../Quest/QuestData';
+import QuestData, { mobNames, resolveItemCodes, getItemNameSync, ensureMapNames } from '../../Quest/QuestData';
 import type MapleCharacter from '../../MapleCharacter';
 
 enum QuestTab {
@@ -125,6 +125,7 @@ class QuestLogMenuSprite extends DragableMenu {
   }
 
   async load() {
+    ensureMapNames();
     const opts = this.opts;
     this.id = opts.id;
     this.charecter = opts.charecter;

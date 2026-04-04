@@ -957,7 +957,7 @@ MapleMap.handleClick = async function (
                     npcId: npc.id,
                     npcName,
                     phase: 'complete',
-                    onCompleted: () => { questManager.completeQuest(questId); },
+                    onCompleted: () => { questManager.completeQuest(questId, dialog.getSelectedPropItemId()); },
                   });
                 } else if (questPhase === 'start') {
                   await dialog.show({

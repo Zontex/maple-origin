@@ -57,6 +57,40 @@ const itemDescs: Map<number, string> = new Map();
 // Lazy-loaded item names from String.wz
 let itemNamesLoaded = false;
 
+// Lazy-loaded map names from String.wz/Map.img
+const mapNames: Map<number, string> = new Map();
+let mapNamesLoaded = false;
+
+function extractMapNames(node: any) {
+  if (!node?.nChildren) return;
+  for (const child of node.nChildren) {
+    const id = parseInt(child.nName);
+    if (!isNaN(id)) {
+      const nameNode = child.nGet?.('mapName');
+      const streetNode = child.nGet?.('streetName');
+      if (nameNode?.nValue) {
+        const name = streetNode?.nValue ? `${streetNode.nValue}: ${nameNode.nValue}` : nameNode.nValue;
+        mapNames.set(id, name);
+      }
+    } else {
+      extractMapNames(child);
+    }
+  }
+}
+
+async function ensureMapNames() {
+  if (mapNamesLoaded) return;
+  mapNamesLoaded = true;
+  try {
+    const node: any = await WZManager.get('String.wz/Map.img');
+    extractMapNames(node);
+  } catch {}
+}
+
+function getMapNameSync(mapId: number): string {
+  return mapNames.get(mapId) || `Map ${mapId}`;
+}
+
 // Recursively extract item names and descriptions from a WZ node tree
 function extractItemNames(node: any) {
   if (!node?.nChildren) return;
@@ -104,7 +138,8 @@ export function resolveItemCodes(text: string, questManager?: any): string {
         return String(questManager.getItemCount(parseInt(id)));
       }
       return '0';
-    });
+    })
+    .replace(/#m(\d+)#?/g, (_, id) => getMapNameSync(parseInt(id)));
 }
 
 // Strip MapleStory text formatting codes
@@ -124,7 +159,7 @@ function stripFormatCodes(text: any, playerName: string = 'Player'): string {
     .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
     .replace(/#a\d+#/g, '')   // quest progress counter (dynamic, strip)
     .replace(/#t(\d+)#/g, '#t$1#')  // Keep item name codes — resolved at display time after item names load
-    .replace(/#m\d+#/g, 'map')
+    .replace(/#m(\d+)#/g, '#m$1#')  // Keep map name codes — resolved at display time after map names load
     .replace(/#i(\d+)#/g, '\x01ITEM:$1\x02')  // item icon placeholder — rendered at display time
     .replace(/#c(\d+)#/g, '#c$1#')  // Keep item count codes — resolved at display time
     .replace(/#L\d+#/g, '')
@@ -504,4 +539,4 @@ class QuestDataManager {
 
 const QuestData = new QuestDataManager();
 export default QuestData;
-export { mobNames, npcNames, itemNames, ensureItemNames, getItemNameSync, getItemDescSync };
+export { mobNames, npcNames, itemNames, ensureItemNames, ensureMapNames, getItemNameSync, getItemDescSync };

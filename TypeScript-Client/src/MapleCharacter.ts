@@ -78,6 +78,7 @@ class MapleCharacter {
   maxExp: number = 0;
   inventory: Inventory = new Inventory({});
   questManager: any = null;
+  _portalScriptEngine: any = null;
   pos: Physics;
   bodyRects: any = [];
   bodyStartPoistion: any = { x: 0, y: 0 };
@@ -970,6 +971,37 @@ isCloseToMob = (inAllDirections = true) => {
     this.isInPortal = true;
 
     try {
+      // Scripted portals — run portal script engine
+      if (portal.script && [7, 8, 9, 11].includes(portal.type)) {
+        console.log(`[Portal] Running script "${portal.script}" for portal "${portal.name}" (type ${portal.type})`);
+        const PortalScriptEngine = (await import('./PortalScriptEngine')).default;
+        if (!this._portalScriptEngine) this._portalScriptEngine = new PortalScriptEngine();
+        const allowed = await this._portalScriptEngine.execute(
+          portal.script,
+          this,
+          portal,
+          async (mapId: number, portalName?: string) => {
+            const MapStateInstance = (window as any).MapStateInstance;
+            if (MapStateInstance?.changeMap) {
+              await MapStateInstance.changeMap(mapId, portalName);
+            }
+          }
+        );
+        if (!allowed) {
+          setTimeout(() => { this.isInPortal = false; }, 1000);
+          return;
+        }
+        // Script handled warp — reset after delay
+        setTimeout(() => { this.isInPortal = false; }, 1000);
+        return;
+      }
+
+      // Skip portals with no valid destination (scripted portals without scripts loaded)
+      if (portal.toMap >= 999999999 && !portal.toName) {
+        this.isInPortal = false;
+        return;
+      }
+
       const jumpNode: any = await WZManager.get("Sound.wz/Game.img/Portal");
       const jumpAudio: any = jumpNode.nGetAudio();
       PLAY_AUDIO(jumpAudio);
@@ -981,11 +1013,11 @@ isCloseToMob = (inAllDirections = true) => {
       }
 
       // Find the destination portal by name
-      const othersidePortal = this.map!.portals.find(
+      const othersidePortal = portal.toName ? this.map!.portals.find(
         (newMapPortals: Portal) => {
           return newMapPortals.name === portal.toName;
         }
-      );
+      ) : null;
 
       // Reset physics and place character at destination
       this.pos = new Physics();

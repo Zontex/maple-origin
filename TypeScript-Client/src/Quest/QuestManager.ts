@@ -125,7 +125,7 @@ export default class QuestManager {
     return true;
   }
 
-  completeQuest(questId: number): boolean {
+  completeQuest(questId: number, pickedPropItemId?: number): boolean {
     if (!this.canCompleteQuest(questId)) {
       console.warn(`[Quest] Cannot complete quest ${questId} — requirements not met`);
       return false;
@@ -157,9 +157,10 @@ export default class QuestManager {
           console.log(`Quest reward: +${item.count}x item #${item.id}`);
         }
 
-        // Randomly pick one from prop items
+        // Pick one from prop items — use pre-selected item from dialog if available
         if (propItems.length > 0) {
-          const picked = propItems[Math.floor(Math.random() * propItems.length)];
+          const picked = (pickedPropItemId && propItems.find(i => i.id === pickedPropItemId))
+            || propItems[Math.floor(Math.random() * propItems.length)];
           this.character.inventory.addToInventory(picked.id, picked.count);
           console.log(`Quest reward (random): +${picked.count}x item #${picked.id} (from ${propItems.length} options)`);
         }
@@ -369,7 +370,7 @@ export default class QuestManager {
 
   removeItems(itemId: number, count: number): void {
     const inv = this.character.inventory;
-    const tabs = [inv.equip, inv.use, inv.setup, inv.etc];
+    const tabs = [inv.equip, inv.use, inv.setup, inv.etc, inv.cash];
     let remaining = count;
 
     for (const tab of tabs) {

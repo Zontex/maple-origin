@@ -30,20 +30,19 @@ const currentAudioManager: AudioManager = {
       this.bgm.loop = true;
       console.log(`Playing ${name}`);
       this.bgm.volume = Volume;
-      this.bgm.play().catch(() => {
-        // Browser blocked autoplay — retry on first user interaction
-        const resume = () => {
-          if (this.bgm && this.bgm.paused && this.bgmName) {
-            this.bgm.play().catch(() => {});
-          }
-          document.removeEventListener('click', resume);
-          document.removeEventListener('keydown', resume);
-        };
-        document.addEventListener('click', resume, { once: false });
-        document.addEventListener('keydown', resume, { once: false });
-      });
+      this.bgm.play().catch(() => {});
     }
   },
 };
+
+// Global listener: retry BGM on any user interaction if it should be playing but isn't
+function resumeBgm() {
+  const bgm = currentAudioManager.bgm;
+  if (bgm && bgm.paused && currentAudioManager.bgmName) {
+    bgm.play().catch(() => {});
+  }
+}
+document.addEventListener('click', resumeBgm);
+document.addEventListener('keydown', resumeBgm);
 
 export default currentAudioManager;
