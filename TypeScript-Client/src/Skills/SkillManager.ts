@@ -1,5 +1,6 @@
 import SkillData, { SkillInfo, SkillLevelEffect } from './SkillData';
 import type MapleCharacter from '../MapleCharacter';
+import { WEAPON_MASTERY_SKILLS, CRITICAL_SKILLS } from '../Constants/CombatSkills';
 
 export interface SkillEntry {
   level: number;
@@ -86,6 +87,39 @@ export default class SkillManager {
     const expiry = this.cooldowns.get(skillId);
     if (!expiry) return 0;
     return Math.max(0, expiry - Date.now());
+  }
+
+  /**
+   * Weapon mastery for the damage floor: max learned mastery/100 across the
+   * weapon's mastery skills, else the unskilled 10% floor.
+   */
+  getWeaponMastery(weaponType: number): number {
+    const candidates = WEAPON_MASTERY_SKILLS[weaponType];
+    let mastery = 0.1;
+    if (!candidates) return mastery;
+    for (const skillId of candidates) {
+      const effect = this.getSkillEffectSync(skillId);
+      if (effect && effect.mastery / 100 > mastery) {
+        mastery = effect.mastery / 100;
+      }
+    }
+    return mastery;
+  }
+
+  /**
+   * Critical hit parameters from passive crit skills (Critical Shot/Throw).
+   * Returns null when no crit skill applies to this weapon.
+   */
+  getCritical(weaponType: number): { chance: number; damagePct: number } | null {
+    const candidates = CRITICAL_SKILLS[weaponType];
+    if (!candidates) return null;
+    for (const skillId of candidates) {
+      const effect = this.getSkillEffectSync(skillId);
+      if (effect && effect.prop > 0) {
+        return { chance: effect.prop / 100, damagePct: (effect.damage || 100) / 100 };
+      }
+    }
+    return null;
   }
 
   // Get all passive skill stat bonuses (aggregated)

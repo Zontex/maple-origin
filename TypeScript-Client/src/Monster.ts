@@ -28,6 +28,7 @@ class Monster {
   lastDirectionChangeTime: number = 0;
   delayBetweenDirectionChange: number = 0;
   isBoss: boolean = false;
+  elemMultipliers: Record<string, number> = {};
   sounds: any = {};
   dying: boolean = false;
   isMovementEnabled: boolean = false;
@@ -117,6 +118,19 @@ class Monster {
     this.isBoss = false;
     if (mobFile.info.boss && mobFile.info.boss.nValue === 1) {
       this.isBoss = true;
+    }
+
+    // Elemental resistances from WZ elemAttr, e.g. "F2I1" = strong vs fire, immune to ice.
+    // Digit meaning (Cosmic): 1=immune (x0), 2=strong (x0.5), 3=weak (x1.5), 4=neutral
+    this.elemMultipliers = {};
+    const elemAttr = mobFile.info.elemAttr?.nValue;
+    if (elemAttr) {
+      const str = String(elemAttr).toUpperCase();
+      const digitToMult: Record<string, number> = { '1': 0, '2': 0.5, '3': 1.5, '4': 1 };
+      for (let i = 0; i + 1 < str.length; i += 2) {
+        const mult = digitToMult[str[i + 1]];
+        if (mult !== undefined) this.elemMultipliers[str[i]] = mult;
+      }
     }
 
     const mobSounds: any = await WZManager.get(`${WZFiles.Sound}/Mob.img`);
@@ -406,11 +420,25 @@ async addDrops() {
     return this.hp - damage <= 0;
   }
 
+  /**
+   * Elemental damage multiplier for a skill element char (F/I/L/S/H/D/P).
+   * 1 = neutral; 0 = immune (caller should floor damage to 1).
+   */
+  getElementalMultiplier(element: string | null): number {
+    if (!element) return 1;
+    const mult = this.elemMultipliers[element];
+    return mult === undefined ? 1 : mult;
+  }
+
   hit(
     damage: number,
     knockBackDirection: number,
-    responsibleMapleCharacter: any
+    responsibleMapleCharacter: any,
+    isCritical: boolean = false
   ) {
+    const indicatorType = isCritical
+      ? DamageIndicatorType.PlayerCritialHitMob
+      : DamageIndicatorType.PlayerHitMob;
     // Remote mob (non-host client): send damage request to host, show visual only
     if (this.isRemote) {
       // Send damage request to host via server
@@ -419,7 +447,7 @@ async addDrops() {
       } catch {}
       // Show damage indicator locally for immediate feedback
       this.DamageIndicator.addDamageIndicator(
-        DamageIndicatorType.PlayerHitMob,
+        indicatorType,
         { x: this.centerPosition.x - this.width / 2, y: this.centerPosition.y - this.height - 20 },
         damage
       );
@@ -462,7 +490,7 @@ async addDrops() {
     }
 
     this.DamageIndicator.addDamageIndicator(
-      DamageIndicatorType.PlayerHitMob,
+      indicatorType,
       {
         x: this.centerPosition.x - this.width / 2,
         y: this.centerPosition.y - this.height - 20,

@@ -206,9 +206,11 @@ class StatsMenuSprite extends DragableMenu {
     });
 
     // second menu
+    const weaponType = getEquipTypeById(this.charecter!.weaponEquipId);
     const attackRange = this.charecter!.stats.getAttackRange(
-      getEquipTypeById(this.charecter!.weaponEquipId),
-      AttackType.Swing
+      weaponType,
+      AttackType.Swing,
+      this.charecter!.skillManager?.getWeaponMastery?.(weaponType) ?? 0.1
     );
 
     canvas.drawText({
@@ -225,13 +227,13 @@ class StatsMenuSprite extends DragableMenu {
       y: this.y + 172,
     });
 
-    // magic attack
-    // canvas.drawText({
-    //   text: this.charecter!.stats.getWeaponDefense(this.charecter!.equips),
-    //   color: "#000000",
-    //   x: this.x + 242,
-    //   y: this.y + 190,
-    // });
+    // magic attack (total INT + equip/buff MATK)
+    canvas.drawText({
+      text: this.charecter!.stats.localMagic.toString(),
+      color: "#000000",
+      x: this.x + 242,
+      y: this.y + 190,
+    });
 
     canvas.drawText({
       text: this.charecter!.stats.getMagicDefense().toString(),

@@ -813,17 +813,25 @@ async executeAttackDamage() {
   // Determine attack type from current stance (stab vs swing affects damage multiplier)
   const attackType = this.getAttackTypeFromStance();
 
+  const mastery = this.skillManager?.getWeaponMastery?.(weaponType) ?? 0.1;
+  const crit = this.skillManager?.getCritical?.(weaponType) ?? null;
+
   for (const monster of monsters) {
     try {
       // Get raw damage range, then reduce by monster defense
-      const rawRange = this.stats.getAttackRange(weaponType, attackType);
+      const rawRange = this.stats.getAttackRange(weaponType, attackType, mastery);
       const monsterDef = monster.mobFile?.info?.PDDamage?.nValue ?? 0;
       const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
       const defRange = this.stats.getAttackDamageRangeAfterMonsterDefense(rawRange, monsterDef, monsterLevel);
       const isMiss = this.stats.getRandomIsMiss(monsterLevel, monster.eva ?? 0);
-      const damage = isMiss ? 0 : Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
+      let damage = isMiss ? 0 : Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
+      let isCritical = false;
+      if (damage > 0 && crit && Math.random() < crit.chance) {
+        damage = Math.floor(damage * crit.damagePct);
+        isCritical = true;
+      }
       const knockbackDirection = isCharacterFacingRight ? 1 : -1;
-      monster.hit(damage, knockbackDirection, this);
+      monster.hit(damage, knockbackDirection, this, isCritical);
       this.createHitEffect(monster.pos.x, monster.pos.y);
     } catch (error) {
       console.error('Error processing monster hit:', error);
@@ -906,7 +914,7 @@ async useSkill(skillId: number, effect: any) {
         false,
         () => { this.isInAttack = false; },
         () => {
-          this.fireSkillProjectile(effect);
+          this.fireSkillProjectile(effect, info.element);
         }
       );
     } else {
@@ -945,7 +953,7 @@ async useSkill(skillId: number, effect: any) {
 /**
  * Fire a skill projectile using ball sprites from Skill.wz.
  */
-fireSkillProjectile(effect: any) {
+fireSkillProjectile(effect: any, element: string | null = null) {
   const projectile = Projectile.fromSkill({
     charecter: this,
     x: this.pos.x,
@@ -954,6 +962,9 @@ fireSkillProjectile(effect: any) {
     ballNode: effect.ballNode,
     hitNode: effect.hitNode,
     fixedDamage: effect.fixdamage || 0,
+    magicAttack: (effect.mad || 0) > 0
+      ? { spellAttack: effect.mad, mastery: (effect.mastery || 10) / 100, element }
+      : null,
     targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying) || [],
     maxDistance: effect.range > 0 ? effect.range : 400,
   });
@@ -997,17 +1008,38 @@ async executeSkillDamage(skillId: number, effect: any) {
   if (monsters.length === 0) return;
 
   const attackType = this.getAttackTypeFromStance();
+  const skillInfo = (await import('./Skills/SkillData')).default.getSkillSync(skillId);
+  const isMagic = (effect.mad || 0) > 0;
+  const element = skillInfo?.element ?? null;
+  const mastery = this.skillManager?.getWeaponMastery?.(weaponType) ?? 0.1;
+  const crit = this.skillManager?.getCritical?.(weaponType) ?? null;
 
   for (const monster of monsters) {
     try {
+      const elemMult = monster.getElementalMultiplier?.(element) ?? 1;
       for (let hit = 0; hit < attackCount; hit++) {
         let damage: number;
+        let isCritical = false;
 
         if (fixDamage > 0) {
           // Fixed damage skills (e.g., Three Snails)
           damage = fixDamage;
+        } else if (isMagic) {
+          // Magic skills carry their spell attack in effect.mad; no damagePercent
+          const spellMastery = (effect.mastery || 10) / 100;
+          const rawRange = this.stats.getMagicAttackRange(effect.mad, spellMastery);
+          const monsterMdd = monster.mobFile?.info?.MDDamage?.nValue ?? 0;
+          const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
+          const defRange = this.stats.getMagicDamageAfterMonsterDefense(rawRange, monsterMdd, monsterLevel);
+          const isMiss = this.stats.getRandomIsMiss(monsterLevel, monster.eva ?? 0);
+          if (isMiss) {
+            damage = 0;
+          } else {
+            const baseDmg = Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
+            damage = Math.max(1, Math.floor(baseDmg * elemMult));
+          }
         } else {
-          const rawRange = this.stats.getAttackRange(weaponType, attackType);
+          const rawRange = this.stats.getAttackRange(weaponType, attackType, mastery);
           const monsterDef = monster.mobFile?.info?.PDDamage?.nValue ?? 0;
           const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
           const defRange = this.stats.getAttackDamageRangeAfterMonsterDefense(rawRange, monsterDef, monsterLevel);
@@ -1017,11 +1049,15 @@ async executeSkillDamage(skillId: number, effect: any) {
           } else {
             const baseDmg = Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
             damage = Math.floor(baseDmg * damagePercent);
+            if (crit && Math.random() < crit.chance) {
+              damage = Math.floor(damage * crit.damagePct);
+              isCritical = true;
+            }
           }
         }
 
         const knockbackDirection = isCharacterFacingRight ? 1 : -1;
-        monster.hit(damage, knockbackDirection, this);
+        monster.hit(damage, knockbackDirection, this, isCritical);
       }
       this.createHitEffect(monster.pos.x, monster.pos.y);
     } catch (e) {
@@ -1061,7 +1097,8 @@ async fireProjectile(weaponType: number) {
   }
 
   const attackType = this.getAttackTypeFromStance();
-  const weaponAttackRange = this.stats.getAttackRange(weaponType, attackType);
+  const rangedMastery = this.skillManager?.getWeaponMastery?.(weaponType) ?? 0.1;
+  const weaponAttackRange = this.stats.getAttackRange(weaponType, attackType, rangedMastery);
   const projectileItemId = DEFAULT_PROJECTILE_ID[weaponType] || 2060000;
 
   try {

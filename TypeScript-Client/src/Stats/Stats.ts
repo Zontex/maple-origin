@@ -354,6 +354,22 @@ class Stats {
     return chosenAttack;
   }
 
+  /**
+   * v83 magic damage: ((magic²/1000 + magic·mastery·0.9)/30 + INT/200) · spellAttack.
+   * Max uses mastery = 1.0 (Cosmic calcDmgMax); magic = localMagic (INT+MATK, capped 2000).
+   */
+  getMagicAttackRange(spellAttack: number, spellMastery: number) {
+    const magic = this.localMagic;
+    const intStat = this.localInt;
+    const max = Math.floor(
+      ((magic * magic) / 1000 + magic) / 30 + intStat / 200
+    ) * spellAttack;
+    const min = Math.floor(
+      ((magic * magic) / 1000 + magic * spellMastery * 0.9) / 30 + intStat / 200
+    ) * spellAttack;
+    return new DamageRange(Math.max(1, Math.floor(min)), Math.max(1, Math.floor(max)));
+  }
+
   static getRandomAttackDamageFromAttackRange(damageRange: DamageRange) {
     const minDamage = damageRange.min;
     const maxDamage = damageRange.max;

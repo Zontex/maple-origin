@@ -48,6 +48,7 @@ export interface SkillInfo {
   effects: SkillLevelEffect[];
   helpStrings: Map<string, string>;
   action: string | null; // Body stance to play (e.g., 'alert2', 'alert4') from WZ action node
+  element: string | null; // WZ elemAttr char: F/I/L/S/H/D/P (fire/ice/lightning/poison/holy/dark/physical)
 }
 
 const LEVEL_EFFECT_FIELDS: (keyof SkillLevelEffect)[] = [
@@ -148,6 +149,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   let hasEffect = false;
   let invisible = false;
   let actionStance: string | null = null;
+  let element: string | null = null;
 
   let icon: HTMLImageElement | null = null;
   let iconMouseOver: HTMLImageElement | null = null;
@@ -180,6 +182,8 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
       invisible = true;
     } else if (name === 'disable') {
       invisible = true;
+    } else if (name === 'elemAttr') {
+      if (child.nValue) element = String(child.nValue).toUpperCase();
     } else if (name === 'level') {
       // Parse each level
       const levelChildren = (child.nChildren || []).slice();
@@ -230,6 +234,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     effects,
     helpStrings: skillHelp.get(skillId) || new Map(),
     action: actionStance,
+    element,
   };
 }
 

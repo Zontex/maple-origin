@@ -6,6 +6,7 @@ import {
   isPositionInsideRect,
 } from "../Physics/Collision";
 import Stats, { DamageRange } from "../Stats/Stats";
+import getEquipTypeById from "../Constants/EquipType";
 import MapleCharacter from "../MapleCharacter";
 import { Position } from "../Effects/DamageIndicator";
 import Monster from "../Monster";
@@ -44,7 +45,9 @@ class Projectile {
   dying: boolean = false;
   // Skill projectile fields
   fixedDamage: number = 0;
+  magicAttack: { spellAttack: number; mastery: number; element: string | null } | null = null;
   hitNode: any = null;
+  isCritical: boolean = false;
   // Hit effect animation (plays at impact point after hitting target)
   hitEffectFrames: any[] | null = null;
   hitEffectFrame: number = 0;
@@ -69,6 +72,7 @@ class Projectile {
     ballNode: any;
     hitNode?: any;
     fixedDamage: number;
+    magicAttack?: { spellAttack: number; mastery: number; element: string | null } | null;
     targetMonsters: Monster[];
     maxDistance?: number;
   }): Projectile {
@@ -89,6 +93,7 @@ class Projectile {
     p.willHitkill = false;
     p.lastPositionCenter = { x: opts.x, y: opts.y };
     p.fixedDamage = opts.fixedDamage;
+    p.magicAttack = opts.magicAttack || null;
     p.hitNode = opts.hitNode || null;
 
     // Use the skill's ball WZ node directly as the sprite source
@@ -169,12 +174,32 @@ class Projectile {
       closestMonster.centerPosition.y
     );
 
-    this.finalDamangeAfterTargetDefense = this.fixedDamage;
+    if (this.magicAttack) {
+      // Magic ball skill (Energy Bolt, Magic Claw): v83 magic formula per target
+      const stats = this.charecter!.stats;
+      const rawRange = stats.getMagicAttackRange(
+        this.magicAttack.spellAttack,
+        this.magicAttack.mastery
+      );
+      const monsterMdd = this.target!.mobFile?.info?.MDDamage?.nValue ?? 0;
+      const monsterLevel = this.target!.mobFile?.info?.level?.nValue ?? 1;
+      const defRange = stats.getMagicDamageAfterMonsterDefense(rawRange, monsterMdd, monsterLevel);
+      const isMiss = stats.getRandomIsMiss(monsterLevel, this.target!.eva ?? 0);
+      if (isMiss) {
+        this.finalDamangeAfterTargetDefense = 0;
+      } else {
+        const elemMult = this.target!.getElementalMultiplier?.(this.magicAttack.element) ?? 1;
+        const baseDmg = Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
+        this.finalDamangeAfterTargetDefense = Math.max(1, Math.floor(baseDmg * elemMult));
+      }
+    } else {
+      this.finalDamangeAfterTargetDefense = this.fixedDamage;
+    }
 
-    this.willHitkill = this.target!.willHitkill(this.fixedDamage);
+    this.willHitkill = this.target!.willHitkill(this.finalDamangeAfterTargetDefense);
     if (this.willHitkill) {
       this.target!.hit(
-        this.fixedDamage,
+        this.finalDamangeAfterTargetDefense,
         this.pos!.x < this.target!.centerPosition.x ? 1 : -1,
         this.charecter
       );
@@ -225,6 +250,18 @@ class Projectile {
         ? 0
         : Stats.getRandomAttackDamageFromAttackRange(attackRange);
 
+      // Critical Shot / Critical Throw roll for ranged weapons
+      if (this.finalDamangeAfterTargetDefense > 0) {
+        const weaponType = getEquipTypeById((this.charecter as any).weaponEquipId);
+        const crit = (this.charecter as any).skillManager?.getCritical?.(weaponType) ?? null;
+        if (crit && Math.random() < crit.chance) {
+          this.finalDamangeAfterTargetDefense = Math.floor(
+            this.finalDamangeAfterTargetDefense * crit.damagePct
+          );
+          this.isCritical = true;
+        }
+      }
+
       // This follows the real maple, where if a projectile will kill a mob, it will hit it instantly
       this.willHitkill = this.target!.willHitkill(
         this.finalDamangeAfterTargetDefense
@@ -234,13 +271,12 @@ class Projectile {
         this.target!.hit(
           this.finalDamangeAfterTargetDefense,
           this.pos!.x < this.target!.centerPosition.x ? 1 : -1,
-          this.charecter
+          this.charecter,
+          this.isCritical
         );
       } else {
         // will happen when projectile hits the mob
       }
-    } else {
-      console.log("no target found");
     }
   }
 
@@ -306,7 +342,8 @@ class Projectile {
         this.target.hit(
           this.finalDamangeAfterTargetDefense,
           this.pos!.x < this.target.centerPosition.x ? 1 : -1,
-          this.charecter
+          this.charecter,
+          this.isCritical
         );
       }
       // Start skill hit effect animation if available
