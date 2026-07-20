@@ -40,20 +40,20 @@ export function makeSafeScriptApi(target: any, label: string) {
   });
 }
 
-// Parse #L<index>#<text>#l selection options from script text
+// Parse #L<index>#<text>#l selection options from script text.
+// The closing #l is optional in sloppy source texts — a selection also ends
+// at the next #L, a line break (literal \r\n or real), or end of text.
+const SELECTION_RE = /#L(\d+)#((?:(?!#l|#L\d+#|\\r|\\n|\r|\n)[\s\S])*)(?:#l)?/g;
+
 function parseSelections(text: string, mapNameResolver?: (id: number) => string): { body: string; selections: SelectionOption[] } {
   const selections: SelectionOption[] = [];
-  // Match #L<index>#<content>#l patterns
-  const selectionRegex = /#L(\d+)#((?:(?!#l).)*?)#l/g;
-  let match;
-  while ((match = selectionRegex.exec(text)) !== null) {
-    let label = match[2];
-    // Resolve format codes within selection labels
-    label = stripFormatCodes(label, mapNameResolver);
-    selections.push({ index: parseInt(match[1]), label });
-  }
-  // Remove selection markup from body text
-  const body = text.replace(/#L\d+#(?:(?!#l).)*?#l/g, '');
+  const body = text.replace(SELECTION_RE, (_, idx, label) => {
+    selections.push({
+      index: parseInt(idx),
+      label: stripFormatCodes(label, mapNameResolver).trim(),
+    });
+    return '';
+  });
   return { body, selections };
 }
 

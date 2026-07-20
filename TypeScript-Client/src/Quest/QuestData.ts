@@ -186,17 +186,21 @@ function stripSelectionCodes(text: string): string {
   return text.replace(/#L\d+#/g, '').replace(/#l/g, '');
 }
 
-// Parse #L<i>#label#l selection markup out of a Say message
+// Parse #L<i>#label#l selection markup out of a Say message.
+// Sloppy WZ text often omits the closing #l (e.g. quest 1036), so a selection
+// also ends at the next #L, a line break (literal \r\n or real), or end of text.
+const SAY_SELECTION_RE = /#L(\d+)#((?:(?!#l|#L\d+#|\\r|\\n|\r|\n)[\s\S])*)(?:#l)?/g;
+
 function parseSayMessage(raw: string): { text: string; selections: QuestSelectionOption[] } {
   const selections: QuestSelectionOption[] = [];
-  const remaining = raw.replace(/#L(\d+)#([\s\S]*?)#l/g, (_, idx, label) => {
+  const remaining = raw.replace(SAY_SELECTION_RE, (_, idx, label) => {
     selections.push({
       index: parseInt(idx),
       label: stripFormatCodes(label).trim(),
     });
     return '';
   });
-  // Any unclosed #L markup left over is stripped so it never renders raw
+  // Any stray selection markup left over is stripped so it never renders raw
   return { text: stripSelectionCodes(stripFormatCodes(remaining)), selections };
 }
 
