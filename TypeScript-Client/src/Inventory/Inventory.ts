@@ -52,14 +52,20 @@ class Inventory {
           break;
       }
 
-      const itemIndex = chosenType.findIndex((item) => item.itemId === itemId);
+      const itemIndex = chosenType.findIndex((item) => item?.itemId === itemId);
       if (itemIndex === -1) {
-        chosenType.push(
-          await Item.fromOpts({
-            itemId,
-            quantity,
-          })
-        );
+        const newItem = await Item.fromOpts({
+          itemId,
+          quantity,
+        });
+        // Fill the first empty slot so slot positions stay stable
+        let freeSlot = chosenType.findIndex((item) => !item);
+        if (freeSlot === -1) freeSlot = chosenType.length;
+        if (freeSlot >= maxInventorySize) {
+          console.warn("Inventory tab full, cannot add item", itemId);
+          return;
+        }
+        chosenType[freeSlot] = newItem;
       } else {
         chosenType[itemIndex].quantity += quantity;
       }
@@ -71,9 +77,10 @@ class Inventory {
     const tabs = [this.equip, this.use, this.setup, this.etc, this.cash];
     for (const tab of tabs) {
       for (let i = 0; i < tab.length; i++) {
-        if (tab[i].itemId === itemId) {
+        if (tab[i]?.itemId === itemId) {
           if (tab[i].quantity <= quantity) {
-            tab.splice(i, 1);
+            // Null the slot (not splice) so later items keep their positions
+            tab[i] = null as any;
           } else {
             tab[i].quantity -= quantity;
           }

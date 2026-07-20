@@ -99,7 +99,7 @@ class Physics {
       if (
         this.down &&
         !fh.cantThrough &&
-        !fh.forbit &&
+        !fh.forbid &&
         Object.values(getMapleMap().footholds || {}).some((f: any) => {
           return f.id != fh.id && f.x1 < x && f.x2 > x && f.y1 > y && f.y2 > y;
         })

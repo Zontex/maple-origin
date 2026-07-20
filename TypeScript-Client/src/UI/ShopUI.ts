@@ -344,20 +344,19 @@ const ShopUI: any = {
     }
 
     // Scroll — determine which panel mouse is over
-    const scrollDelta = (canvas as any).scrollDelta || 0;
-    if (scrollDelta !== 0) {
+    const scrollDir = (canvas as any).scrolledDown ? 1 : (canvas as any).scrolledUp ? -1 : 0;
+    if (scrollDir !== 0) {
       const mx = (canvas as any).mouseX || 0;
       const midX = this.x + 232;
       if (mx < midX) {
         // Left panel scroll
         const max = Math.max(0, this.shopItems.length - VISIBLE_ROWS);
-        this.buyScrollOffset = Math.max(0, Math.min(max, this.buyScrollOffset + (scrollDelta > 0 ? 1 : -1)));
+        this.buyScrollOffset = Math.max(0, Math.min(max, this.buyScrollOffset + scrollDir));
       } else {
         // Right panel scroll
         const max = Math.max(0, this.playerItems.length - VISIBLE_ROWS);
-        this.sellScrollOffset = Math.max(0, Math.min(max, this.sellScrollOffset + (scrollDelta > 0 ? 1 : -1)));
+        this.sellScrollOffset = Math.max(0, Math.min(max, this.sellScrollOffset + scrollDir));
       }
-      (canvas as any).scrollDelta = 0;
     }
   },
 

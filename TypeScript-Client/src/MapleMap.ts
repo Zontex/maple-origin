@@ -221,11 +221,14 @@ MapleMap.getHorizontalFootHolds = function () {
 };
 
 MapleMap.getLocationAboveRandomFoothold = function () {
-  const randomFootholdId = Object.keys(this.getHorizontalFootHolds())[
-    Math.floor(Math.random() * Object.keys(this.footholds).length)
-  ];
+  const horizontalFootholds = this.getHorizontalFootHolds();
+  const fh =
+    horizontalFootholds[Math.floor(Math.random() * horizontalFootholds.length)];
+  if (!fh) {
+    return this.getCenterFootholdLocation();
+  }
 
-  return this.getLocationAboveFoothold(randomFootholdId);
+  return this.getLocationAboveFoothold(fh.id);
 };
 
 MapleMap.getCenterFootholdLocation = function () {

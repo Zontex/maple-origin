@@ -225,13 +225,16 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
     if (MyCharacter.inventory && charData.inventory) {
       const Item = (await import('./Inventory/Item')).default;
       for (const tab of ['equip', 'use', 'setup', 'etc', 'cash'] as const) {
-        const items = (charData.inventory[tab] || []).filter((i: any) => i?.itemId);
+        const items = charData.inventory[tab] || [];
+        // Place items at their saved slot index; keep holes as null
         const loaded = await Promise.all(
           items.map((item: any) =>
-            Item.fromOpts({ itemId: item.itemId, quantity: item.quantity }).catch(() => null)
+            item?.itemId
+              ? Item.fromOpts({ itemId: item.itemId, quantity: item.quantity }).catch(() => null)
+              : Promise.resolve(null)
           )
         );
-        (MyCharacter.inventory as any)[tab] = loaded.filter(Boolean);
+        (MyCharacter.inventory as any)[tab] = loaded;
       }
       MyCharacter.inventory.mesos = charData.mesos ?? 0;
     }

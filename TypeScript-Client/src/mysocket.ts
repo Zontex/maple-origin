@@ -205,10 +205,11 @@ class MySocket {
     if (!this.isConnected) return;
 
     const inv = MyCharacter.inventory;
+    // Keep null holes so slot positions survive save/load (server inserts by index)
     const serializeTab = (items: any[]) =>
       (items || []).map((item: any) =>
         item ? { itemId: item.itemId, quantity: item.quantity ?? 1 } : null
-      ).filter(Boolean);
+      );
 
     const equipped: { slot: number; itemId: number }[] = [];
     if (MyCharacter.equippedItemIds) {

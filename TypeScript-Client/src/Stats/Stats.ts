@@ -329,7 +329,7 @@ class Stats {
       damageRange.max - monsterMagicDef * 0.5 * (1 + 0.01 * levelDifference)
     );
     const minDamage = Math.floor(
-      damageRange.max - monsterMagicDef * 0.6 * (1 + 0.01 * levelDifference)
+      damageRange.min - monsterMagicDef * 0.6 * (1 + 0.01 * levelDifference)
     );
 
     // console.log("maxDamage (with defense): " + maxDamage);

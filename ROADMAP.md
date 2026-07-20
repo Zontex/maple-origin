@@ -87,7 +87,7 @@ Severity: **broken** (doesn't work) / **missing** (absent) / **inaccurate** (wor
 - [ ] Shop: no quantity/confirm dialogs
 
 **Login flow:**
-- [ ] Remove post-Big-Bang race select (Explorer/Cygnus/Aran) — not v83 (`UILogin.ts:1461-1529`)
+- [ ] Implement Cygnus Knights / Aran creation flows — both predate Big Bang and exist in GMS v83, so the race-select screen is authentic; currently they error out (`UILogin.ts:1461-1529`)
 - [ ] v83 dice-roll stat assignment at creation — computed but never shown/sent; button commented out (`UILogin.ts:643-657`)
 - [ ] Character delete has no confirmation step (`UILogin.ts:393-408`)
 - [ ] World list hardcoded client-side; server `world_list` endpoint exists but is never called (`UILogin.ts:180-193`)

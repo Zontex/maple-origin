@@ -218,7 +218,7 @@ class InventoryMenuSprite extends DragableMenu {
     let actualItem = inventoryArray[slotIndex];
     if (!actualItem || actualItem.itemId !== item.itemId) {
       // If we can't find the exact item, try to find by itemId
-      actualItem = inventoryArray.find(i => i.itemId === item.itemId);
+      actualItem = inventoryArray.find(i => i?.itemId === item.itemId);
       
       if (!actualItem) {
         console.warn("Item not found in inventory");
@@ -230,10 +230,10 @@ class InventoryMenuSprite extends DragableMenu {
       // Handle quantity for stackable items
       const originalQuantity = actualItem.quantity || 1;
       if (quantity >= originalQuantity) {
-        // Remove the entire item if dropping all
+        // Remove the entire item if dropping all (null the slot to keep positions)
         const itemIndex = inventoryArray.indexOf(actualItem);
         if (itemIndex !== -1) {
-          inventoryArray.splice(itemIndex, 1);
+          inventoryArray[itemIndex] = null;
         }
       } else {
         // Reduce the quantity
@@ -305,6 +305,7 @@ class InventoryMenuSprite extends DragableMenu {
   mergeStackableItems(items: any[]) {
     const mergedMap = new Map();
     for (const item of items) {
+      if (!item) continue;
       const qty = item.quantity || 1;
       const key = item.itemId;
       if (this.currentTab === MapleInventoryType.EQUIP) {
@@ -902,23 +903,26 @@ class InventoryMenuSprite extends DragableMenu {
       return;
     }
 
+    // Remove from inventory first so the swapped-out item can take this slot
+    const equipArr = this.charecter.inventory.equip;
+    const idx = equipArr.indexOf(item);
+    if (idx !== -1) {
+      equipArr[idx] = null;
+    }
+
     // If slot is already occupied, unequip current item first (swap)
     const currentItemId = this.charecter.equippedItemIds[slot];
     if (currentItemId) {
       this.charecter.detachEquip(slot);
       try {
         const oldItem = await Item.fromOpts({ itemId: currentItemId, quantity: 1 });
-        this.charecter.inventory.equip.push(oldItem);
+        // Reuse the vacated slot; fall back to first free slot
+        let freeSlot = idx !== -1 ? idx : equipArr.findIndex((it: any) => !it);
+        if (freeSlot === -1) freeSlot = equipArr.length;
+        equipArr[freeSlot] = oldItem;
       } catch (e) {
         console.error('[Inventory] Failed to create unequipped item:', e);
       }
-    }
-
-    // Remove from inventory
-    const equipArr = this.charecter.inventory.equip;
-    const idx = equipArr.indexOf(item);
-    if (idx !== -1) {
-      equipArr.splice(idx, 1);
     }
 
     // Equip on character (loads visuals + tracks ID + loads icon)
@@ -994,7 +998,7 @@ class InventoryMenuSprite extends DragableMenu {
     if (actualItem) {
       if ((actualItem.quantity || 1) <= 1) {
         const idx = inventoryArray.indexOf(actualItem);
-        if (idx !== -1) inventoryArray.splice(idx, 1);
+        if (idx !== -1) inventoryArray[idx] = null;
       } else {
         actualItem.quantity--;
       }

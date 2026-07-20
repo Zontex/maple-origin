@@ -380,8 +380,8 @@ export default class QuestManager {
           const qty = tab[i].quantity || 1;
           if (qty <= remaining) {
             remaining -= qty;
-            tab.splice(i, 1);
-            i--;
+            // Null the slot (not splice) so later items keep their positions
+            tab[i] = null as any;
           } else {
             tab[i].quantity -= remaining;
             remaining = 0;

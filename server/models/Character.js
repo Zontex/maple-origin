@@ -231,28 +231,39 @@ class Character {
       'INSERT INTO keymap (character_id, key_code, bind_type, action_id) VALUES (?, ?, ?, ?)'
     );
 
+    // Partial saves (e.g. disconnect fallback from positional data) must not
+    // reset fields they don't carry — fall back to the stored row, not defaults
+    const current = db.prepare('SELECT * FROM characters WHERE id = ?').get(characterId);
+    if (!current) {
+      return { success: false, error: 'Character not found' };
+    }
+
     const saveTransaction = db.transaction(() => {
       // Update character stats
       updateChar.run(
-        data.level ?? 1, data.exp ?? 0,
-        data.str ?? 4, data.dex ?? 4, data.int ?? 4, data.luk ?? 4, data.ap ?? 0, data.sp ?? 0,
-        data.hp ?? 50, data.maxHp ?? 50, data.mp ?? 5, data.maxMp ?? 5,
-        data.jobId ?? 0, data.mapId ?? 10000, data.posX ?? 0, data.posY ?? 0,
-        data.mesos ?? 0, data.fame ?? 0,
+        data.level ?? current.level, data.exp ?? current.exp,
+        data.str ?? current.str, data.dex ?? current.dex, data.int ?? current.int,
+        data.luk ?? current.luk, data.ap ?? current.ap, data.sp ?? current.sp,
+        data.hp ?? current.hp, data.maxHp ?? current.max_hp,
+        data.mp ?? current.mp, data.maxMp ?? current.max_mp,
+        data.jobId ?? current.job_id, data.mapId ?? current.map_id,
+        data.posX ?? current.pos_x, data.posY ?? current.pos_y,
+        data.mesos ?? current.mesos, data.fame ?? current.fame,
         characterId
       );
 
-      // Replace equipped items
-      deleteEquipped.run(characterId);
+      // Replace equipped items — only when the payload carries them, so a
+      // partial save doesn't delete rows it has no data to re-insert
       if (data.equipped) {
+        deleteEquipped.run(characterId);
         for (const eq of data.equipped) {
           insertEquipped.run(characterId, eq.slot, eq.itemId || eq.item_id);
         }
       }
 
       // Replace inventory
-      deleteInventory.run(characterId);
       if (data.inventory) {
+        deleteInventory.run(characterId);
         for (const [tab, items] of Object.entries(data.inventory)) {
           for (let slot = 0; slot < items.length; slot++) {
             const item = items[slot];
@@ -264,16 +275,16 @@ class Character {
       }
 
       // Replace quests
-      deleteQuests.run(characterId);
       if (data.quests) {
+        deleteQuests.run(characterId);
         for (const q of data.quests) {
           insertQuest.run(characterId, q.questId, q.state, q.mobProgress || '{}');
         }
       }
 
       // Replace skills
-      deleteSkills.run(characterId);
       if (data.skills) {
+        deleteSkills.run(characterId);
         for (const s of data.skills) {
           if (s.skillLevel > 0) {
             insertSkill.run(characterId, s.skillId, s.skillLevel, s.masterLevel || 0);
@@ -282,8 +293,8 @@ class Character {
       }
 
       // Replace keymap
-      deleteKeymap.run(characterId);
       if (data.keymap) {
+        deleteKeymap.run(characterId);
         for (const k of data.keymap) {
           insertKeymap.run(characterId, k.keyCode, k.bindType || 1, k.actionId);
         }

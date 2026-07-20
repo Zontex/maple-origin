@@ -313,15 +313,17 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         const Item = (await import('../Inventory/Item')).default;
         for (const tab of ['equip', 'use', 'setup', 'etc', 'cash'] as const) {
           const items = charData.inventory[tab] || [];
-          (MyChar.inventory as any)[tab] = [];
-          for (const item of items) {
+          // Place items at their saved slot index; keep holes as null
+          const restored: any[] = new Array(items.length).fill(null);
+          for (let slot = 0; slot < items.length; slot++) {
+            const item = items[slot];
             if (item && item.itemId) {
               try {
-                const itemObj = await Item.fromOpts({ itemId: item.itemId, quantity: item.quantity });
-                (MyChar.inventory as any)[tab].push(itemObj);
+                restored[slot] = await Item.fromOpts({ itemId: item.itemId, quantity: item.quantity });
               } catch { /* skip failed items */ }
             }
           }
+          (MyChar.inventory as any)[tab] = restored;
         }
         MyChar.inventory.mesos = charData.mesos ?? 0;
       }

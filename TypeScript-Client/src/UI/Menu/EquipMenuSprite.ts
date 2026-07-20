@@ -192,10 +192,13 @@ class EquipMenuSprite extends DragableMenu {
     // Remove from character visuals
     this.charecter.detachEquip(slot);
 
-    // Add to inventory equip array
+    // Add to inventory equip array at the first free slot (keep positions stable)
     try {
       const item = await Item.fromOpts({ itemId, quantity: 1 });
-      this.charecter.inventory.equip.push(item);
+      const equipArr = this.charecter.inventory.equip;
+      let freeSlot = equipArr.findIndex((it: any) => !it);
+      if (freeSlot === -1) freeSlot = equipArr.length;
+      equipArr[freeSlot] = item;
       console.log(`[EquipMenu] Unequipped item ${itemId} from slot ${slot}`);
     } catch (e) {
       console.error('[EquipMenu] Failed to create inventory item:', e);
