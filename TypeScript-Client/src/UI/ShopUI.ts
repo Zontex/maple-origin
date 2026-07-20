@@ -3,9 +3,11 @@ import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import ClickManager from './ClickManager';
 import { MapleStanceButton } from './MapleStanceButton';
-import { getShopInfo, getItemSellPrice, ShopItem } from '../Shop/ShopData';
+import { getShopInfo, getItemSellPrice, getItemUnitPrice, getItemSlotMax, ShopItem } from '../Shop/ShopData';
 import { ensureItemNames, getItemNameSync } from '../Quest/QuestData';
 import Item from '../Inventory/Item';
+import ItemConstants from '../Constants/Inventory/ItemConstants';
+import UIMesoDropDialog from './UIMesoDropDialog';
 import Config from '../Config';
 
 interface LoadedShopItem {
@@ -230,7 +232,7 @@ const ShopUI: any = {
     this.buttons = [];
   },
 
-  onBuy() {
+  async onBuy() {
     if (this.buySelectedIndex < 0) return;
     const item = this.shopItems[this.buySelectedIndex];
     if (!item) return;
@@ -243,13 +245,40 @@ const ShopUI: any = {
       return;
     }
 
-    character.inventory.mesos -= item.price;
-    character.inventory.addToInventory(item.itemId, 1);
-    // Refresh sell panel to show newly purchased items
-    this.populateSellItems();
+    // Rechargeables (stars/bullets): the listed price buys a full stack
+    if (ItemConstants.isRechargeable(item.itemId)) {
+      const slotMax = await getItemSlotMax(item.itemId);
+      character.inventory.gainMesos(-item.price);
+      await character.inventory.addToInventory(item.itemId, slotMax);
+      this.populateSellItems();
+      return;
+    }
+
+    // Equips buy one at a time; stackables get a quantity dialog
+    const isEquip = Math.floor(item.itemId / 1000000) === 1;
+    const slotMax = isEquip ? 1 : await getItemSlotMax(item.itemId);
+    const maxAffordable = Math.floor(character.inventory.mesos / item.price);
+    const maxQty = Math.min(slotMax, maxAffordable);
+
+    if (isEquip || maxQty <= 1) {
+      character.inventory.gainMesos(-item.price);
+      await character.inventory.addToInventory(item.itemId, 1);
+      this.populateSellItems();
+      return;
+    }
+
+    this.getQuantityDialog().show(maxQty, async (amount: number) => {
+      if (amount <= 0) return;
+      const cost = item.price * amount;
+      if (character.inventory.mesos < cost) return;
+      character.inventory.gainMesos(-cost);
+      const ok = await character.inventory.addToInventory(item.itemId, amount);
+      if (ok === false) character.inventory.gainMesos(cost); // refund on full inventory
+      this.populateSellItems();
+    }, 'item', item.name);
   },
 
-  onSell() {
+  async onSell() {
     if (this.sellSelectedIndex < 0) return;
     const item = this.playerItems[this.sellSelectedIndex];
     if (!item) return;
@@ -257,12 +286,72 @@ const ShopUI: any = {
     const character = (window as any).charecter;
     if (!character?.inventory) return;
 
-    character.inventory.mesos += item.sellPrice;
+    // Rechargeables always sell the whole stack: price + ceil(qty * unitPrice)
+    if (ItemConstants.isRechargeable(item.itemId)) {
+      const unitPrice = await getItemUnitPrice(item.itemId);
+      const total = item.sellPrice + Math.ceil(item.quantity * unitPrice);
+      character.inventory.gainMesos(total);
+      character.inventory.removeFromInventory(item.itemId, item.quantity);
+      this.afterSell();
+      return;
+    }
+
+    if (item.quantity > 1) {
+      this.getQuantityDialog().show(item.quantity, (amount: number) => {
+        if (amount <= 0) return;
+        character.inventory.gainMesos(item.sellPrice * amount);
+        character.inventory.removeFromInventory(item.itemId, amount);
+        this.afterSell();
+      }, 'item', item.name);
+      return;
+    }
+
+    character.inventory.gainMesos(item.sellPrice);
     character.inventory.removeFromInventory(item.itemId, 1);
+    this.afterSell();
+  },
+
+  afterSell() {
     this.populateSellItems();
     if (this.sellSelectedIndex >= this.playerItems.length) {
       this.sellSelectedIndex = this.playerItems.length - 1;
     }
+  },
+
+  // Recharge stars/bullets to slotMax for ceil(unitPrice * missing)
+  async rechargeItem(item: any) {
+    const character = (window as any).charecter;
+    if (!character?.inventory) return;
+    const slotMax = await getItemSlotMax(item.itemId);
+    const missing = slotMax - item.quantity;
+    if (missing <= 0) return;
+    const unitPrice = await getItemUnitPrice(item.itemId);
+    const cost = Math.ceil(unitPrice * missing);
+    if (character.inventory.mesos < cost) {
+      console.log('Not enough mesos to recharge');
+      return;
+    }
+    character.inventory.gainMesos(-cost);
+    // Fill the existing stack directly (bypasses slotMax split logic)
+    const tabs = [character.inventory.use];
+    for (const tab of tabs) {
+      for (const it of tab) {
+        if (it?.itemId === item.itemId) {
+          it.quantity = slotMax;
+          this.populateSellItems();
+          return;
+        }
+      }
+    }
+  },
+
+  _quantityDialog: null as any,
+  getQuantityDialog() {
+    if (!this._quantityDialog) {
+      this._quantityDialog = new UIMesoDropDialog({ canvas: this.canvas });
+      this._quantityDialog.load?.();
+    }
+    return this._quantityDialog;
   },
 
   update(_msPerTick: number) {},
@@ -336,6 +425,11 @@ const ShopUI: any = {
     // Buttons
     for (const btn of this.buttons) {
       btn.draw(canvas, camera, 0, 0, 0);
+    }
+
+    // Buy/sell quantity dialog on top
+    if (this._quantityDialog && !this._quantityDialog.isHidden) {
+      this._quantityDialog.draw(canvas, camera, 0, 0, 0);
     }
 
     // Click handling
@@ -435,15 +529,31 @@ const ShopUI: any = {
       return;
     }
 
-    // Right panel (sell) item click
+    // Right panel (sell) item click — double-click a rechargeable to refill it
     if (mx >= rightListX && mx < rightListX + 220 && my >= rightListY && my < rightListY + listH) {
       const rowIdx = Math.floor((my - rightListY) / ROW_H) + this.sellScrollOffset;
       if (rowIdx >= 0 && rowIdx < this.playerItems.length) {
+        const now = Date.now();
+        if (
+          rowIdx === this._lastSellClickIdx &&
+          now - this._lastSellClickTime < 400 &&
+          ItemConstants.isRechargeable(this.playerItems[rowIdx].itemId)
+        ) {
+          this.rechargeItem(this.playerItems[rowIdx]);
+          this._lastSellClickIdx = -1;
+          this._lastSellClickTime = 0;
+        } else {
+          this._lastSellClickIdx = rowIdx;
+          this._lastSellClickTime = now;
+        }
         this.sellSelectedIndex = rowIdx;
       }
       return;
     }
   },
+
+  _lastSellClickIdx: -1,
+  _lastSellClickTime: 0,
 };
 
 export default ShopUI;

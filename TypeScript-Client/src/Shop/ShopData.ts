@@ -53,7 +53,8 @@ export async function getItemSellPrice(itemId: number): Promise<number> {
       if (dir) {
         const infoNode = await WZManager.get(`Character.wz/${dir}/0${itemId}.img/info`);
         const price = infoNode?.price?.nValue ?? 0;
-        return Math.max(1, Math.floor(Number(price) / 3));
+        // Cosmic sells at the full WZ price (no /3 heuristic)
+        return Math.max(1, Math.floor(Number(price)));
       }
       return 1;
     }
@@ -65,8 +66,37 @@ export async function getItemSellPrice(itemId: number): Promise<number> {
       `Item.wz/${wzType}/${prefix}.img/${strId}/info`
     );
     const price = infoNode?.price?.nValue ?? 0;
-    return Math.max(1, Math.floor(Number(price) / 3));
+    return Math.max(1, Math.floor(Number(price)));
   } catch {
     return 1;
+  }
+}
+
+/** Per-unit price for rechargeables (stars/bullets) from WZ info/unitPrice */
+export async function getItemUnitPrice(itemId: number): Promise<number> {
+  try {
+    const strId = itemId.toString().padStart(8, '0');
+    const prefix = strId.slice(0, 4);
+    const wzType = MapleInventory.getWzNameFromInventoryId(strId);
+    if (!wzType) return 0;
+    const infoNode: any = await WZManager.get(`Item.wz/${wzType}/${prefix}.img/${strId}/info`);
+    return Number(infoNode?.unitPrice?.nValue ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** Max stack size from WZ info/slotMax */
+export async function getItemSlotMax(itemId: number): Promise<number> {
+  try {
+    const strId = itemId.toString().padStart(8, '0');
+    const prefix = strId.slice(0, 4);
+    const wzType = MapleInventory.getWzNameFromInventoryId(strId);
+    if (!wzType) return 100;
+    const infoNode: any = await WZManager.get(`Item.wz/${wzType}/${prefix}.img/${strId}/info`);
+    const slotMax = Number(infoNode?.slotMax?.nValue ?? 0);
+    return slotMax > 0 ? slotMax : 100;
+  } catch {
+    return 100;
   }
 }

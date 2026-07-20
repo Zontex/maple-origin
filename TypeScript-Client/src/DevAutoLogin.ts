@@ -233,7 +233,11 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
         const loaded = await Promise.all(
           items.map((item: any) =>
             item?.itemId
-              ? Item.fromOpts({ itemId: item.itemId, quantity: item.quantity }).catch(() => null)
+              ? Item.fromOpts({
+                  itemId: item.itemId,
+                  quantity: item.quantity,
+                  equipData: item.equipData ?? undefined,
+                }).catch(() => null)
               : Promise.resolve(null)
           )
         );

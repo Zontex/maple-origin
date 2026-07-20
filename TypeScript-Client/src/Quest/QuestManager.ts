@@ -119,7 +119,7 @@ export default class QuestManager {
         console.log(`Quest start reward: +${r.exp} EXP`);
       }
       if (r.meso) {
-        this.character.inventory.mesos += r.meso;
+        this.character.inventory.gainMesos(r.meso);
         console.log(`Quest start reward: +${r.meso} mesos`);
       }
       if (r.items) {
@@ -163,7 +163,7 @@ export default class QuestManager {
         console.log(`Quest reward: +${r.exp} EXP`);
       }
       if (r.meso) {
-        this.character.inventory.mesos += r.meso;
+        this.character.inventory.gainMesos(r.meso);
         console.log(`Quest reward: +${r.meso} mesos`);
       }
       if (r.fame) {

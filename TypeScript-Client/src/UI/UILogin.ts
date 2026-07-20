@@ -302,11 +302,18 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         for (const eq of charData.equipped) {
           try {
             await MyChar.attachEquip(eq.slot, eq.item_id);
+            // Restore per-instance scroll data onto the worn slot
+            if (eq.equip_data) {
+              try {
+                MyChar.equippedItemData[eq.slot] = JSON.parse(eq.equip_data);
+              } catch { /* corrupt JSON — treat as fresh */ }
+            }
             console.log('[Login] Equipped slot', eq.slot, 'item', eq.item_id);
           } catch (e) {
             console.error('[Login] Failed to equip slot', eq.slot, 'item', eq.item_id, e);
           }
         }
+        MyChar.recalcLocalStats();
       }
 
       // Apply inventory
@@ -320,7 +327,11 @@ UILogin.initialize = async function (canvas: GameCanvas) {
             const item = items[slot];
             if (item && item.itemId) {
               try {
-                restored[slot] = await Item.fromOpts({ itemId: item.itemId, quantity: item.quantity });
+                restored[slot] = await Item.fromOpts({
+                  itemId: item.itemId,
+                  quantity: item.quantity,
+                  equipData: item.equipData ?? undefined,
+                });
               } catch { /* skip failed items */ }
             }
           }

@@ -357,7 +357,9 @@ export default class NpcScriptEngine {
       },
       itemQuantity(itemId: number) { return questManager?.getItemCount(itemId) ?? 0; },
       getItemQuantity(itemId: number) { return questManager?.getItemCount(itemId) ?? 0; },
-      canHold(itemId: number, count?: number) { return true; },
+      canHold(itemId: number, count?: number) {
+        return character?.inventory?.canHold?.(itemId, count ?? 1) ?? true;
+      },
       canHoldAll() { return true; },
       removeItem(itemId: number) { questManager?.removeItems(itemId, 1); },
       removeAll(itemId: number) {
@@ -368,7 +370,7 @@ export default class NpcScriptEngine {
       // Rewards
       gainExp(amount: number) { character?.addExp(amount, true); },
       gainMeso(amount: number) {
-        if (character?.inventory) character.inventory.mesos += amount;
+        if (character?.inventory) character.inventory.gainMesos(amount);
       },
       gainFame(amount: number) {
         if (character) character.fame = (character.fame || 0) + amount;

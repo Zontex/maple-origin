@@ -324,25 +324,8 @@ async addDrops() {
       this.isBoss
     );
 
-    // If no drops were generated, add a small amount of mesos by default (optional)
-    if (monsterDropEntries.length === 0 && Math.random() < 0.3) {
-      // 30% chance to drop a small amount of mesos
-      const minMesos = 10;
-      const maxMesos = 100;
-      const mesoAmount = Math.floor(minMesos + Math.random() * (maxMesos - minMesos));
-      
-      // Add mesos drop directly
-      const mesoDrop = await DropItemSprite.fromOpts({
-        id: 0,
-        monster: this,
-        amount: mesoAmount,
-      });
-      const mesoDropId = Date.now() + Math.floor(Math.random() * 10000);
-      (mesoDrop as any)._netDropId = mesoDropId;
-      this.map.addItemDrop(mesoDrop);
-      MySocket.sendItemDrop(0, mesoAmount, this.pos.x, this.pos.y, this.pos.vx / 2, this.pos.vy, mesoDropId);
-      return;
-    }
+    // Mesos come from the drop table itself (itemId 0 rows per mob, the
+    // authentic Cosmic model) — no synthetic meso fallback
 
     // Calculate drop positions - add slight offset to each drop
     // so they don't all appear in the exact same spot

@@ -65,6 +65,8 @@ class MapleCharacter {
   equips: any = [];
   equippedItemIds: Record<number, number> = {};
   equippedItemIcons: Record<number, HTMLImageElement | null> = {};
+  // Per-slot instance data (scroll bonuses/tuc) for worn equips
+  equippedItemData: Record<number, { bonus: Record<string, number>; tuc: number; level: number }> = {};
   flipped: boolean = false;
   id: number = 0;
   name: string = "";
@@ -238,6 +240,7 @@ class MapleCharacter {
     if (!this.stats) return;
     this.stats.recalcLocalStats({
       equips: this.equips || [],
+      equipBonuses: Object.values(this.equippedItemData || {}).map(d => d.bonus),
       baseMaxHp: this.maxHp,
       baseMaxMp: this.maxMp,
       buffBonuses: this.buffManager?.getStatTotals() ?? null,
@@ -529,6 +532,7 @@ class MapleCharacter {
     this.equips[realSlot] = undefined;
     delete this.equippedItemIds[realSlot];
     delete this.equippedItemIcons[realSlot];
+    delete this.equippedItemData[realSlot];
     if (realSlot === 10) {
       this.weaponEquip = undefined;
       this.weaponEquipId = undefined;

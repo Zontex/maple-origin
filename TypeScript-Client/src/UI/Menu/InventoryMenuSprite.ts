@@ -158,7 +158,7 @@ class InventoryMenuSprite extends DragableMenu {
   
     try {
       // Reduce mesos from inventory
-      this.charecter.inventory.mesos -= amount;
+      this.charecter.inventory.gainMesos(-amount);
       
       // Create a DropItemSprite for the mesos
       const mesosDrop = await DropItemSprite.fromOpts({
@@ -786,6 +786,20 @@ class InventoryMenuSprite extends DragableMenu {
         invH = rect.height;
       } catch (e) {}
 
+      // Upgrade scroll (2040xxx) dropped onto a worn item in the equip window
+      const isScroll = item.itemId >= 2040000 && item.itemId < 2050000;
+      if (isScroll) {
+        const equipMenu = (window as any).MapStateInstance?.equipMenu;
+        const targetSlot = equipMenu?.getSlotAt?.(mouseX, mouseY);
+        if (targetSlot !== null && targetSlot !== undefined) {
+          this.applyScrollToEquippedSlot(item, targetSlot);
+          this.draggingItem = null;
+          this.draggingIcon = null;
+          this.draggingSlotIndex = -1;
+          return;
+        }
+      }
+
       const isOutside =
         mouseX < this.x || mouseX > this.x + invW ||
         mouseY < this.y || mouseY > this.y + invH;
@@ -910,12 +924,18 @@ class InventoryMenuSprite extends DragableMenu {
       equipArr[idx] = null;
     }
 
-    // If slot is already occupied, unequip current item first (swap)
+    // If slot is already occupied, unequip current item first (swap),
+    // carrying its per-instance scroll data back to the inventory item
     const currentItemId = this.charecter.equippedItemIds[slot];
+    const currentEquipData = this.charecter.equippedItemData?.[slot];
     if (currentItemId) {
       this.charecter.detachEquip(slot);
       try {
-        const oldItem = await Item.fromOpts({ itemId: currentItemId, quantity: 1 });
+        const oldItem = await Item.fromOpts({
+          itemId: currentItemId,
+          quantity: 1,
+          equipData: currentEquipData,
+        });
         // Reuse the vacated slot; fall back to first free slot
         let freeSlot = idx !== -1 ? idx : equipArr.findIndex((it: any) => !it);
         if (freeSlot === -1) freeSlot = equipArr.length;
@@ -925,8 +945,13 @@ class InventoryMenuSprite extends DragableMenu {
       }
     }
 
-    // Equip on character (loads visuals + tracks ID + loads icon)
+    // Equip on character (loads visuals + tracks ID + loads icon) and carry
+    // the item instance's scroll data onto the worn slot
     await this.charecter.attachEquip(slot, itemId);
+    if (item.equipData) {
+      this.charecter.equippedItemData[slot] = item.equipData;
+      this.charecter.recalcLocalStats?.();
+    }
     console.log(`[Inventory] Equipped item ${itemId} in slot ${slot}`);
   }
 
@@ -934,15 +959,23 @@ class InventoryMenuSprite extends DragableMenu {
   consumeItem(item: any, slotIndex: number) {
     if (!item || !this.charecter) return;
 
-    // Only potions/food are consumable (2000000-2049999)
-    // Scrolls, arrows, throwing stars, cards, etc. are NOT consumable via double-click
+    // Potions/food (2000xxx-2029xxx) and return scrolls (2030xxx) are usable.
+    // Upgrade scrolls (2040xxx+), arrows, stars, cards are NOT double-click usable
     const id = item.itemId;
-    if (id < 2000000 || id >= 2050000) return;
+    if (id < 2000000 || id >= 2040000) return;
 
     // Access spec via WZ node — try both property access and nGet
     const spec = item.node?.spec || item.node?.nGet?.('spec');
-    if (!spec || (!spec.nChildren && !spec.hp && !spec.mp)) {
+    if (!spec || (!spec.nChildren && !spec.hp && !spec.mp && !spec.moveTo)) {
       console.log(`[Inventory] Item #${item.itemId} has no spec — cannot consume`);
+      return;
+    }
+
+    // Return scrolls: spec/moveTo (999999999 = the current map's return map)
+    const moveToNode = spec.moveTo ?? spec.nGet?.('moveTo');
+    const moveTo = parseInt(moveToNode?.nValue ?? moveToNode ?? NaN);
+    if (!isNaN(moveTo)) {
+      this.consumeReturnScroll(item, moveTo);
       return;
     }
 
@@ -1003,6 +1036,70 @@ class InventoryMenuSprite extends DragableMenu {
         actualItem.quantity--;
       }
     }
+  }
+
+  // Apply an upgrade scroll to a worn equip (v83 scroll flow)
+  async applyScrollToEquippedSlot(scrollItem: any, slot: number) {
+    const character = this.charecter;
+    const equipId = character.equippedItemIds?.[slot];
+    if (!equipId) return;
+
+    const { applyScroll } = await import('../../Inventory/ScrollSystem');
+
+    // Ensure the worn slot has instance data (restored gear may lack it)
+    if (!character.equippedItemData[slot]) {
+      const equipNode = character.equips?.[slot];
+      character.equippedItemData[slot] = {
+        bonus: {},
+        tuc: equipNode?.info?.tuc?.nValue ?? 0,
+        level: 0,
+      };
+    }
+
+    const result = applyScroll(scrollItem.node, scrollItem.itemId, equipId, character.equippedItemData[slot]);
+
+    // Surface the outcome as the player's chat balloon
+    character.chatMessage = result.message;
+    character.showChatBalloon = true;
+    character.chatBalloonTimer = 0;
+    character.chatBalloonDuration = 4000;
+
+    if (!result.applied) return;
+
+    // Scroll is consumed on success or failure
+    character.inventory.removeFromInventory(scrollItem.itemId, 1);
+
+    if (result.destroyed) {
+      character.detachEquip(slot);
+    }
+    if (this.consumeSound) {
+      PLAY_AUDIO(this.consumeSound, 0.5, true);
+    }
+    character.recalcLocalStats?.();
+  }
+
+  // Return scroll: consume one and warp to the target (or the map's return map)
+  async consumeReturnScroll(item: any, moveTo: number) {
+    const mapState = (window as any).MapStateInstance;
+    if (!mapState?.changeMap) return;
+
+    let targetMap = moveTo;
+    if (moveTo === 999999999) {
+      targetMap = this.charecter.map?.wzNode?.info?.returnMap?.nValue ?? 0;
+    }
+    if (!targetMap || targetMap === 999999999) {
+      console.warn(`[Inventory] Return scroll #${item.itemId} has no valid target`);
+      return;
+    }
+
+    if (this.consumeSound) {
+      PLAY_AUDIO(this.consumeSound, 0.5, true);
+    }
+    this.charecter.inventory.removeFromInventory(item.itemId, 1);
+
+    const { fadeToBlack } = await import('../../MapState');
+    fadeToBlack();
+    await mapState.changeMap(targetMap);
   }
 
   // Drop items — single items drop immediately, stackable items show quantity dialog

@@ -2,22 +2,28 @@ import MapleInventory from "../Constants/Inventory/MapleInventory";
 import WZFiles from "../Constants/enums/WZFiles";
 import WZManager from "../wz-utils/WZManager";
 
+// Per-instance equip data: scroll bonuses + remaining upgrade slots
+export interface EquipData {
+  bonus: Record<string, number>; // WZ inc* keys (incSTR, incPAD, ...) added by scrolls
+  tuc: number;                   // remaining upgrade slots
+  level: number;                 // scrolls passed
+}
+
 interface ItemOpts {
   itemId: number;
   quantity: number;
+  equipData?: EquipData;
 }
 
 class Item {
-  opts: {
-    itemId: number;
-    quantity: number;
-  };
+  opts: ItemOpts;
   itemId: number;
   // name: string;
   // description: string;
   // price: number;
   quantity: number;
   node: any;
+  equipData: EquipData | null = null;
 
   static async fromOpts(opts: ItemOpts) {
     const object = new Item(opts);
@@ -32,6 +38,14 @@ class Item {
     // this.price = price;
     this.quantity = opts.quantity || 1;
     this.node = null;
+  }
+
+  /** Max stack size from WZ slotMax (equips 1; stackables default 100) */
+  getSlotMax(): number {
+    const category = Math.floor(this.itemId / 1000000);
+    if (category === 1) return 1;
+    const slotMax = this.node?.info?.slotMax?.nValue;
+    return slotMax && slotMax > 0 ? slotMax : 100;
   }
 
   async load() {
@@ -70,6 +84,12 @@ class Item {
             console.warn(`Failed to load equip item ${this.itemId} from Character.wz/${dir}`);
           }
         }
+        // Equip instance data: restore saved bonuses/tuc or init from WZ
+        this.equipData = this.opts.equipData ?? {
+          bonus: {},
+          tuc: this.node?.info?.tuc?.nValue ?? 0,
+          level: 0,
+        };
         return;
       }
 

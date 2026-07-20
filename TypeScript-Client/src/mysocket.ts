@@ -208,13 +208,25 @@ class MySocket {
     // Keep null holes so slot positions survive save/load (server inserts by index)
     const serializeTab = (items: any[]) =>
       (items || []).map((item: any) =>
-        item ? { itemId: item.itemId, quantity: item.quantity ?? 1 } : null
+        item
+          ? {
+              itemId: item.itemId,
+              quantity: item.quantity ?? 1,
+              equipData: item.equipData ?? undefined,
+            }
+          : null
       );
 
-    const equipped: { slot: number; itemId: number }[] = [];
+    const equipped: { slot: number; itemId: number; equipData?: any }[] = [];
     if (MyCharacter.equippedItemIds) {
       for (const [slot, itemId] of Object.entries(MyCharacter.equippedItemIds)) {
-        if (itemId) equipped.push({ slot: Number(slot), itemId: itemId as number });
+        if (itemId) {
+          equipped.push({
+            slot: Number(slot),
+            itemId: itemId as number,
+            equipData: MyCharacter.equippedItemData?.[Number(slot)] ?? undefined,
+          });
+        }
       }
     }
 

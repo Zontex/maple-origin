@@ -191,9 +191,14 @@ const getRandomDropItems = async (
   mobDropItems.forEach((monsterDropEntry: MonsterDropEntry) =>
     chooseRandomAmounts(monsterDropEntry)
   );
-  return mobDropItems.filter((monsterDropEntry: MonsterDropEntry) =>
-    isDroped(monsterDropEntry.chance)
-  );
+  // Quest-gated entries only drop while that quest is active (Cosmic needQuestItem)
+  const questManager = (window as any).charecter?.questManager;
+  return mobDropItems.filter((monsterDropEntry: MonsterDropEntry) => {
+    if (monsterDropEntry.questid && monsterDropEntry.questid > 0) {
+      if (!questManager?.activeQuests?.has(monsterDropEntry.questid)) return false;
+    }
+    return isDroped(monsterDropEntry.chance);
+  });
 };
 
 // const getRandomMesoAmount = (monsterExp) => {

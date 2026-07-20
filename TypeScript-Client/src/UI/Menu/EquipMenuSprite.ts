@@ -156,6 +156,19 @@ class EquipMenuSprite extends DragableMenu {
     this.isHidden = isHidden;
   }
 
+  /** Equip slot index under the cursor, or null (used for scroll drag-drop) */
+  getSlotAt(mouseX: number, mouseY: number): number | null {
+    if (this.isHidden) return null;
+    for (const slot of EQUIP_SLOTS) {
+      const sx = this.x + slot.x;
+      const sy = this.y + slot.y;
+      if (mouseX >= sx && mouseX < sx + SLOT_SIZE && mouseY >= sy && mouseY < sy + SLOT_SIZE) {
+        return slot.slot;
+      }
+    }
+    return null;
+  }
+
   onMouseDown(mouseX: number, mouseY: number): boolean {
     if (this.isHidden) return false;
 
@@ -189,12 +202,15 @@ class EquipMenuSprite extends DragableMenu {
     const itemId = this.charecter.equippedItemIds[slot];
     if (!itemId) return;
 
+    // Carry the worn instance's scroll data back to the inventory item
+    const equipData = this.charecter.equippedItemData?.[slot];
+
     // Remove from character visuals
     this.charecter.detachEquip(slot);
 
     // Add to inventory equip array at the first free slot (keep positions stable)
     try {
-      const item = await Item.fromOpts({ itemId, quantity: 1 });
+      const item = await Item.fromOpts({ itemId, quantity: 1, equipData });
       const equipArr = this.charecter.inventory.equip;
       let freeSlot = equipArr.findIndex((it: any) => !it);
       if (freeSlot === -1) freeSlot = equipArr.length;

@@ -119,7 +119,7 @@ class Character {
 
     // Attach equipped items for each character (needed for preview)
     const getEquipped = db.prepare(
-      'SELECT slot, item_id FROM equipped_items WHERE character_id = ?'
+      'SELECT slot, item_id, equip_data FROM equipped_items WHERE character_id = ?'
     );
     for (const c of chars) {
       c.equipped = getEquipped.all(c.id);
@@ -136,15 +136,15 @@ class Character {
     if (!char) return null;
 
     const equipped = db.prepare(
-      'SELECT slot, item_id FROM equipped_items WHERE character_id = ?'
+      'SELECT slot, item_id, equip_data FROM equipped_items WHERE character_id = ?'
     ).all(characterId);
 
     const inventory = db.prepare(
-      'SELECT tab, slot, item_id, quantity FROM inventory_items WHERE character_id = ?'
+      'SELECT tab, slot, item_id, quantity, equip_data FROM inventory_items WHERE character_id = ?'
     ).all(characterId);
 
     const quests = db.prepare(
-      'SELECT quest_id, state, mob_progress FROM quests WHERE character_id = ?'
+      'SELECT quest_id, state, mob_progress, completed_at FROM quests WHERE character_id = ?'
     ).all(characterId);
 
     const skills = db.prepare(
@@ -208,12 +208,12 @@ class Character {
 
     const deleteEquipped = db.prepare('DELETE FROM equipped_items WHERE character_id = ?');
     const insertEquipped = db.prepare(
-      'INSERT INTO equipped_items (character_id, slot, item_id) VALUES (?, ?, ?)'
+      'INSERT INTO equipped_items (character_id, slot, item_id, equip_data) VALUES (?, ?, ?, ?)'
     );
 
     const deleteInventory = db.prepare('DELETE FROM inventory_items WHERE character_id = ?');
     const insertInventory = db.prepare(
-      'INSERT INTO inventory_items (character_id, tab, slot, item_id, quantity) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO inventory_items (character_id, tab, slot, item_id, quantity, equip_data) VALUES (?, ?, ?, ?, ?, ?)'
     );
 
     const deleteQuests = db.prepare('DELETE FROM quests WHERE character_id = ?');
@@ -258,7 +258,10 @@ class Character {
       if (data.equipped) {
         deleteEquipped.run(characterId);
         for (const eq of data.equipped) {
-          insertEquipped.run(characterId, eq.slot, eq.itemId || eq.item_id);
+          insertEquipped.run(
+            characterId, eq.slot, eq.itemId || eq.item_id,
+            eq.equipData ? JSON.stringify(eq.equipData) : null
+          );
         }
       }
 
@@ -269,7 +272,10 @@ class Character {
           for (let slot = 0; slot < items.length; slot++) {
             const item = items[slot];
             if (item && item.itemId && item.quantity > 0) {
-              insertInventory.run(characterId, tab, slot, item.itemId, item.quantity);
+              insertInventory.run(
+                characterId, tab, slot, item.itemId, item.quantity,
+                item.equipData ? JSON.stringify(item.equipData) : null
+              );
             }
           }
         }
@@ -318,7 +324,11 @@ function groupInventory(rows) {
     if (!inv[row.tab]) inv[row.tab] = [];
     // Ensure slot index is filled
     while (inv[row.tab].length <= row.slot) inv[row.tab].push(null);
-    inv[row.tab][row.slot] = { itemId: row.item_id, quantity: row.quantity };
+    let equipData = null;
+    try {
+      if (row.equip_data) equipData = JSON.parse(row.equip_data);
+    } catch (e) { /* corrupt JSON — treat as fresh */ }
+    inv[row.tab][row.slot] = { itemId: row.item_id, quantity: row.quantity, equipData };
   }
   return inv;
 }

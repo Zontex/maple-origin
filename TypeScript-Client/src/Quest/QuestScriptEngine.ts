@@ -232,7 +232,9 @@ export default class QuestScriptEngine {
         const has = questManager?.getItemCount(itemId) ?? 0;
         return has >= (count ?? 1);
       },
-      canHold(itemId: number) { return true; },
+      canHold(itemId: number, count?: number) {
+        return character?.inventory?.canHold?.(itemId, count ?? 1) ?? true;
+      },
       canHoldAll() { return true; },
       removeItem(itemId: number) { questManager?.removeItems(itemId, 1); },
 
@@ -242,7 +244,7 @@ export default class QuestScriptEngine {
         console.log(`[QuestScript] +${amount} EXP`);
       },
       gainMeso(amount: number) {
-        if (character?.inventory) character.inventory.mesos += amount;
+        if (character?.inventory) character.inventory.gainMesos(amount);
         console.log(`[QuestScript] +${amount} mesos`);
       },
       gainFame(amount: number) {

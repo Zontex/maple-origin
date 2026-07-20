@@ -31,6 +31,7 @@ export interface StatBonuses {
 
 export interface RecalcSources {
   equips: any[];               // sparse Character.wz node array (slot 10 = weapon)
+  equipBonuses?: Record<string, number>[]; // per-instance scroll bonuses (inc* keys)
   baseMaxHp: number;
   baseMaxMp: number;
   buffBonuses: StatBonuses | null;
@@ -109,7 +110,7 @@ class Stats {
    * base -> equip pass -> ammo watk -> buff pass -> passive pass -> derived.
    */
   recalcLocalStats(sources: RecalcSources) {
-    const { equips, baseMaxHp, baseMaxMp, buffBonuses, passiveBonuses, projectileWatk } = sources;
+    const { equips, equipBonuses, baseMaxHp, baseMaxMp, buffBonuses, passiveBonuses, projectileWatk } = sources;
 
     this.localStr = this.str;
     this.localDex = this.dex;
@@ -143,6 +144,27 @@ class Stats {
       this.localMaxMp += info.incMMP?.nValue ?? 0;
       this.localSpeed += info.incSpeed?.nValue ?? 0;
       this.localJump += info.incJump?.nValue ?? 0;
+    }
+
+    // Per-instance scroll bonuses on worn equips (same inc* key space)
+    if (equipBonuses) {
+      for (const bonus of equipBonuses) {
+        if (!bonus) continue;
+        this.localStr += bonus.incSTR ?? 0;
+        this.localDex += bonus.incDEX ?? 0;
+        this.localInt += bonus.incINT ?? 0;
+        this.localLuk += bonus.incLUK ?? 0;
+        this.localWatk += bonus.incPAD ?? 0;
+        equipMagic += bonus.incMAD ?? 0;
+        this.localPdd += bonus.incPDD ?? 0;
+        this.localMdd += bonus.incMDD ?? 0;
+        equipAcc += bonus.incACC ?? 0;
+        equipEva += bonus.incEVA ?? 0;
+        this.localMaxHp += bonus.incMHP ?? 0;
+        this.localMaxMp += bonus.incMMP ?? 0;
+        this.localSpeed += bonus.incSpeed ?? 0;
+        this.localJump += bonus.incJump ?? 0;
+      }
     }
 
     this.localWatk += projectileWatk;

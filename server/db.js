@@ -134,6 +134,18 @@ function initSchema() {
     // Column already exists — ignore
   }
 
+  // Migration: per-instance equip data (scroll bonuses/upgrade slots)
+  try {
+    db.exec(`ALTER TABLE inventory_items ADD COLUMN equip_data TEXT`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+  try {
+    db.exec(`ALTER TABLE equipped_items ADD COLUMN equip_data TEXT`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+
   console.log('[DB] SQLite schema initialized');
 }
 
