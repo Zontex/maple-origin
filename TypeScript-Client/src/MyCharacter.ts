@@ -43,8 +43,9 @@ MyCharacter.questManager.initialize();
 MyCharacter.skillManager = new SkillManager(MyCharacter);
 MyCharacter.skillManager.initialize();
 
-// Initialize buff manager.
-(MyCharacter as any).buffManager = new BuffManager();
+// Initialize buff manager — buff apply/expire recalculates effective stats.
+(MyCharacter as any).buffManager = new BuffManager(() => MyCharacter.recalcLocalStats());
+MyCharacter.recalcLocalStats();
 
 declare global {
   interface Window {

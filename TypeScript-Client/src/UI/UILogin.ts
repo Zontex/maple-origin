@@ -293,6 +293,7 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       MyChar.exp = charData.exp ?? 0;
       const { default: ExpTable } = await import('../Constants/ExpTable');
       MyChar.maxExp = ExpTable.getExpNeededForLevel(charData.stats.level);
+      MyChar.recalcLocalStats();
 
       // Apply equipped items — clear and reload from DB
       MyChar.equips = [];

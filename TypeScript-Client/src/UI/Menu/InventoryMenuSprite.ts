@@ -971,18 +971,18 @@ class InventoryMenuSprite extends DragableMenu {
 
     // Apply percentage-based recovery
     if (hpPercent > 0) {
-      hpRecover += Math.floor(this.charecter.maxHp * hpPercent / 100);
+      hpRecover += Math.floor(this.charecter.effectiveMaxHp * hpPercent / 100);
     }
     if (mpPercent > 0) {
-      mpRecover += Math.floor(this.charecter.maxMp * mpPercent / 100);
+      mpRecover += Math.floor(this.charecter.effectiveMaxMp * mpPercent / 100);
     }
 
     // Apply recovery (clamped to max)
     if (hpRecover > 0) {
-      this.charecter.hp = Math.min(this.charecter.hp + hpRecover, this.charecter.maxHp);
+      this.charecter.hp = Math.min(this.charecter.hp + hpRecover, this.charecter.effectiveMaxHp);
     }
     if (mpRecover > 0) {
-      this.charecter.mp = Math.min(this.charecter.mp + mpRecover, this.charecter.maxMp);
+      this.charecter.mp = Math.min(this.charecter.mp + mpRecover, this.charecter.effectiveMaxMp);
     }
 
     console.log(`[Inventory] Consumed item #${item.itemId}: +${hpRecover} HP, +${mpRecover} MP`);

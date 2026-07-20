@@ -142,14 +142,14 @@ class StatsMenuSprite extends DragableMenu {
     });
 
     canvas.drawText({
-      text: `${this.charecter!.hp}/${this.charecter!.stats.maxHp}`,
+      text: `${this.charecter!.hp}/${this.charecter!.effectiveMaxHp}`,
       color: "#000000",
       x: this.x + 60,
       y: this.y + 118,
     });
 
     canvas.drawText({
-      text: `${this.charecter!.mp}/${this.charecter!.stats.maxMp}`,
+      text: `${this.charecter!.mp}/${this.charecter!.effectiveMaxMp}`,
       color: "#000000",
       x: this.x + 60,
       y: this.y + 136,
@@ -207,7 +207,6 @@ class StatsMenuSprite extends DragableMenu {
 
     // second menu
     const attackRange = this.charecter!.stats.getAttackRange(
-      this.charecter!.equips,
       getEquipTypeById(this.charecter!.weaponEquipId),
       AttackType.Swing
     );
@@ -220,9 +219,7 @@ class StatsMenuSprite extends DragableMenu {
     });
 
     canvas.drawText({
-      text: this.charecter!.stats.getWeaponDefense(
-        this.charecter!.equips
-      ).toString(),
+      text: this.charecter!.stats.getWeaponDefense().toString(),
       color: "#000000",
       x: this.x + 242,
       y: this.y + 172,
@@ -237,9 +234,7 @@ class StatsMenuSprite extends DragableMenu {
     // });
 
     canvas.drawText({
-      text: this.charecter!.stats.getMagicDefense(
-        this.charecter!.equips
-      ).toString(),
+      text: this.charecter!.stats.getMagicDefense().toString(),
       color: "#000000",
       x: this.x + 242,
       y: this.y + 208,
@@ -267,18 +262,14 @@ class StatsMenuSprite extends DragableMenu {
     });
 
     canvas.drawText({
-      text: `${this.charecter!.stats.getSpeedPrecetnage(
-        this.charecter!.equips
-      )}%`,
+      text: `${this.charecter!.stats.getSpeedPrecetnage()}%`,
       color: "#000000",
       x: this.x + 242,
       y: this.y + 280,
     });
 
     canvas.drawText({
-      text: `${this.charecter!.stats.getJumpPrecetnage(
-        this.charecter!.equips
-      )}%`,
+      text: `${this.charecter!.stats.getJumpPrecetnage()}%`,
       color: "#000000",
       x: this.x + 242,
       y: this.y + 298,

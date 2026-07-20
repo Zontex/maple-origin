@@ -8,8 +8,17 @@ export interface ActiveBuff {
   icon: HTMLImageElement | null;
 }
 
+// Hyper Body raises max HP/MP by a percentage (effect.x / effect.y)
+const HYPER_BODY_SKILL_ID = 1301007;
+
 export default class BuffManager {
   activeBuffs: Map<number, ActiveBuff> = new Map();
+  // Fired whenever a buff is applied or removed so stats can recalc
+  onChange: (() => void) | null = null;
+
+  constructor(onChange?: () => void) {
+    this.onChange = onChange || null;
+  }
 
   applyBuff(skillId: number, effect: SkillLevelEffect): void {
     const info = SkillData.getSkillSync(skillId);
@@ -24,6 +33,7 @@ export default class BuffManager {
     });
 
     console.log(`[Buff] Applied ${info?.name || skillId} for ${effect.time}s`);
+    this.onChange?.();
   }
 
   removeBuff(skillId: number): void {
@@ -32,7 +42,37 @@ export default class BuffManager {
       const name = SkillData.getSkillName(skillId);
       console.log(`[Buff] Expired: ${name}`);
       this.activeBuffs.delete(skillId);
+      this.onChange?.();
     }
+  }
+
+  // Aggregate all buff stat bonuses in one pass for Stats.recalcLocalStats
+  getStatTotals(): {
+    pad: number; mad: number; pdd: number; mdd: number;
+    acc: number; eva: number; speed: number; jump: number;
+    hyperBodyHpPct: number; hyperBodyMpPct: number;
+  } {
+    const totals = {
+      pad: 0, mad: 0, pdd: 0, mdd: 0,
+      acc: 0, eva: 0, speed: 0, jump: 0,
+      hyperBodyHpPct: 0, hyperBodyMpPct: 0,
+    };
+    for (const buff of this.activeBuffs.values()) {
+      const e = buff.effect;
+      totals.pad += e.pad;
+      totals.mad += e.mad;
+      totals.pdd += e.pdd;
+      totals.mdd += e.mdd;
+      totals.acc += e.acc;
+      totals.eva += e.eva;
+      totals.speed += e.speed;
+      totals.jump += e.jump;
+      if (buff.skillId === HYPER_BODY_SKILL_ID) {
+        totals.hyperBodyHpPct += e.x || 0;
+        totals.hyperBodyMpPct += e.y || 0;
+      }
+    }
+    return totals;
   }
 
   update(msPerTick: number): void {

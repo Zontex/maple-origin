@@ -219,7 +219,38 @@ class MapleCharacter {
     this.alertStanceTimeout = null;
     this.deathTimeout = null;
 
-    // this.projectiles = [];
+    if (this.stats) {
+      this.stats.onStatsChanged = () => this.recalcLocalStats();
+      this.recalcLocalStats();
+    }
+  }
+
+  /**
+   * Recompute effective stats from base + equips + buffs + passives.
+   * Call after any stat-affecting event (equip change, buff change, level up,
+   * job change, skill learn, AP allocation, character load).
+   */
+  recalcLocalStats() {
+    if (!this.stats) return;
+    this.stats.recalcLocalStats({
+      equips: this.equips || [],
+      baseMaxHp: this.maxHp,
+      baseMaxMp: this.maxMp,
+      buffBonuses: this.buffManager?.getStatTotals() ?? null,
+      passiveBonuses: this.skillManager?.getPassiveBonuses() ?? null,
+      projectileWatk: 0,
+    });
+    // A buff expiring can lower max HP/MP below current values
+    this.hp = Math.min(this.hp, this.stats.localMaxHp);
+    this.mp = Math.min(this.mp, this.stats.localMaxMp);
+  }
+
+  get effectiveMaxHp(): number {
+    return this.stats?.localMaxHp || this.maxHp;
+  }
+
+  get effectiveMaxMp(): number {
+    return this.stats?.localMaxMp || this.maxMp;
   }
 
   async load() {
@@ -298,6 +329,7 @@ class MapleCharacter {
     this.projectiles = [];
     this.DamageIndicator = new DamageIndicator();
     this.DamageIndicator.initialize();
+    this.recalcLocalStats();
   }
   async setSkinColor(sc = 0) {
     this.head = await WZManager.get(`Character.wz/0001200${sc}.img`);
@@ -457,6 +489,7 @@ class MapleCharacter {
       }
       // Load item icon for equip window display
       this._loadEquipIcon(realSlot, id);
+      this.recalcLocalStats();
     }
   }
 
@@ -496,6 +529,7 @@ class MapleCharacter {
       this.weaponEquip = undefined;
       this.weaponEquipId = undefined;
     }
+    this.recalcLocalStats();
   }
   destroy() {
     this.destroyed = true;
@@ -519,6 +553,7 @@ class MapleCharacter {
     // Restore HP/MP to full on job change
     this.hp = this.maxHp;
     this.mp = this.maxMp;
+    this.recalcLocalStats();
   }
 
   levelUp() {
@@ -570,10 +605,11 @@ class MapleCharacter {
     this.maxMp += mpGain;
     this.stats.maxHp = this.maxHp;
     this.stats.maxMp = this.maxMp;
+    this.recalcLocalStats();
 
     // Restore HP/MP to full on level up
-    this.hp = this.maxHp;
-    this.mp = this.maxMp;
+    this.hp = this.effectiveMaxHp;
+    this.mp = this.effectiveMaxMp;
     this.playLevelUp();
     // Broadcast to other players
     if (!this.isRemote && (window as any).__mySocket) {
@@ -780,7 +816,7 @@ async executeAttackDamage() {
   for (const monster of monsters) {
     try {
       // Get raw damage range, then reduce by monster defense
-      const rawRange = this.stats.getAttackRange(this.equips, weaponType, attackType);
+      const rawRange = this.stats.getAttackRange(weaponType, attackType);
       const monsterDef = monster.mobFile?.info?.PDDamage?.nValue ?? 0;
       const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
       const defRange = this.stats.getAttackDamageRangeAfterMonsterDefense(rawRange, monsterDef, monsterLevel);
@@ -971,7 +1007,7 @@ async executeSkillDamage(skillId: number, effect: any) {
           // Fixed damage skills (e.g., Three Snails)
           damage = fixDamage;
         } else {
-          const rawRange = this.stats.getAttackRange(this.equips, weaponType, attackType);
+          const rawRange = this.stats.getAttackRange(weaponType, attackType);
           const monsterDef = monster.mobFile?.info?.PDDamage?.nValue ?? 0;
           const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
           const defRange = this.stats.getAttackDamageRangeAfterMonsterDefense(rawRange, monsterDef, monsterLevel);
@@ -1025,7 +1061,7 @@ async fireProjectile(weaponType: number) {
   }
 
   const attackType = this.getAttackTypeFromStance();
-  const weaponAttackRange = this.stats.getAttackRange(this.equips, weaponType, attackType);
+  const weaponAttackRange = this.stats.getAttackRange(weaponType, attackType);
   const projectileItemId = DEFAULT_PROJECTILE_ID[weaponType] || 2060000;
 
   try {
@@ -1616,7 +1652,7 @@ isCloseToMob = (inAllDirections = true) => {
             // v83 mob contact damage: random range around PAD, minus player defense
             const pad = monster.pad || 1;
             const rawDamage = Math.floor(pad * (0.8 + Math.random() * 0.4));
-            const pdd = this.stats.getWeaponDefense(this.equips);
+            const pdd = this.stats.getWeaponDefense();
             const finalTakenDamage = Math.max(1, rawDamage - pdd);
             this.takeDamage(finalTakenDamage);
 

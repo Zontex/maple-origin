@@ -211,6 +211,7 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
     MyCharacter.exp = charData.exp ?? 0;
     const { default: ExpTable } = await import('./Constants/ExpTable');
     MyCharacter.maxExp = ExpTable.getExpNeededForLevel(charData.stats.level);
+    MyCharacter.recalcLocalStats();
 
     // Equipment — just store IDs, MyCharacter.load() will attachEquip from equippedItemIds
     MyCharacter.equips = [];

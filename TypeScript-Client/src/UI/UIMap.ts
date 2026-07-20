@@ -399,7 +399,9 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
     dy: 567 + startUIPosition.y,
   });
 
-  const { hp, maxHp, mp, maxMp, exp, maxExp } = MyCharacter;
+  const { hp, mp, exp, maxExp } = MyCharacter;
+  const maxHp = MyCharacter.effectiveMaxHp;
+  const maxMp = MyCharacter.effectiveMaxMp;
 
   const numHpGrays = 105 - Math.floor((hp / maxHp) * 105);
   for (let i = 0; i < numHpGrays; i += 1) {

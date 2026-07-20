@@ -56,6 +56,7 @@ export default class SkillManager {
     }
 
     console.log(`[Skill] ${SkillData.getSkillName(skillId)} (#${skillId}) → level ${level}, masterLevel ${ml}`);
+    (this.character as any).recalcLocalStats?.();
   }
 
   // Convenience: learn a skill at level 1 with maxLevel as masterLevel
@@ -148,6 +149,7 @@ export default class SkillManager {
       }
     }
     console.log(`[Skill] Loaded ${this.skills.size} skills`);
+    (this.character as any).recalcLocalStats?.();
   }
 
   // Get all learned skills grouped by job file ID (for UI tabs)
