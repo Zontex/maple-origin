@@ -31,17 +31,17 @@ const DEFAULT_SLOTS: { key: string; label: string }[] = [
   { key: 'f1', label: 'F1' },
 ];
 
-// QuickSlot background layout constants (derived from 151×80 WZ image analysis)
+// QuickSlot background layout constants (151×80 WZ image, measured from the
+// decoded PNG: white keycap interiors at x=10-36/45-71/80-106/115-141,
+// y=9-33/43-67)
 const QS_W = 151;
 const QS_H = 80;
 const COLS = 4;
 const ROWS = 2;
-// Slot positions inside the quickSlot background (from pixel analysis)
-// Grid borders: x = 7/39-41/74-76/109-111/144, y = 3/38-42/77
-const SLOT_X = [8, 42, 77, 112];        // interior left edge per column
-const SLOT_Y = [4, 43];                  // interior top edge per row
-const SLOT_W = 31;                       // slot interior width
-const SLOT_H = 34;                       // slot interior height
+const SLOT_X = [10, 45, 80, 115];        // keycap interior left edge per column
+const SLOT_Y = [9, 43];                  // keycap interior top edge per row
+const SLOT_W = 27;                       // keycap interior width
+const SLOT_H = 25;                       // keycap interior height
 
 const UIHotkeyBar = {
   slots: [] as HotkeySlot[],
@@ -222,11 +222,11 @@ const UIHotkeyBar = {
       const sx = this.barX + SLOT_X[col];
       const sy = this.barY + SLOT_Y[row];
 
-      // Skill icon — centered within the slot
+      // Skill icon — fills the keycap below the key label
       if (slot.icon && slot.icon.complete && slot.icon.width > 0) {
-        const iconSize = 32;
+        const iconSize = 22;
         const ix = sx + Math.floor((SLOT_W - iconSize) / 2);
-        const iy = sy + Math.floor((SLOT_H - iconSize) / 2);
+        const iy = sy + SLOT_H - iconSize - 1;
         ctx.drawImage(slot.icon, ix, iy, iconSize, iconSize);
       }
 
@@ -256,13 +256,13 @@ const UIHotkeyBar = {
         ctx.restore();
       }
 
-      // Key label — small white text in upper-left corner of slot (like GMS)
+      // Key label — small dark text at the top of the white keycap (like GMS)
       ctx.save();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '9px Arial';
+      ctx.fillStyle = '#555555';
+      ctx.font = '8px Arial';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText(slot.label, sx + 1, sy + 1);
+      ctx.fillText(slot.label, sx + 2, sy + 1);
       ctx.restore();
     }
 
