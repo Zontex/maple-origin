@@ -807,6 +807,11 @@ async executeAttackDamage() {
   this.checkForItemDropPickup(true);
 }
 
+// Three Snails shell items — each skill level consumes a specific shell type
+static readonly SNAIL_SHELL_ITEMS: Record<number, number[]> = {
+  1000: [4000019, 4000000, 4000016],  // Snail Shell, Blue Snail Shell, Orange Mushroom Cap
+};
+
 /**
  * Execute a skill — handles attack skills with skill damage multiplier,
  * mob count, attack count, and skill-specific range.
@@ -818,33 +823,105 @@ async useSkill(skillId: number, effect: any) {
   if (!info) return;
 
   if (info.isAttack) {
-    // Attack skill — reuse the normal attack animation but apply skill damage
+    // Check if this is a projectile (ball) skill
+    const hasBall = effect.ballNode && effect.ballNode.nChildren?.length > 0;
+
+    // Check for required consumable items (e.g., Three Snails needs snail shells)
+    const shellItems = MapleCharacter.SNAIL_SHELL_ITEMS[skillId];
+    if (shellItems) {
+      const inv = this.inventory;
+      const foundItem = shellItems.find((itemId: number) => {
+        const tabs = [inv.equip, inv.use, inv.setup, inv.etc, inv.cash];
+        return tabs.some(tab => tab.some((item: any) => item.itemId === itemId && item.quantity > 0));
+      });
+      if (!foundItem) {
+        console.log(`[Skill] No shells for Three Snails`);
+        return;
+      }
+      // Consume one shell
+      inv.removeFromInventory(foundItem, 1);
+    }
+
     this.isInAttack = true;
     this.rightClickRelease();
     this.leftClickRelease();
     this.isInAlert = false;
 
+    // Determine body stance
     const weaponType = getEquipTypeById(this.weaponEquipId);
     const config = getWeaponConfig(weaponType);
     const stancePool = config?.stances?.melee || ['swingO1'];
-    const attackStance = stancePool[Math.floor(Math.random() * stancePool.length)];
+    let attackStance: string = stancePool[Math.floor(Math.random() * stancePool.length)];
 
-    this.setStance(
-      attackStance,
-      0,
-      true,
-      false,
-      () => { this.isInAttack = false; },
-      async () => {
-        await this.executeSkillDamage(skillId, effect);
-      }
-    );
+    // Prefer the skill's own action stance
+    if (info.action && this.baseBody?.[info.action]) {
+      attackStance = info.action;
+    } else if (hasBall && this.baseBody?.['shoot1']) {
+      // Ball skills without a specific action use the overhand throw stance
+      attackStance = 'shoot1';
+    }
+
+    if (hasBall) {
+      // Projectile skill — fire a projectile with ball sprites
+      this.setStance(
+        attackStance,
+        0,
+        true,
+        false,
+        () => { this.isInAttack = false; },
+        () => {
+          this.fireSkillProjectile(effect);
+        }
+      );
+    } else {
+      // Melee skill — direct hit detection
+      this.setStance(
+        attackStance,
+        0,
+        true,
+        false,
+        () => { this.isInAttack = false; },
+        async () => {
+          await this.executeSkillDamage(skillId, effect);
+        }
+      );
+    }
   } else if (info.isBuff) {
-    // Buff — already handled in UIHotkeyBar.activateSkill
+    // Buff — apply the buff effect
     if (this.buffManager) {
       this.buffManager.applyBuff(skillId, effect);
     }
+    // Play casting body animation from the skill's WZ action property
+    const castStance = info.action || 'alert2';
+    if (this.baseBody?.[castStance]) {
+      this.isInAttack = true;
+      this.setStance(
+        castStance,
+        0,
+        true,    // play through all frames once
+        false,   // don't oscillate
+        () => { this.isInAttack = false; }, // return to normal on finish
+      );
+    }
   }
+}
+
+/**
+ * Fire a skill projectile using ball sprites from Skill.wz.
+ */
+fireSkillProjectile(effect: any) {
+  const projectile = Projectile.fromSkill({
+    charecter: this,
+    x: this.pos.x,
+    y: this.pos.y - 26,
+    right: this.flipped,
+    ballNode: effect.ballNode,
+    hitNode: effect.hitNode,
+    fixedDamage: effect.fixdamage || 0,
+    targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying) || [],
+    maxDistance: effect.range > 0 ? effect.range : 400,
+  });
+  this.projectiles.push(projectile);
 }
 
 /**
@@ -1757,7 +1834,7 @@ isCloseToMob = (inAllDirections = true) => {
     }
 
     this.projectiles = this.projectiles.filter(
-      (projectile: Projectile) => !projectile.destroyed
+      (projectile: Projectile) => !projectile.isFullyDone()
     );
 
     this.projectiles.forEach((projectile: Projectile) => {

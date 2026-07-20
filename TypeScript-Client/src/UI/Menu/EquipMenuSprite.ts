@@ -7,6 +7,7 @@ import Item from '../../Inventory/Item';
 import getEquipTypeById from '../../Constants/EquipType';
 import { ensureItemNames, getItemNameSync } from '../../Quest/QuestData';
 import DebugDrag from '../DebugDrag';
+import UIDevTools from '../UIDevTools';
 
 // Equipment slot definitions with pixel positions on the 175x304 background
 // Each slot is ~36x36 with 1px borders
@@ -207,6 +208,10 @@ class EquipMenuSprite extends DragableMenu {
 
   draw(canvas: GameCanvas, camera: CameraInterface, _lag: number, _msPerTick: number, _tdelta: number) {
     if (this.isHidden) return;
+
+    const bgW = this.backgroundImage?.width || 175;
+    const bgH = this.backgroundImage?.height || 304;
+    UIDevTools.track('equipWindow', this.x, this.y, bgW, bgH, 'screen', 'UI.wz/UIWindow.img/Equip');
 
     // Draw background
     if (this.backgroundImage) {

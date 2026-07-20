@@ -302,6 +302,11 @@ class MySocket {
     // Save character on page close/refresh
     window.addEventListener('beforeunload', () => {
       this.saveCharacterToServer();
+      // Also save snapshot to sessionStorage for dev auto-login
+      // (synchronous — guaranteed to persist even if WS send fails)
+      if (typeof (window as any).__saveDevSnapshot === 'function') {
+        (window as any).__saveDevSnapshot();
+      }
     });
 
     // Add window error handler to prevent crashes

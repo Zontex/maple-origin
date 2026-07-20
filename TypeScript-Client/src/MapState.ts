@@ -1,4 +1,5 @@
 import MapleMap from "./MapleMap";
+(window as any).__MapleMap = MapleMap;
 import MyCharacter from "./MyCharacter";
 import UIState from './UIState';
 import Camera, { CameraInterface } from "./Camera";
@@ -21,6 +22,7 @@ import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
+import DragManager from "./UI/DragManager";
 
 // henesys 100000000
 // 100020100 - maps with pigs - useful to test fast things with mobs
@@ -250,8 +252,9 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
 
   this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu];
 
-  // Initialize hotkey bar
+  // Initialize hotkey bar (visible by default so players can use skill slots)
   UIHotkeyBar.initialize();
+  UIHotkeyBar.isVisible = true;
   (window as any).__uiHotkeyBar = UIHotkeyBar;
 
   // Close all open UI menus (called when NPC/quest dialogs open)
@@ -464,6 +467,12 @@ MapStateInstance.doUpdate = function (
         UIHotkeyBar.checkKeyActivations(canvas);
       }
 
+      // Process drag and drop
+      const drop = DragManager.update(canvas);
+      if (drop) {
+        UIHotkeyBar.handleDrop(drop);
+      }
+
       MyCharacter.update(msPerTick);
 
       if (!canvas.isKeyDown("up")) {
@@ -592,6 +601,9 @@ MapStateInstance.doRender = function (
     // UIMap draws HUD + cursor
     UIMap.doRender(canvas, camera, lag, msPerTick, tdelta);
   }
+
+  // Drag ghost icon — on top of all UI
+  DragManager.render(canvas);
 
   // Debug drag overlay (F9)
   DebugDrag.drawAll(canvas);

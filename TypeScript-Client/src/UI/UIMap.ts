@@ -8,6 +8,7 @@ import { MapleStanceButton } from "./MapleStanceButton";
 import ClickManager from "./ClickManager";
 import MapState from "../MapState";
 import GameCanvas from "../GameCanvas";
+import UIDevTools from "./UIDevTools";
 
 export interface UIMapInterface {
   statusBarLevelDigits: any[];
@@ -355,6 +356,10 @@ UIMap.drawNumbers = function (canvas, hp, maxHp, mp, maxMp, exp, maxExp) {
 UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   const barY = 529 + startUIPosition.y;
   const bgW = this.statusBg.width || 800;
+
+  UIDevTools.track('statusBar', 0, barY, config.width, config.height - barY, 'screen', 'UI.wz/StatusBar.img');
+  UIDevTools.track('statusBar.bars', 215, 567 + startUIPosition.y, 340, 20, 'screen', 'UI.wz/StatusBar.img/gauge', 'statusBar');
+  UIDevTools.track('statusBar.level', 36, 576 + startUIPosition.y, 40, 14, 'screen', undefined, 'statusBar');
 
   // Draw the left copy normally
   canvas.drawImage({ img: this.statusBg, dx: 0, dy: barY });

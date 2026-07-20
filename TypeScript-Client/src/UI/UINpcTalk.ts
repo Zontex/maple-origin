@@ -7,6 +7,7 @@ import ClickManager from './ClickManager';
 import NpcTalkType from '../Constants/NpcTalkType';
 import {Position} from '../Effects/DamageIndicator';
 import MapleButton from './MapleButton';
+import UIDevTools from './UIDevTools';
 
 /**
  * @todo truncate long name, showing ellipsis
@@ -120,6 +121,10 @@ export default class UINpcTalk {
   ) {
     const leftPadding = 20;
     if (!this.isHidden) {
+      UIDevTools.track('npcDialog', this.x, this.y, this.width, this.height, 'screen', 'UI.wz/UIWindow.img/UtilDlgEx');
+      UIDevTools.track('npcDialog.text', this.x + 166, this.y + 48, this.width - 166 - 20, this.height - 48 - 60, 'screen', undefined, 'npcDialog');
+      UIDevTools.track('npcDialog.speaker', this.x + leftPadding, this.y + (this.top?.nGetImage().height || 0), 120, 120, 'screen', undefined, 'npcDialog');
+
       canvas.drawImage({
         img: this.top?.nGetImage(),
         dx: this.x,

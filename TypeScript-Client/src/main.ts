@@ -10,6 +10,7 @@ import StateManager from "./StateManager";
 import LoginState from "./LoginState";
 import GameCanvas from "./GameCanvas";
 import ClickManager from "./UI/ClickManager";
+import { tryAutoLogin, hasDevSession, saveDevSnapshot } from "./DevAutoLogin";
 
 import config from "./Config";
 
@@ -24,17 +25,24 @@ const startGame = async () => {
     height: config.height,
     color: "#000000",
   });
-  // OS cursor hidden via CSS on #game element
-  // SessionManager is for Cosmic (Java server) via websocat — disabled for Node.js server
-  // if (config.websocketUrl) {
-  //   await SessionManager.initialize(config.websocketUrl);
-  // }
   StateManager.initialize();
   ClickManager.initialize(canvas);
   WZManager.initialize();
   Camera.initialize();
   Timer.initialize();
-  await StateManager.setState(LoginState, canvas);
+
+  // Register snapshot saver for beforeunload (used by mysocket.ts)
+  (window as any).__saveDevSnapshot = saveDevSnapshot;
+
+  // Dev auto-login: skip login screen on HMR reload
+  let autoLoggedIn = false;
+  if (hasDevSession()) {
+    autoLoggedIn = await tryAutoLogin(canvas);
+  }
+
+  if (!autoLoggedIn) {
+    await StateManager.setState(LoginState, canvas);
+  }
 
   let Loop = new GameLoop(canvas);
   Loop.gameLoop();

@@ -10,6 +10,7 @@ import MapleCharacter from "../../MapleCharacter";
 import { CameraInterface } from "../../Camera";
 import GameCanvas from "../../GameCanvas";
 import { Position } from "../../Effects/DamageIndicator";
+import UIDevTools from "../UIDevTools";
 
 class StatsMenuSprite extends DragableMenu {
   opts: any;
@@ -378,6 +379,8 @@ class StatsMenuSprite extends DragableMenu {
         this.loadButtons(canvas);
         this.isNotFirstDraw = true;
       }
+      const rect = this.getRect(camera);
+      UIDevTools.track('statsWindow', rect.x, rect.y, rect.width, rect.height, 'screen', 'UI.wz/UIWindow.img/Stat');
 
       this.generalMenuSprites
         .sort((a, b) => {

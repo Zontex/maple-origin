@@ -359,6 +359,17 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       (MyChar as any)._startPosX = charData.posX;
       (MyChar as any)._startPosY = charData.posY;
 
+      // Save dev session for auto-login on HMR reload
+      try {
+        const { saveDevSession } = await import('../DevAutoLogin');
+        saveDevSession(
+          (uiLoginRef as any)._lastUsername || 'admin',
+          (uiLoginRef as any)._lastPassword || 'admin',
+          uiLoginRef.selectedWorldId || 0,
+          selectedChar._serverId,
+        );
+      } catch {}
+
       await LoginState.enterGame();
     },
   });
@@ -506,6 +517,10 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         this.showNotice(NoticeType.ABNORMAL, NoticeMessage.PASSWORD_IS_INCORRECT);
         return;
       }
+
+      // Save credentials for dev auto-login
+      (uiLoginRef as any)._lastUsername = username;
+      (uiLoginRef as any)._lastPassword = password;
 
       // Login succeeded — proceed to world select
       await LoginState.switchToSubState(LoginSubState.WORLD_SELECT);

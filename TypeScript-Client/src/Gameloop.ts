@@ -3,6 +3,7 @@ import Camera, { CameraInterface } from "./Camera";
 import StateManager from "./StateManager";
 import config from "./Config";
 import GameCanvas from "./GameCanvas";
+import UIDevTools from "./UI/UIDevTools";
 
 class GameLoop {
   fps = 60;
@@ -26,6 +27,7 @@ class GameLoop {
     msPerTick: number,
     tdelta: number
   ) {
+    UIDevTools.beginFrame();
     canvas.drawRect({
       x: 0,
       y: 0,
@@ -34,6 +36,7 @@ class GameLoop {
       color: "#000000",
     });
     StateManager.doRender(canvas, camera, lag, msPerTick, tdelta);
+    UIDevTools.endFrame(canvas);
   }
 
   postRender(canvas: GameCanvas) {

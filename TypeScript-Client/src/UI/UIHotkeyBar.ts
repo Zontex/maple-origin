@@ -4,6 +4,8 @@ import MyCharacter from '../MyCharacter';
 import SkillData, { SkillInfo } from '../Skills/SkillData';
 import WZManager from '../wz-utils/WZManager';
 import PLAY_AUDIO from '../Audio/PlayAudio';
+import config from '../Config';
+import DragManager, { DragType } from './DragManager';
 
 // Hotkey slot definition
 interface HotkeySlot {
@@ -15,28 +17,31 @@ interface HotkeySlot {
 }
 
 // Default quickslot layout — matches common v83 setup
+// 8 slots in a 4×2 grid inside the quickSlot background (151×80)
 const DEFAULT_SLOTS: { key: string; label: string }[] = [
+  // Top row (left to right)
   { key: 'shift', label: 'Shift' },
   { key: 'insert', label: 'Ins' },
   { key: 'delete', label: 'Del' },
   { key: 'home', label: 'Home' },
+  // Bottom row (left to right)
   { key: 'end', label: 'End' },
   { key: 'pageup', label: 'PgUp' },
   { key: 'pagedown', label: 'PgDn' },
   { key: 'f1', label: 'F1' },
-  { key: 'f2', label: 'F2' },
-  { key: 'f3', label: 'F3' },
-  { key: 'f4', label: 'F4' },
-  { key: 'f5', label: 'F5' },
 ];
 
-// Layout
-const SLOT_SIZE = 32;
-const SLOT_PAD = 2;
-const BAR_PAD = 4;
-const SLOTS_PER_ROW = 12;
-const BAR_H = SLOT_SIZE + BAR_PAD * 2;
-const BAR_W = SLOTS_PER_ROW * (SLOT_SIZE + SLOT_PAD) + BAR_PAD * 2 - SLOT_PAD;
+// QuickSlot background layout constants (derived from 151×80 WZ image analysis)
+const QS_W = 151;
+const QS_H = 80;
+const COLS = 4;
+const ROWS = 2;
+// Slot positions inside the quickSlot background (from pixel analysis)
+// Grid borders: x = 7/39-41/74-76/109-111/144, y = 3/38-42/77
+const SLOT_X = [8, 42, 77, 112];        // interior left edge per column
+const SLOT_Y = [4, 43];                  // interior top edge per row
+const SLOT_W = 31;                       // slot interior width
+const SLOT_H = 34;                       // slot interior height
 
 const UIHotkeyBar = {
   slots: [] as HotkeySlot[],
@@ -45,6 +50,13 @@ const UIHotkeyBar = {
   barY: 0,
   previousKeyState: {} as Record<string, boolean>,
   _initialized: false,
+
+  // WZ assets
+  _bgImage: null as HTMLImageElement | null,
+  _coolTimeFrames: [] as HTMLImageElement[],
+  _assetsLoaded: false,
+  // Track which slot a drag originated from (for removing on drop-outside)
+  _dragSourceSlot: -1,
 
   initialize() {
     // Create empty slots with default key bindings
@@ -59,6 +71,40 @@ const UIHotkeyBar = {
     // Initialize previous key state
     for (const slot of this.slots) {
       this.previousKeyState[slot.key] = false;
+    }
+    // Load WZ assets
+    this.loadAssets();
+  },
+
+  async loadAssets() {
+    if (this._assetsLoaded) return;
+    this._assetsLoaded = true;
+
+    try {
+      // QuickSlot background from StatusBar.img
+      const statusBar: any = await WZManager.get('UI.wz/StatusBar.img');
+      if (statusBar) {
+        const qsNode = statusBar.nGet('base')?.nGet('quickSlot');
+        if (qsNode?.nGetImage) {
+          this._bgImage = qsNode.nGetImage() as HTMLImageElement;
+        }
+      }
+
+      // CoolTime overlay frames from UIWindow.img/Skill/CoolTime
+      const skillUI: any = await WZManager.get('UI.wz/UIWindow.img/Skill');
+      if (skillUI) {
+        const ctNode = skillUI.nGet('CoolTime');
+        if (ctNode?.nChildren) {
+          for (let i = 0; i < 16; i++) {
+            const frame = ctNode.nGet(String(i));
+            if (frame?.nGetImage) {
+              this._coolTimeFrames.push(frame.nGetImage() as HTMLImageElement);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[HotkeyBar] Failed to load WZ assets:', e);
     }
   },
 
@@ -113,13 +159,11 @@ const UIHotkeyBar = {
 
     // Check cooldown
     if (sm.isOnCooldown(skillId)) {
-      console.log(`[HotkeyBar] Skill ${skillId} is on cooldown (${Math.ceil(sm.getCooldownRemaining(skillId) / 1000)}s)`);
       return;
     }
 
     // Check MP
     if (effect.mpCon > 0 && MyCharacter.mp < effect.mpCon) {
-      console.log(`[HotkeyBar] Not enough MP for skill ${skillId} (need ${effect.mpCon}, have ${MyCharacter.mp})`);
       return;
     }
 
@@ -152,84 +196,166 @@ const UIHotkeyBar = {
       // Play skill-specific sound and effect animation
       this.playSkillSound(skillId);
       this.playSkillEffect(skillId);
-      console.log(`[HotkeyBar] Activated buff: ${info.name} (${effect.time}s)`);
     }
-
-    console.log(`[HotkeyBar] Used skill: ${info.name} (MP: -${effect.mpCon})`);
   },
 
-  render(canvas: GameCanvas, camera: CameraInterface) {
+  render(canvas: GameCanvas, _camera: CameraInterface) {
     if (!this._initialized || !this.isVisible) return;
 
-    // Position at bottom-center of screen, above status bar
-    const canvasW = (canvas as any).game?.width || 1024;
-    const canvasH = (canvas as any).game?.height || 768;
-    this.barX = Math.floor((canvasW - BAR_W) / 2);
-    this.barY = canvasH - BAR_H - 48; // Above status bar
+    // Position at bottom-right, vertically aligned with status bar top
+    // Status bar starts at config.height - 71
+    this.barX = config.width - QS_W;
+    this.barY = config.height - 71 - QS_H + 9; // overlap slightly into status bar like GMS
 
-    // Semi-transparent bar background
     const ctx = canvas.context;
-    ctx.save();
-    ctx.globalAlpha = 0.7;
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(this.barX, this.barY, BAR_W, BAR_H);
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = '#444466';
-    ctx.strokeRect(this.barX, this.barY, BAR_W, BAR_H);
-    ctx.restore();
 
-    // Draw each slot
+    // Draw WZ quickSlot background
+    if (this._bgImage && this._bgImage.complete && this._bgImage.width > 0) {
+      ctx.drawImage(this._bgImage, this.barX, this.barY);
+    }
+
+    // Draw each slot in the 4×2 grid
     for (let i = 0; i < this.slots.length; i++) {
       const slot = this.slots[i];
-      const sx = this.barX + BAR_PAD + i * (SLOT_SIZE + SLOT_PAD);
-      const sy = this.barY + BAR_PAD;
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+      const sx = this.barX + SLOT_X[col];
+      const sy = this.barY + SLOT_Y[row];
 
-      // Slot background
-      ctx.save();
-      ctx.fillStyle = slot.type !== 'none' ? '#2a2a4a' : '#1a1a2e';
-      ctx.fillRect(sx, sy, SLOT_SIZE, SLOT_SIZE);
-      ctx.strokeStyle = '#555577';
-      ctx.strokeRect(sx, sy, SLOT_SIZE, SLOT_SIZE);
-
-      // Skill icon
+      // Skill icon — centered within the slot
       if (slot.icon && slot.icon.complete && slot.icon.width > 0) {
-        ctx.drawImage(slot.icon, sx, sy, SLOT_SIZE, SLOT_SIZE);
+        const iconSize = 32;
+        const ix = sx + Math.floor((SLOT_W - iconSize) / 2);
+        const iy = sy + Math.floor((SLOT_H - iconSize) / 2);
+        ctx.drawImage(slot.icon, ix, iy, iconSize, iconSize);
       }
 
-      // Cooldown overlay
+      // Cooldown overlay using CoolTime frames
       if (slot.type === 'skill' && MyCharacter.skillManager?.isOnCooldown(slot.actionId)) {
         const remaining = MyCharacter.skillManager.getCooldownRemaining(slot.actionId);
-        ctx.globalAlpha = 0.6;
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(sx, sy, SLOT_SIZE, SLOT_SIZE);
-        ctx.globalAlpha = 1;
-        // Cooldown seconds text
+        const effect = MyCharacter.skillManager.getSkillEffectSync(slot.actionId);
+        const totalMs = ((effect?.cooltime || 1)) * 1000;
+        const ratio = Math.min(1, remaining / totalMs);
+
+        if (this._coolTimeFrames.length > 0) {
+          const frameIdx = Math.min(this._coolTimeFrames.length - 1, Math.floor(ratio * this._coolTimeFrames.length));
+          const cdImg = this._coolTimeFrames[frameIdx];
+          if (cdImg && cdImg.complete && cdImg.width > 0) {
+            ctx.drawImage(cdImg, sx, sy, SLOT_W, SLOT_H);
+          }
+        }
+
+        // Cooldown seconds
         const secs = Math.ceil(remaining / 1000);
+        ctx.save();
         ctx.fillStyle = '#ffffff';
-        ctx.font = '10px Arial';
+        ctx.font = 'bold 11px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText(String(secs), sx + SLOT_SIZE / 2, sy + SLOT_SIZE / 2 + 4);
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(secs), sx + SLOT_W / 2, sy + SLOT_H / 2);
+        ctx.restore();
       }
 
-      // Key label
-      ctx.fillStyle = '#aaaacc';
-      ctx.font = '8px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText(slot.label, sx + SLOT_SIZE / 2, sy + SLOT_SIZE - 2);
+      // Key label — small white text in upper-left corner of slot (like GMS)
+      ctx.save();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '9px Arial';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(slot.label, sx + 1, sy + 1);
       ctx.restore();
     }
+
+    // Initiate drag FROM a hotkey bar slot (to remove it)
+    if (canvas.wasClicked && !DragManager.isDragging) {
+      const clickedSlot = this.getSlotAtMouse(canvas.mouseX, canvas.mouseY);
+      if (clickedSlot >= 0 && this.slots[clickedSlot].type !== 'none' && this.slots[clickedSlot].icon) {
+        this._dragSourceSlot = clickedSlot;
+        DragManager.beginPending(
+          this.slots[clickedSlot].type as DragType,
+          this.slots[clickedSlot].actionId,
+          this.slots[clickedSlot].icon,
+          canvas.mouseX,
+          canvas.mouseY,
+        );
+      }
+    }
+
+  },
+
+  // Find which slot index the mouse is over (-1 if none)
+  getSlotAtMouse(mx: number, my: number): number {
+    for (let i = 0; i < this.slots.length; i++) {
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+      const sx = this.barX + SLOT_X[col];
+      const sy = this.barY + SLOT_Y[row];
+      if (mx >= sx && mx < sx + SLOT_W && my >= sy && my < sy + SLOT_H) {
+        return i;
+      }
+    }
+    return -1;
+  },
+
+  // Handle a drop from DragManager
+  async handleDrop(drop: { type: DragType; id: number; icon: HTMLImageElement | null; mouseX: number; mouseY: number }) {
+    const slotIdx = this.getSlotAtMouse(drop.mouseX, drop.mouseY);
+
+    // If this drag originated from the hotkey bar...
+    const srcSlot = this._dragSourceSlot;
+    this._dragSourceSlot = -1;
+    if (srcSlot >= 0) {
+      if (slotIdx >= 0 && slotIdx !== srcSlot) {
+        // Dropped on another slot — move source to target, swap if target occupied
+        const srcData = { type: this.slots[srcSlot].type, actionId: this.slots[srcSlot].actionId, icon: this.slots[srcSlot].icon };
+        const dstData = { type: this.slots[slotIdx].type, actionId: this.slots[slotIdx].actionId, icon: this.slots[slotIdx].icon };
+        // Put source skill into target slot
+        this.slots[slotIdx].type = srcData.type;
+        this.slots[slotIdx].actionId = srcData.actionId;
+        this.slots[slotIdx].icon = srcData.icon;
+        // Put target's old content (or empty) into source slot
+        this.slots[srcSlot].type = dstData.type;
+        this.slots[srcSlot].actionId = dstData.actionId;
+        this.slots[srcSlot].icon = dstData.icon;
+      } else if (slotIdx < 0) {
+        // Dropped outside the bar — remove from slot
+        this.clearSlot(srcSlot);
+      }
+      return;
+    }
+
+    // External drop (from skill menu or inventory)
+    if (slotIdx < 0) return;
+    if (drop.type === 'skill') {
+      await this.assignSkill(slotIdx, drop.id);
+    } else if (drop.type === 'item') {
+      // Only allow Use items (potions, food — category 2: IDs 2000000-2999999)
+      const category = Math.floor(drop.id / 1000000);
+      if (category === 2) {
+        this.assignItem(slotIdx, drop.id, drop.icon);
+      }
+    }
+  },
+
+  // Assign an item to a hotkey slot
+  assignItem(slotIndex: number, itemId: number, icon: HTMLImageElement | null) {
+    if (slotIndex < 0 || slotIndex >= this.slots.length) return;
+    this.slots[slotIndex] = {
+      ...this.slots[slotIndex],
+      type: 'item',
+      actionId: itemId,
+      icon: icon,
+    };
   },
 
   async playSkillSound(skillId: number) {
     try {
-      // Pad skill ID to match WZ key format (e.g. 1002 → "0001002")
       const paddedSkillId = String(skillId).padStart(7, '0');
       const soundNode = await WZManager.get('Sound.wz/Skill.img');
       if (soundNode) {
         let skillSound = (soundNode as any).nGet?.(paddedSkillId);
         if (skillSound?.nChildren?.length > 0) {
           let useNode = skillSound.nChildren[0];
-          // Resolve UOL references
           if (useNode.nTagName === 'uol') {
             useNode = useNode.nResolveUOL();
           }
@@ -244,7 +370,6 @@ const UIHotkeyBar = {
 
   async playSkillEffect(skillId: number) {
     try {
-      // Load effect animation from Skill.wz/{jobFile}.img/skill/{skillId}/effect
       const jobFileId = Math.floor(skillId / 10000);
       const paddedJobId = String(jobFileId).padStart(3, '0');
       const skillNode = await WZManager.get(`Skill.wz/${paddedJobId}.img`);

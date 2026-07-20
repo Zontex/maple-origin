@@ -13,6 +13,8 @@ import UIMesoDropDialog from "../UIMesoDropDialog";
 import QuestData from "../../Quest/QuestData";
 import PLAY_AUDIO from "../../Audio/PlayAudio";
 import { ensureItemNames, getItemNameSync, getItemDescSync } from "../../Quest/QuestData";
+import DragManager from '../DragManager';
+import UIDevTools from "../UIDevTools";
 import mySocket from "../../mysocket";
 import { getEquipSlotForItem } from "./EquipMenuSprite";
 
@@ -729,12 +731,19 @@ class InventoryMenuSprite extends DragableMenu {
     this.dragStartY = startY;
 
     // Get item icon for canvas rendering
+    let iconImg: HTMLImageElement | null = null;
     try {
       if (item.node?.iconRaw) {
-        this.draggingIcon = item.node.iconRaw.nGetImage();
+        iconImg = item.node.iconRaw.nGetImage();
+        this.draggingIcon = iconImg;
       }
     } catch (e) {
       this.draggingIcon = null;
+    }
+
+    // Also register with global DragManager for hotkey bar drops
+    if (iconImg) {
+      DragManager.beginPending('item', item.itemId, iconImg, startX, startY);
     }
 
     // Listen for mouse up on the canvas element
@@ -753,7 +762,15 @@ class InventoryMenuSprite extends DragableMenu {
       // Only consider it a drag-drop if mouse moved at least 10px from start
       const dragDist = Math.sqrt((mouseX - startX) ** 2 + (mouseY - startY) ** 2);
       if (dragDist < 10) {
-        // Was just a click, not a drag — do nothing (double-click handled separately)
+        this.draggingItem = null;
+        this.draggingIcon = null;
+        this.draggingSlotIndex = -1;
+        return;
+      }
+
+      // If DragManager is active, let it handle the drop (e.g., onto hotkey bar)
+      // Don't show the item drop dialog in that case
+      if (DragManager.isDragging) {
         this.draggingItem = null;
         this.draggingIcon = null;
         this.draggingSlotIndex = -1;
@@ -790,6 +807,8 @@ class InventoryMenuSprite extends DragableMenu {
 
   // Draw the dragged item icon at cursor position (called from draw method)
   drawDragIcon(canvas: GameCanvas) {
+    // DragManager handles the ghost icon when drag threshold is met
+    if (DragManager.isDragging) return;
     if (!this.isDragging || !this.draggingIcon) return;
 
     const mouseX = canvas.mouseX;
@@ -1212,6 +1231,8 @@ class InventoryMenuSprite extends DragableMenu {
       this.loadButtons(canvas);
       this.isNotFirstDraw = true;
     }
+    const rect = this.getRect(camera);
+    UIDevTools.track('inventory', rect.x, rect.y, rect.width, rect.height, 'screen', 'UI.wz/UIWindow.img/Item');
     this.drawBackground(canvas);
     this.drawItems(canvas);
     this.drawScrollbar(canvas);

@@ -5,6 +5,9 @@ class GameCanvas {
   mouseY;
   clicked;
   wasClicked;
+  wasMouseUp;
+  mouseDownX;
+  mouseDownY;
   rightClicked;
   focusGame;
   focusInput;
@@ -23,6 +26,9 @@ class GameCanvas {
     this.mouseY = 0;
     this.clicked = false;
     this.wasClicked = false;
+    this.wasMouseUp = false;
+    this.mouseDownX = 0;
+    this.mouseDownY = 0;
     this.rightClicked = false;
     this.focusGame = false;
     this.focusInput = false;
@@ -135,6 +141,8 @@ class GameCanvas {
       if (e.which === 1) {
         this.clicked = true;
         this.wasClicked = true;
+        this.mouseDownX = this.mouseX;
+        this.mouseDownY = this.mouseY;
       } else if (e.which === 3) {
         this.rightClicked = true;
       }
@@ -142,6 +150,7 @@ class GameCanvas {
     this.game.addEventListener("mouseup", (e) => {
       if (e.which === 1) {
         this.clicked = false;
+        this.wasMouseUp = true;
       } else if (e.which === 3) {
         this.rightClicked = false;
       }
@@ -188,6 +197,7 @@ class GameCanvas {
     this.scrolledUp = false;
     this.scrolledDown = false;
     this.wasClicked = false;
+    this.wasMouseUp = false;
   }
   releaseFocusInput() {
     this.pressedKeys[this.keys.enter] = false;

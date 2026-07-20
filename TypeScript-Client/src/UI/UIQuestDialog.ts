@@ -7,6 +7,7 @@ import QuestData, { QuestDialogue, ensureItemNames, ensureMapNames, resolveItemC
 import type { ScriptDialogType } from '../Quest/QuestScriptEngine';
 import type { SelectionOption } from '../NpcScriptEngine';
 import config from '../Config';
+import UIDevTools from './UIDevTools';
 
 // UtilDlgEx known dimensions
 const DIALOG_WIDTH = 529;
@@ -591,6 +592,9 @@ export default class UIQuestDialog {
 
     // Store canvas ref for text measurement
     if (!this.measureCanvas) this.measureCanvas = canvas;
+
+    const totalH = TOP_H + this.fillCount * FILL_H + BOTTOM_H;
+    UIDevTools.track('questDialog', this.x, this.y, DIALOG_WIDTH, totalH, 'screen', 'UI.wz/UIWindow.img/UtilDlgEx');
 
     let y = this.y;
 

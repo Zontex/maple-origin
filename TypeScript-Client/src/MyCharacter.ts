@@ -17,11 +17,11 @@ const MyCharacter = new MapleCharacter({
   exp: 0,          // starting experience
   fame: 0,         // starting fame
   inventory: new Inventory({
-    mesos: 20000,    // starting mesos
+    mesos: 0,
   }),
   stats: new Stats({
-    str: 12,
-    dex: 5,
+    str: 4,
+    dex: 4,
     int: 4,
     luk: 4,
     abilityPoints: 0,

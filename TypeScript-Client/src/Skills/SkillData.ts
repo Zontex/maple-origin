@@ -27,6 +27,9 @@ export interface SkillLevelEffect {
   hp: number;
   mp: number;
   damagepc: number;
+  // WZ nodes for skill projectile and hit effect (stored per-level for skills like Three Snails)
+  ballNode: any;
+  hitNode: any;
 }
 
 export interface SkillInfo {
@@ -44,6 +47,7 @@ export interface SkillInfo {
   invisible: boolean;
   effects: SkillLevelEffect[];
   helpStrings: Map<string, string>;
+  action: string | null; // Body stance to play (e.g., 'alert2', 'alert4') from WZ action node
 }
 
 const LEVEL_EFFECT_FIELDS: (keyof SkillLevelEffect)[] = [
@@ -61,6 +65,7 @@ function emptyEffect(): SkillLevelEffect {
     speed: 0, jump: 0, range: 0, cooltime: 0, fixdamage: 0,
     mobCount: 1, attackCount: 1, bulletCount: 0, bulletConsume: 0,
     hp: 0, mp: 0, damagepc: 0,
+    ballNode: null, hitNode: null,
   };
 }
 
@@ -117,11 +122,18 @@ function parseLevelEffect(levelNode: any): SkillLevelEffect {
   if (!levelNode?.nChildren) return effect;
 
   for (const child of levelNode.nChildren) {
-    const key = child.nName as keyof SkillLevelEffect;
-    if (LEVEL_EFFECT_FIELDS.includes(key)) {
-      const val = child.nValue;
-      if (val !== undefined && val !== null) {
-        (effect as any)[key] = typeof val === 'number' ? val : parseFloat(String(val)) || 0;
+    const name = child.nName;
+    if (name === 'ball') {
+      effect.ballNode = child;
+    } else if (name === 'hit') {
+      effect.hitNode = child;
+    } else {
+      const key = name as keyof SkillLevelEffect;
+      if (LEVEL_EFFECT_FIELDS.includes(key)) {
+        const val = child.nValue;
+        if (val !== undefined && val !== null) {
+          (effect as any)[key] = typeof val === 'number' ? val : parseFloat(String(val)) || 0;
+        }
       }
     }
   }
@@ -135,6 +147,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   let hasBall = false;
   let hasEffect = false;
   let invisible = false;
+  let actionStance: string | null = null;
 
   let icon: HTMLImageElement | null = null;
   let iconMouseOver: HTMLImageElement | null = null;
@@ -144,14 +157,19 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   for (const child of skillNode.nChildren || []) {
     const name = child.nName;
 
-    if (name === 'icon' && child.nTagName === 'canvas') {
+    if (name === 'icon' && child.nTagName === 'canvas' && child.nGetImage) {
       icon = child.nGetImage() as HTMLImageElement;
-    } else if (name === 'iconMouseOver' && child.nTagName === 'canvas') {
+    } else if (name === 'iconMouseOver' && child.nTagName === 'canvas' && child.nGetImage) {
       iconMouseOver = child.nGetImage() as HTMLImageElement;
-    } else if (name === 'iconDisabled' && child.nTagName === 'canvas') {
+    } else if (name === 'iconDisabled' && child.nTagName === 'canvas' && child.nGetImage) {
       iconDisabled = child.nGetImage() as HTMLImageElement;
     } else if (name === 'action') {
       hasAction = true;
+      // Read the stance name from the action node (e.g., action/0 = "alert2")
+      const firstAction = child.nGet?.('0');
+      if (firstAction?.nValue) {
+        actionStance = String(firstAction.nValue);
+      }
     } else if (name === 'hit') {
       hasHit = true;
     } else if (name === 'ball') {
@@ -211,6 +229,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     invisible,
     effects,
     helpStrings: skillHelp.get(skillId) || new Map(),
+    action: actionStance,
   };
 }
 
@@ -233,11 +252,15 @@ async function loadJobFile(jobFileId: number): Promise<void> {
       const skillId = parseInt(skillNode.nName);
       if (isNaN(skillId)) continue;
 
-      const info = parseSkillNode(skillNode, skillId);
-      skillCache.set(skillId, info);
+      try {
+        const info = parseSkillNode(skillNode, skillId);
+        skillCache.set(skillId, info);
+      } catch (e) {
+        console.warn(`[SkillData] Failed to parse skill ${skillId}:`, e);
+      }
     }
 
-    console.log(`[SkillData] Loaded job file ${jobFileId} (${(skillDir as any).nChildren.length} skills)`);
+    console.log(`[SkillData] Loaded job file ${jobFileId} (${skillCache.size} skills cached)`);
   } catch (e) {
     console.warn(`[SkillData] Could not load Skill.wz/${jobFileId}.img:`, e);
   }

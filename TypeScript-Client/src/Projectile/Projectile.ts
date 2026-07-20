@@ -42,6 +42,16 @@ class Projectile {
   nextDelay: number = 0;
   flipped: boolean = false;
   dying: boolean = false;
+  // Skill projectile fields
+  fixedDamage: number = 0;
+  hitNode: any = null;
+  // Hit effect animation (plays at impact point after hitting target)
+  hitEffectFrames: any[] | null = null;
+  hitEffectFrame: number = 0;
+  hitEffectDelay: number = 0;
+  hitEffectActive: boolean = false;
+  hitEffectX: number = 0;
+  hitEffectY: number = 0;
 
   // needed to enable await on constructor
   static async fromOpts(opts: any) {
@@ -49,6 +59,49 @@ class Projectile {
     await projectile.load();
     return projectile;
   }
+
+  // Create a skill projectile from pre-loaded WZ ball node (no async WZ fetch needed)
+  static fromSkill(opts: {
+    charecter: MapleCharacter;
+    x: number;
+    y: number;
+    right: boolean;
+    ballNode: any;
+    hitNode?: any;
+    fixedDamage: number;
+    targetMonsters: Monster[];
+    maxDistance?: number;
+  }): Projectile {
+    const p = new Projectile({});
+    p.charecter = opts.charecter;
+    p.pos = new ProjectilePhysics({
+      x: opts.x,
+      y: opts.y,
+      right: opts.right,
+      left: !opts.right,
+    });
+    p.originX = opts.x;
+    p.originY = opts.y;
+    p.maxDistance = opts.maxDistance || 400;
+    p.isMovementEnabled = true;
+    p.destroyed = false;
+    p.targetMonsters = opts.targetMonsters;
+    p.willHitkill = false;
+    p.lastPositionCenter = { x: opts.x, y: opts.y };
+    p.fixedDamage = opts.fixedDamage;
+    p.hitNode = opts.hitNode || null;
+
+    // Use the skill's ball WZ node directly as the sprite source
+    p.stance = opts.ballNode;
+    p.frame = 0;
+    p.delay = 0;
+    const firstFrame = opts.ballNode.nChildren?.[0];
+    p.nextDelay = firstFrame?.nGet?.('delay')?.nValue ?? 90;
+
+    p.findTargetForSkill();
+    return p;
+  }
+
   constructor(opts: any) {
     this.opts = opts;
   }
@@ -76,21 +129,56 @@ class Projectile {
     this.weaponAttackRange = opts.weaponAttackRange || 0;
     this.finalDamangeAfterTargetDefense = 0;
 
-    // this.pos.jump();
-    // this.pos.left = true;
-
     let strId = `${this.id}`.padStart(8, "0");
     const idFirst4digits = strId.slice(0, 4);
     let projectileFile: any = await WZManager.get(
       `${WZFiles.Item}/Consume/${idFirst4digits}.img/${strId}`
     );
-    // console.log("projectileFile", projectileFile);
-    // this.weaponAttack = projectileFile.info.incPAD.nValue;
 
     this.stance = projectileFile.bullet;
     this.setFrame(projectileFile.bullet, 0);
 
     this.checkIfFindTarget();
+  }
+
+  // Target finding for skill projectiles — uses fixed damage instead of weapon calc
+  findTargetForSkill() {
+    const targetsInRange = this.targetMonsters.filter((monster: Monster) => {
+      return this.pos!.isWithinRange(
+        monster.centerPosition,
+        default_target_angle,
+        this.maxDistance
+      );
+    });
+
+    if (targetsInRange.length === 0) return;
+
+    let closestDistance = this.maxDistance + 1;
+    let closestMonster = null;
+    for (const monster of targetsInRange) {
+      const distance = this.pos!.distanceTo(monster.centerPosition);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestMonster = monster;
+      }
+    }
+
+    this.target = closestMonster;
+    this.pos!.setTarget(
+      closestMonster.centerPosition.x,
+      closestMonster.centerPosition.y
+    );
+
+    this.finalDamangeAfterTargetDefense = this.fixedDamage;
+
+    this.willHitkill = this.target!.willHitkill(this.fixedDamage);
+    if (this.willHitkill) {
+      this.target!.hit(
+        this.fixedDamage,
+        this.pos!.x < this.target!.centerPosition.x ? 1 : -1,
+        this.charecter
+      );
+    }
   }
 
   checkIfFindTarget() {
@@ -104,7 +192,7 @@ class Projectile {
 
     if (targetsInRange.length > 0) {
       // Find the closest target among those in range
-      let closestDistance = this.maxDistance + 1; // Initialize with a value greater than
+      let closestDistance = this.maxDistance + 1;
       let closestMonster = null;
 
       for (const monster of targetsInRange) {
@@ -149,7 +237,7 @@ class Projectile {
           this.charecter
         );
       } else {
-        // will happned when projectile hit the mob
+        // will happen when projectile hits the mob
       }
     } else {
       console.log("no target found");
@@ -181,6 +269,24 @@ class Projectile {
     this.destroyed = true;
   }
 
+  startHitEffect() {
+    if (!this.hitNode?.nChildren) return;
+    // Hit node structure: hit/0/{0,1,2,3,4,5} — first child is the frame set
+    const frameSet = this.hitNode.nChildren[0];
+    if (!frameSet?.nChildren || frameSet.nChildren.length === 0) return;
+    this.hitEffectFrames = frameSet.nChildren;
+    this.hitEffectFrame = 0;
+    this.hitEffectDelay = 0;
+    this.hitEffectActive = true;
+    this.hitEffectX = this.pos!.x;
+    this.hitEffectY = this.pos!.y;
+  }
+
+  // Returns true if projectile can be fully removed (no pending animations)
+  isFullyDone(): boolean {
+    return this.destroyed && !this.hitEffectActive;
+  }
+
   checkForHittingTarget() {
     if (!this.target) {
       return;
@@ -196,9 +302,6 @@ class Projectile {
     const isHit = isPositionInsideRect(this.pos!, targetRect);
 
     if (isHit) {
-      // todo:
-      // 1. add hit effect (cloud not find it yet)
-
       if (!this.willHitkill) {
         this.target.hit(
           this.finalDamangeAfterTargetDefense,
@@ -206,13 +309,30 @@ class Projectile {
           this.charecter
         );
       }
+      // Start skill hit effect animation if available
+      this.startHitEffect();
+      this.isMovementEnabled = false;
       this.destroy();
-    } else {
-      // console.log("not hit target", this.lastPositionCenter, targetRect);
     }
   }
 
   update(msPerTick: number) {
+    // Update hit effect animation (runs even after projectile is destroyed)
+    if (this.hitEffectActive && this.hitEffectFrames) {
+      this.hitEffectDelay += msPerTick;
+      const curFrame = this.hitEffectFrames[this.hitEffectFrame];
+      const frameDelay = curFrame?.nGet?.('delay')?.nValue ?? 100;
+      if (this.hitEffectDelay > frameDelay) {
+        this.hitEffectDelay -= frameDelay;
+        this.hitEffectFrame++;
+        if (this.hitEffectFrame >= this.hitEffectFrames.length) {
+          this.hitEffectActive = false;
+        }
+      }
+    }
+
+    if (this.destroyed) return;
+
     this.delay += msPerTick;
 
     if (this.delay > this.nextDelay) {
@@ -223,8 +343,6 @@ class Projectile {
       }
       this.setFrame(this.stance, this.frame + 1, this.delay - this.nextDelay);
     }
-
-    // console.log(minX, maxX, this.pos.x, this.pos.y);
 
     if (this.isMovementEnabled) {
       this.pos!.update(msPerTick);
@@ -246,23 +364,38 @@ class Projectile {
     msPerTick: number,
     tdelta: number
   ) {
+    // Draw hit effect animation (plays even after projectile ball is destroyed)
+    if (this.hitEffectActive && this.hitEffectFrames) {
+      const hFrame = this.hitEffectFrames[this.hitEffectFrame];
+      if (hFrame?.nGetImage) {
+        const hImg = hFrame.nGetImage();
+        if (hImg && hImg instanceof HTMLImageElement && hImg.complete && hImg.width > 0) {
+          const ox = hFrame.origin?.nX ?? hFrame.nGet?.('origin')?.nGet?.('nX', 0) ?? 0;
+          const oy = hFrame.origin?.nY ?? hFrame.nGet?.('origin')?.nGet?.('nY', 0) ?? 0;
+          canvas.drawImage({
+            img: hImg,
+            dx: this.hitEffectX - ox - camera.x,
+            dy: this.hitEffectY - oy - camera.y,
+          });
+        }
+      }
+    }
+
+    // Don't draw the ball sprite if destroyed
+    if (this.destroyed) return;
+
     if (this.pos!.vx > 0) {
       this.flipped = true;
     } else if (this.pos!.vx < 0) {
       this.flipped = false;
     }
     const currentFrame = this.stance.nChildren[this.frame];
+    if (!currentFrame) return;
     const currentImage = currentFrame.nGetImage();
-
-    const originX = currentFrame.nGet("origin").nGet("nX", 0);
-    const originY = currentFrame.nGet("origin").nGet("nY", 0);
-
-    const adjustX = !this.flipped ? originX : currentFrame.nWidth - originX;
 
     const angle = this.flipped
       ? this.pos!.getNormalAngle()
       : this.pos!.getNormalAngle() + 180;
-    // console.log(angle);
 
     canvas.drawImage({
       img: currentImage,

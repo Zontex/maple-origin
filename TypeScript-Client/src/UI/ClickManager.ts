@@ -5,6 +5,7 @@ import GUIUtil from "../GuiUtils";
 import GameCanvas from "../GameCanvas";
 import MapleButton from "./MapleButton";
 import DragableMenu from "./Menu/DragableMenu";
+import DragManager from "./DragManager";
 import { CameraInterface } from "../Camera";
 
 export interface ClickManagerInterface {
@@ -183,7 +184,7 @@ ClickManager.doUpdate = function (msPerTick: number, camera: CameraInterface) {
                 clickedOnThisUpdate &&
                 clickedOnLastUpdate &&
                 this.lastClickedMenuPosition &&
-                !this.isDraggingItem // Don't move menu when dragging an item
+                !this.isDraggingItem && !DragManager.isDragging // Don't move menu when dragging
               ) {
                 // move menu to current mouse position - original mouse position
                 const deltaX = mousePoint.x - this.lastClickedMenuPosition.x;
