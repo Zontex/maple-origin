@@ -112,19 +112,12 @@ class StatsMenuSprite extends DragableMenu {
       y: this.y + 36,
     });
 
+    // Single job display name (GMS shows e.g. "Beginner", "Fighter")
     canvas.drawText({
-      text: this.charecter!.stats.jobType,
+      text: this.charecter!.stats.job,
       color: "#000000",
       x: this.x + 60,
       y: this.y + 52,
-    });
-
-    canvas.drawText({
-      text: `[${this.charecter!.stats.job}]`,
-      color: "#000000",
-      fontSize: 10,
-      x: this.x + 60,
-      y: this.y + 64,
     });
 
     canvas.drawText({
