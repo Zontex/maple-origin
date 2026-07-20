@@ -267,7 +267,8 @@ const ShopUI: any = {
       return;
     }
 
-    this.getQuantityDialog().show(maxQty, async (amount: number) => {
+    const buyDialog = await this.getQuantityDialog();
+    buyDialog.show(maxQty, async (amount: number) => {
       if (amount <= 0) return;
       const cost = item.price * amount;
       if (character.inventory.mesos < cost) return;
@@ -297,7 +298,8 @@ const ShopUI: any = {
     }
 
     if (item.quantity > 1) {
-      this.getQuantityDialog().show(item.quantity, (amount: number) => {
+      const sellDialog = await this.getQuantityDialog();
+      sellDialog.show(item.quantity, (amount: number) => {
         if (amount <= 0) return;
         character.inventory.gainMesos(item.sellPrice * amount);
         character.inventory.removeFromInventory(item.itemId, amount);
@@ -346,11 +348,14 @@ const ShopUI: any = {
   },
 
   _quantityDialog: null as any,
-  getQuantityDialog() {
+  _quantityDialogReady: null as Promise<void> | null,
+  async getQuantityDialog() {
     if (!this._quantityDialog) {
       this._quantityDialog = new UIMesoDropDialog({ canvas: this.canvas });
-      this._quantityDialog.load?.();
+      this._quantityDialogReady = this._quantityDialog.load();
     }
+    // WZ assets must be loaded before show() builds its buttons
+    if (this._quantityDialogReady) await this._quantityDialogReady;
     return this._quantityDialog;
   },
 
