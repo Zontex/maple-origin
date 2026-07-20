@@ -202,7 +202,7 @@ class Character {
         level = ?, exp = ?, str = ?, dex = ?, int = ?, luk = ?, ap = ?, sp = ?,
         hp = ?, max_hp = ?, mp = ?, max_mp = ?,
         job_id = ?, map_id = ?, pos_x = ?, pos_y = ?,
-        mesos = ?, fame = ?
+        mesos = ?, fame = ?, hair = ?, face = ?, skin = ?
       WHERE id = ?
     `);
 
@@ -218,7 +218,7 @@ class Character {
 
     const deleteQuests = db.prepare('DELETE FROM quests WHERE character_id = ?');
     const insertQuest = db.prepare(
-      'INSERT INTO quests (character_id, quest_id, state, mob_progress) VALUES (?, ?, ?, ?)'
+      'INSERT INTO quests (character_id, quest_id, state, mob_progress, completed_at) VALUES (?, ?, ?, ?, ?)'
     );
 
     const deleteSkills = db.prepare('DELETE FROM skills WHERE character_id = ?');
@@ -249,6 +249,7 @@ class Character {
         data.jobId ?? current.job_id, data.mapId ?? current.map_id,
         data.posX ?? current.pos_x, data.posY ?? current.pos_y,
         data.mesos ?? current.mesos, data.fame ?? current.fame,
+        data.hair ?? current.hair, data.face ?? current.face, data.skin ?? current.skin,
         characterId
       );
 
@@ -278,7 +279,7 @@ class Character {
       if (data.quests) {
         deleteQuests.run(characterId);
         for (const q of data.quests) {
-          insertQuest.run(characterId, q.questId, q.state, q.mobProgress || '{}');
+          insertQuest.run(characterId, q.questId, q.state, q.mobProgress || '{}', q.completedAt ?? null);
         }
       }
 

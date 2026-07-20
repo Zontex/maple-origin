@@ -8,7 +8,8 @@ export interface ActiveQuest {
 
 export default class QuestManager {
   activeQuests: Map<number, ActiveQuest> = new Map();
-  completedQuests: Set<number> = new Set();
+  // questId -> completion timestamp (ms) — needed for INTERVAL repeatables
+  completedQuests: Map<number, number> = new Map();
   private character: MapleCharacter;
 
   constructor(character: MapleCharacter) {
@@ -26,11 +27,18 @@ export default class QuestManager {
   }
 
   canStartQuest(questId: number): boolean {
-    // Already started or completed
-    if (this.activeQuests.has(questId) || this.completedQuests.has(questId)) return false;
+    if (this.activeQuests.has(questId)) return false;
 
     const reqs = QuestData.requirements.get(questId);
     if (!reqs) return false;
+
+    // Completed quests can restart only if an INTERVAL (minutes) has elapsed
+    const completedAt = this.completedQuests.get(questId);
+    if (completedAt !== undefined) {
+      const interval = reqs.start.interval;
+      if (!interval || interval <= 0) return false;
+      if (Date.now() - completedAt < interval * 60 * 1000) return false;
+    }
 
     // Script-based quests are handled by QuestScriptEngine, not canStartQuest
     if (reqs.start.startscript || reqs.complete.endscript) return false;
@@ -83,6 +91,9 @@ export default class QuestManager {
   startQuest(questId: number): boolean {
     if (!this.canStartQuest(questId)) return false;
 
+    // Repeatable quest restarting — clear the previous completion record
+    this.completedQuests.delete(questId);
+
     const reqs = QuestData.requirements.get(questId);
     const active: ActiveQuest = {
       questId,
@@ -119,10 +130,22 @@ export default class QuestManager {
           }
         }
       }
+      this.applySkillRewards(r.skills);
     }
 
     console.log(`Quest started: ${QuestData.quests.get(questId)?.name} (#${questId})`);
     return true;
+  }
+
+  // Learn quest-granted skills whose job list matches (empty list = any job)
+  private applySkillRewards(skills?: { id: number; skillLevel: number; masterLevel: number; jobs: number[] }[]) {
+    if (!skills) return;
+    const jobId = this.character.stats.jobId;
+    for (const skill of skills) {
+      if (skill.jobs.length > 0 && !skill.jobs.includes(jobId)) continue;
+      this.character.skillManager?.changeSkillLevel(skill.id, skill.skillLevel, skill.masterLevel);
+      console.log(`Quest reward: skill #${skill.id} level ${skill.skillLevel}`);
+    }
   }
 
   completeQuest(questId: number, pickedPropItemId?: number): boolean {
@@ -160,11 +183,12 @@ export default class QuestManager {
         // Pick one from prop items — use pre-selected item from dialog if available
         if (propItems.length > 0) {
           const picked = (pickedPropItemId && propItems.find(i => i.id === pickedPropItemId))
-            || propItems[Math.floor(Math.random() * propItems.length)];
+            || QuestManager.pickWeightedPropItem(propItems);
           this.character.inventory.addToInventory(picked.id, picked.count);
           console.log(`Quest reward (random): +${picked.count}x item #${picked.id} (from ${propItems.length} options)`);
         }
       }
+      this.applySkillRewards(r.skills);
     }
 
     // Remove consumed items from completion requirements
@@ -177,7 +201,7 @@ export default class QuestManager {
 
     // Move from active to completed
     this.activeQuests.delete(questId);
-    this.completedQuests.add(questId);
+    this.completedQuests.set(questId, Date.now());
     this.character.playQuestClear();
 
     const questName = QuestData.quests.get(questId)?.name || questId;
@@ -214,12 +238,23 @@ export default class QuestManager {
     console.log(`Quest force-started: ${QuestData.quests.get(questId)?.name} (#${questId})${savedMobProgress ? ' (restored)' : ''}`);
   }
 
-  // Force complete a quest (used by script engine — bypasses requirement checks)
-  forceCompleteQuest(questId: number): void {
+  // Force complete a quest (used by script engine and DB restore — bypasses checks)
+  forceCompleteQuest(questId: number, completedAt?: number): void {
     this.activeQuests.delete(questId);
-    this.completedQuests.add(questId);
-    this.character.playQuestClear();
+    this.completedQuests.set(questId, completedAt ?? Date.now());
+    if (completedAt === undefined) this.character.playQuestClear();
     console.log(`Quest force-completed: ${QuestData.quests.get(questId)?.name} (#${questId})`);
+  }
+
+  // Cosmic-style weighted pick: roll against the sum of prop weights
+  static pickWeightedPropItem<T extends { prop?: number }>(propItems: T[]): T {
+    const total = propItems.reduce((sum, i) => sum + (i.prop || 1), 0);
+    let roll = Math.random() * total;
+    for (const item of propItems) {
+      roll -= item.prop || 1;
+      if (roll <= 0) return item;
+    }
+    return propItems[propItems.length - 1];
   }
 
   forfeitQuest(questId: number): void {
@@ -316,16 +351,18 @@ export default class QuestManager {
   }
 
   private meetsRequirement(req: QuestRequirement): boolean {
-    // Time-limited quest check — filter out expired event quests
-    if (req.endDate) {
-      // WZ format: YYYYMMDDHH (e.g., "2010012000" = Jan 20 2010 00:00)
-      const y = parseInt(req.endDate.slice(0, 4));
-      const m = parseInt(req.endDate.slice(4, 6)) - 1;
-      const d = parseInt(req.endDate.slice(6, 8));
-      const h = parseInt(req.endDate.slice(8, 10)) || 0;
-      const endTime = new Date(y, m, d, h).getTime();
-      if (Date.now() > endTime) return false;
-    }
+    // Parse a WZ YYYYMMDDHH timestamp
+    const wzTime = (s: string) => {
+      const y = parseInt(s.slice(0, 4));
+      const m = parseInt(s.slice(4, 6)) - 1;
+      const d = parseInt(s.slice(6, 8));
+      const h = parseInt(s.slice(8, 10)) || 0;
+      return new Date(y, m, d, h).getTime();
+    };
+
+    // Availability window — not yet open or already expired
+    if (req.startDate && Date.now() < wzTime(req.startDate)) return false;
+    if (req.endDate && Date.now() > wzTime(req.endDate)) return false;
 
     // Level check
     if (req.lvmin && this.character.stats.level < req.lvmin) return false;
@@ -344,8 +381,17 @@ export default class QuestManager {
       if (!req.jobs.includes(this.character.stats.jobId)) return false;
     }
 
-    // Skip item check for now — equip items (1xxxxxx) use Character.wz, not Item.wz,
-    // and can't be reliably tracked in client-side inventory yet.
+    // Required items in inventory (count 0 = must NOT have the item)
+    if (req.items) {
+      for (const item of req.items) {
+        const count = this.getItemCount(item.id);
+        if (item.count > 0 && count < item.count) return false;
+        if (item.count === 0 && count > 0) return false;
+      }
+    }
+
+    // Required mesos
+    if (req.meso && (this.character.inventory?.mesos ?? 0) < req.meso) return false;
 
     return true;
   }

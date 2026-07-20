@@ -2,8 +2,11 @@ import QuestData, { npcNames, mobNames } from './QuestData';
 import { QuestState } from './QuestData';
 import WZManager from '../wz-utils/WZManager';
 import { fadeToBlack } from '../MapState';
+import { makeSafeScriptApi } from '../NpcScriptEngine';
 
-export type ScriptDialogType = 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple';
+export type ScriptDialogType =
+  | 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple'
+  | 'getText' | 'getNumber';
 
 export interface InlineImage {
   wzPath: string;   // WZ path for #f codes, or item icon path for #v codes
@@ -278,8 +281,23 @@ export default class QuestScriptEngine {
       setQuestProgress(questId: number, progress: string) { /* TODO */ },
       getQuestProgress(questId: number) { return ''; },
       getEventManager(name: string) { return null; },
+      getQuestStatus(questId: number) {
+        return character?.questManager?.getQuestState(questId) ?? 0;
+      },
+      removeAll(itemId: number) {
+        const qmgr = character?.questManager;
+        const count = qmgr?.getItemCount(itemId) ?? 0;
+        if (count > 0) qmgr?.removeItems(itemId, count);
+      },
+      itemQuantity(itemId: number) {
+        return character?.questManager?.getItemCount(itemId) ?? 0;
+      },
+      getItemQuantity(itemId: number) {
+        return character?.questManager?.getItemCount(itemId) ?? 0;
+      },
     };
 
-    return qm;
+    // Safety net: unimplemented qm.* calls warn instead of killing the dialog
+    return makeSafeScriptApi(qm, `QuestScript ${(this as any).currentQuestId ?? ''} qm`);
   }
 }

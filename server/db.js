@@ -127,6 +127,13 @@ function initSchema() {
     // Column already exists — ignore
   }
 
+  // Migration: quest completion timestamps (INTERVAL repeatable quests)
+  try {
+    db.exec(`ALTER TABLE quests ADD COLUMN completed_at INTEGER`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+
   console.log('[DB] SQLite schema initialized');
 }
 

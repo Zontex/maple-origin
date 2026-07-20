@@ -3,7 +3,9 @@ import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
 import ShopUI from './UI/ShopUI';
 
-export type ScriptDialogType = 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple';
+export type ScriptDialogType =
+  | 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple'
+  | 'getText' | 'getNumber';
 
 export interface SelectionOption {
   index: number;
@@ -15,6 +17,27 @@ export interface PendingDialog {
   text: string;
   type: ScriptDialogType;
   selections?: SelectionOption[];
+  // For getText/getNumber dialogs: input config + where the value goes
+  input?: { def?: string | number; min?: number; max?: number };
+  onInput?: (value: string) => void;
+}
+
+/**
+ * Wrap a script API object so any method the engine hasn't implemented
+ * becomes a warning no-op instead of a TypeError that closes the dialog.
+ */
+export function makeSafeScriptApi(target: any, label: string) {
+  return new Proxy(target, {
+    get(t, prop, recv) {
+      if (prop in t || typeof prop === 'symbol') return Reflect.get(t, prop, recv);
+      return (...args: any[]) => {
+        console.warn(
+          `[${label}] missing method ${String(prop)}(${args.map(a => JSON.stringify(a)).join(', ')}) — no-op`
+        );
+        return undefined;
+      };
+    },
+  });
 }
 
 // Parse #L<index>#<text>#l selection options from script text
@@ -70,6 +93,9 @@ export default class NpcScriptEngine {
   private disposed: boolean = false;
   private character: any = null;
   private mapNameCache: Map<number, string> = new Map();
+  // Values captured by sendGetText/sendGetNumber input dialogs (Cosmic pattern)
+  private lastGetText: string = '';
+  private lastGetNumber: number = 0;
 
   // Callbacks set by caller
   private onShowDialog: ((dialog: PendingDialog) => void) | null = null;
@@ -260,7 +286,37 @@ export default class NpcScriptEngine {
         };
       },
       sendImage(text: string) { engine.pendingDialog = { text: stripScriptCodes(text, mapNameResolver), type: 'ok' }; },
-      sendStyle(text: string, options: any) { engine.pendingDialog = { text: stripScriptCodes(text, mapNameResolver), type: 'ok' }; },
+      sendStyle(text: string, options: any) {
+        // Style options render as a selection list; the script applies the
+        // chosen style itself via cm.setHair(styles[selection]) (Cosmic flow)
+        const styles: number[] = Array.isArray(options) ? options : [];
+        engine.pendingDialog = {
+          text: stripScriptCodes(text, mapNameResolver),
+          type: 'simple',
+          selections: styles.map((styleId, i) => ({
+            index: i,
+            label: getItemName(styleId) !== 'item' ? getItemName(styleId) : `Style ${styleId}`,
+          })),
+        };
+      },
+      sendGetText(text: string, def?: string) {
+        engine.pendingDialog = {
+          text: stripScriptCodes(text, mapNameResolver),
+          type: 'getText',
+          input: { def: def ?? '' },
+          onInput: (v: string) => { engine.lastGetText = v; },
+        };
+      },
+      sendGetNumber(text: string, def?: number, min?: number, max?: number) {
+        engine.pendingDialog = {
+          text: stripScriptCodes(text, mapNameResolver),
+          type: 'getNumber',
+          input: { def: def ?? 0, min, max },
+          onInput: (v: string) => { engine.lastGetNumber = parseInt(v) || 0; },
+        };
+      },
+      getText() { return engine.lastGetText; },
+      getNumber() { return engine.lastGetNumber; },
 
       dispose() { engine.disposed = true; },
 
@@ -289,9 +345,25 @@ export default class NpcScriptEngine {
         const has = questManager?.getItemCount(itemId) ?? 0;
         return has >= (count ?? 1);
       },
+      hasItem(itemId: number, count?: number) {
+        return (questManager?.getItemCount(itemId) ?? 0) >= (count ?? 1);
+      },
+      haveItemWithId(itemId: number, checkEquipped?: boolean) {
+        if ((questManager?.getItemCount(itemId) ?? 0) > 0) return true;
+        if (checkEquipped && character?.equippedItemIds) {
+          return Object.values(character.equippedItemIds).includes(itemId);
+        }
+        return false;
+      },
+      itemQuantity(itemId: number) { return questManager?.getItemCount(itemId) ?? 0; },
+      getItemQuantity(itemId: number) { return questManager?.getItemCount(itemId) ?? 0; },
       canHold(itemId: number, count?: number) { return true; },
       canHoldAll() { return true; },
       removeItem(itemId: number) { questManager?.removeItems(itemId, 1); },
+      removeAll(itemId: number) {
+        const count = questManager?.getItemCount(itemId) ?? 0;
+        if (count > 0) questManager?.removeItems(itemId, count);
+      },
 
       // Rewards
       gainExp(amount: number) { character?.addExp(amount, true); },
@@ -318,16 +390,18 @@ export default class NpcScriptEngine {
       forceCompleteQuest(questId: number) { questManager?.forceCompleteQuest(questId); },
       isQuestStarted(questId: number) { return questManager?.getQuestState(questId) === QuestState.STARTED; },
       isQuestCompleted(questId: number) { return questManager?.getQuestState(questId) === QuestState.COMPLETED; },
+      getQuestStatus(questId: number) { return questManager?.getQuestState(questId) ?? 0; },
+      isQuestActive(questId: number) { return questManager?.getQuestState(questId) === QuestState.STARTED; },
       setQuestProgress(questId: number, progress: string) { /* stub */ },
       getQuestProgress(questId: number) { return ''; },
       getQuestProgressInt(questId: number) { return 0; },
 
-      // Cosmetics (stubs)
+      // Cosmetics — mutate the character and persist on next save
       isCosmeticEquipped(id: number) { return false; },
       getCosmeticItem(slot: number) { return 0; },
-      setHair(id: number) { /* stub */ },
-      setFace(id: number) { /* stub */ },
-      setSkin(id: number) { /* stub */ },
+      setHair(id: number) { character?.setHair?.(id)?.catch?.(console.error); },
+      setFace(id: number) { character?.setFace?.(id)?.catch?.(console.error); },
+      setSkin(id: number) { character?.setSkinColor?.(id)?.catch?.(console.error); },
 
       // Skills/jobs
       teachSkill(skillId: number, level?: number, masterLevel?: number) {
@@ -355,8 +429,30 @@ export default class NpcScriptEngine {
       getExpedition() { return null; },
 
       // Misc
-      dropMessage(type: number, text: string) { console.log(`[NpcScript] ${text}`); },
-      message(text: string) { console.log(`[NpcScript] ${text}`); },
+      getJob() { return playerObj.getJob(); },
+      getPlayerCount(mapId?: number) {
+        const socket = (window as any).__mySocket;
+        if (!socket?.otherPlayers) return 1;
+        const targetMap = mapId ?? character?.map?.mapId ?? 0;
+        let count = 1;
+        for (const p of socket.otherPlayers.values()) {
+          if (Number((p as any).mapId ?? targetMap) === Number(targetMap)) count++;
+        }
+        return count;
+      },
+      dropMessage(type: number, text: string) { cm.playerMessage(type, text); },
+      message(text: string) { cm.playerMessage(5, text); },
+      playerMessage(type: number, text: string) {
+        // Show as the player's own chat balloon (pink notice line is Tier 4 UI)
+        if (character) {
+          character.chatMessage = stripScriptCodes(String(text), mapNameResolver);
+          character.showChatBalloon = true;
+          character.chatBalloonTimer = 0;
+          character.chatBalloonDuration = 5000;
+        }
+        console.log(`[NpcScript] ${text}`);
+      },
+      mapMessage(type: number, text: string) { cm.playerMessage(type, text); },
       showInfo(path: string) { /* stub */ },
       guideHint(hint: number) { /* stub */ },
       openNpc(npcId: number) { /* stub — open another NPC's dialog */ },
@@ -365,6 +461,7 @@ export default class NpcScriptEngine {
       getGuild() { return null; },
     };
 
-    return cm;
+    // Safety net: unimplemented cm.* calls warn instead of killing the dialog
+    return makeSafeScriptApi(cm, `NpcScript ${this.npcId} cm`);
   }
 }

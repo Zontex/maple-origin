@@ -4,6 +4,8 @@ import { CameraInterface } from '../Camera';
 import { MapleStanceButton } from './MapleStanceButton';
 import ClickManager from './ClickManager';
 import QuestData, { QuestDialogue, ensureItemNames, ensureMapNames, resolveItemCodes } from '../Quest/QuestData';
+import QuestManager from '../Quest/QuestManager';
+import MapleInput from './MapleInput';
 import type { ScriptDialogType } from '../Quest/QuestScriptEngine';
 import type { SelectionOption } from '../NpcScriptEngine';
 import config from '../Config';
@@ -63,6 +65,14 @@ export default class UIQuestDialog {
   private isLastPageShown: boolean = false;
   private accepted: boolean = false;
 
+  // Static (WZ Say-driven) per-message flow: one Say message at a time, with
+  // pages within a message and optional #L selections / quiz wrong answers
+  private sayMessages: string[] = [];
+  private sayOriginalIndices: number[] = []; // Say arrays are sparse; selections key on original index
+  private messageIndex: number = 0;
+  private quizReply: string | null = null;
+  private selectionResolved: boolean = false;
+
   private onQuestAccepted: (() => void) | null = null;
   private onQuestCompleted: (() => void) | null = null;
 
@@ -75,6 +85,10 @@ export default class UIQuestDialog {
   private selectionRects: { index: number; x: number; y: number; w: number; h: number }[] = [];
   private hoveredSelection: number = -1;
   private selectedPropItem: { id: number; count: number } | null = null; // randomly picked from prop items
+  // getText/getNumber input dialogs
+  private scriptInput: MapleInput | null = null;
+  private scriptInputOnInput: ((v: string) => void) | null = null;
+  private scriptInputConfig: { def?: string | number; min?: number; max?: number } | null = null;
 
   // Temp canvas for text measurement
   private measureCanvas: GameCanvas | null = null;
@@ -165,9 +179,9 @@ export default class UIQuestDialog {
     const guaranteed = reward.items.filter(i => !i.prop || i.prop <= 0);
     const propItems = reward.items.filter(i => i.prop && i.prop > 0);
     if (propItems.length > 0) {
-      // Pick one randomly (cached so it stays consistent for this dialog showing)
+      // Weighted pick (cached so it stays consistent for this dialog showing)
       if (!this.selectedPropItem || !propItems.some(p => p.id === this.selectedPropItem!.id)) {
-        const picked = propItems[Math.floor(Math.random() * propItems.length)];
+        const picked = QuestManager.pickWeightedPropItem(propItems);
         this.selectedPropItem = { id: picked.id, count: picked.count };
       }
       return [...guaranteed, this.selectedPropItem];
@@ -213,6 +227,12 @@ export default class UIQuestDialog {
     this.currentPage = 0;
     this.accepted = false;
     this.selectedPropItem = null;
+    this.scriptMode = false;
+    this.messageIndex = 0;
+    this.quizReply = null;
+    this.selectionResolved = false;
+    this.selections = [];
+    this.selectionRects = [];
 
     // Load NPC sprite
     const strId = `${this.npcId}`.padStart(7, '0');
@@ -245,6 +265,8 @@ export default class UIQuestDialog {
     text: string;
     dialogType: ScriptDialogType;
     selections?: SelectionOption[];
+    input?: { def?: string | number; min?: number; max?: number };
+    onInput?: (value: string) => void;
     onAction: (mode: number, type: number, selection: number) => void;
   }) {
     this.scriptMode = true;
@@ -255,6 +277,9 @@ export default class UIQuestDialog {
     this.selections = opts.selections || [];
     this.accepted = false;
     this.selectedPropItem = null;
+    this.destroyScriptInput();
+    this.scriptInputOnInput = opts.onInput || null;
+    this.scriptInputConfig = opts.input || null;
 
     // Load NPC sprite if different
     if (opts.npcId !== this.npcId || !this.speakerImg) {
@@ -292,12 +317,27 @@ export default class UIQuestDialog {
     const questDialogues = QuestData.dialogues.get(this.questId);
     const questInfo = QuestData.quests.get(this.questId);
 
-    // Get all dialogue messages
+    // Get all dialogue messages — sparse Say arrays may contain holes, and
+    // selections/wrong answers key on the ORIGINAL message index
     let allMessages: string[] = [];
+    let originalIndices: number[] | null = null;
+
+    const compact = (src: string[]) => {
+      const msgs: string[] = [];
+      const idxs: number[] = [];
+      src.forEach((m, i) => {
+        if (m !== undefined) {
+          msgs.push(m);
+          idxs.push(i);
+        }
+      });
+      originalIndices = idxs;
+      return msgs;
+    };
 
     if (this.phase === 'start') {
       if (questDialogues?.start?.messages?.length) {
-        allMessages = [...questDialogues.start.messages];
+        allMessages = compact(questDialogues.start.messages);
       } else if (questInfo?.startText) {
         allMessages = [questInfo.startText];
       } else {
@@ -305,7 +345,7 @@ export default class UIQuestDialog {
       }
     } else if (this.phase === 'complete') {
       if (questDialogues?.complete?.messages?.length) {
-        allMessages = [...questDialogues.complete.messages];
+        allMessages = compact(questDialogues.complete.messages);
       } else if (questInfo?.completionText) {
         allMessages = [questInfo.completionText];
       } else {
@@ -324,28 +364,55 @@ export default class UIQuestDialog {
 
     // Resolve deferred #t and #c item codes now that item names are loaded
     const character = (window as any).charecter;
-    allMessages = allMessages.map(msg => resolveItemCodes(msg, character?.questManager));
+    this.sayMessages = allMessages.map(msg => resolveItemCodes(msg, character?.questManager));
+    this.sayOriginalIndices = originalIndices ?? allMessages.map((_, i) => i);
+    this.messageIndex = 0;
+    this.quizReply = null;
+    this.selectionResolved = false;
 
-    // Word-wrap all messages into lines, then paginate
-    const allLines: string[] = [];
-    for (const msg of allMessages) {
-      const wrapped = this.wrapText(msg, TEXT_MAX_W);
-      allLines.push(...wrapped);
-      // Add blank line between messages
-      if (allMessages.length > 1) allLines.push('');
+    this.buildPagesForCurrentMessage();
+  }
+
+  /**
+   * The original Say message index for the current position — needed to look
+   * up selections/wrong answers because sparse Say arrays were compacted.
+   */
+  private getSayDialogue() {
+    const questDialogues = QuestData.dialogues.get(this.questId);
+    if (this.phase === 'start') return questDialogues?.start;
+    if (this.phase === 'complete') return questDialogues?.complete;
+    return undefined;
+  }
+
+  private getStaticSelections(): SelectionOption[] {
+    if (this.scriptMode || this.accepted || this.quizReply !== null || this.selectionResolved) {
+      return [];
     }
+    const dlg = this.getSayDialogue();
+    const origIdx = this.sayOriginalIndices[this.messageIndex] ?? this.messageIndex;
+    const sels = dlg?.messageSelections?.get(origIdx);
+    return sels ? sels.map(s => ({ index: s.index, label: s.label })) : [];
+  }
 
-    // Split into pages of MAX_TEXT_LINES each
+  private buildPagesForCurrentMessage() {
+    const text = this.quizReply ?? this.sayMessages[this.messageIndex] ?? '';
+    const lines = this.wrapText(text, TEXT_MAX_W);
+
     this.pages = [];
-    for (let i = 0; i < allLines.length; i += MAX_TEXT_LINES) {
-      this.pages.push(allLines.slice(i, i + MAX_TEXT_LINES));
+    for (let i = 0; i < lines.length; i += MAX_TEXT_LINES) {
+      this.pages.push(lines.slice(i, i + MAX_TEXT_LINES));
     }
-
     if (this.pages.length === 0) {
       this.pages = [['']];
     }
-
     this.currentPage = 0;
+
+    this.selections = this.getStaticSelections();
+    this.selectionRects = [];
+  }
+
+  private get isLastMessage(): boolean {
+    return this.messageIndex >= this.sayMessages.length - 1;
   }
 
   private recalcLayout() {
@@ -369,7 +436,7 @@ export default class UIQuestDialog {
     const selectionsH = this.selections.length > 0 ? this.selections.length * LINE_H + 8 + headersH : 0;
     // Account for rewards section height in static quest dialogs
     let rewardsH = 0;
-    if (!this.scriptMode && this.questId && this.isLastPage && !this.accepted) {
+    if (!this.scriptMode && this.questId && this.isLastPage && this.isLastMessage && this.quizReply === null && !this.accepted) {
       const rewards = QuestData.rewards.get(this.questId);
       const reward = this.phase === 'complete' ? (rewards?.complete || rewards?.start) : (rewards?.start || rewards?.complete);
       const displayItems = this.getDisplayRewardItems(reward || {});
@@ -420,25 +487,64 @@ export default class UIQuestDialog {
       return;
     }
 
-    if (!this.isLastPage) {
+    // Quiz wrong-answer reply: single OK returns to the question
+    if (this.quizReply !== null) {
       this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
-        this.questNode?.BtOK?.nChildren, () => {
-          this.currentPage++;
+        this.utilDlgExNode?.BtOK?.nChildren, () => {
+          this.quizReply = null;
+          this.buildPagesForCurrentMessage();
           this.recalcLayout();
         });
-      if (this.currentPage > 0) {
-        this.addButton(this.x + DIALOG_WIDTH - 120, bottomY,
-          this.questNode?.BtNo?.nChildren, () => {
-            this.currentPage = Math.max(0, this.currentPage - 1);
+      this.addButton(this.x + 9, bottomY,
+        this.utilDlgExNode?.BtClose?.nChildren, () => this.hide());
+      return;
+    }
+
+    // While selections are displayed on this message's last page, the
+    // selection itself advances — no Next button
+    const selectionsActive = this.selections.length > 0 && this.isLastPage;
+
+    if (!this.isLastPage || !this.isLastMessage) {
+      if (!selectionsActive) {
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
+          this.questNode?.BtOK?.nChildren, () => {
+            if (!this.isLastPage) {
+              this.currentPage++;
+            } else {
+              this.messageIndex++;
+              this.buildPagesForCurrentMessage();
+            }
             this.recalcLayout();
           });
       }
+      if (this.currentPage > 0 || this.messageIndex > 0) {
+        this.addButton(this.x + DIALOG_WIDTH - 120, bottomY,
+          this.questNode?.BtNo?.nChildren, () => {
+            if (this.currentPage > 0) {
+              this.currentPage--;
+            } else {
+              this.messageIndex = Math.max(0, this.messageIndex - 1);
+              this.buildPagesForCurrentMessage();
+              this.currentPage = Math.max(0, this.pages.length - 1);
+            }
+            this.recalcLayout();
+          });
+      }
+      // Close button for multi-message flows
+      this.addButton(this.x + 9, bottomY,
+        this.utilDlgExNode?.BtClose?.nChildren, () => this.hide());
+    } else if (selectionsActive) {
+      // Last message but a selection is pending — only close available
+      this.addButton(this.x + 9, bottomY,
+        this.utilDlgExNode?.BtClose?.nChildren, () => this.hide());
     } else {
       if (this.phase === 'start') {
         this.addButton(this.x + DIALOG_WIDTH - 120, bottomY,
           this.questNode?.BtOK?.nChildren, () => {
             if (this.onQuestAccepted) this.onQuestAccepted();
             this.accepted = true;
+            this.selections = [];
+            this.selectionRects = [];
             const questDialogues = QuestData.dialogues.get(this.questId);
             const qmRef = (window as any).charecter?.questManager;
             if (questDialogues?.start?.yes?.length) {
@@ -521,6 +627,43 @@ export default class UIQuestDialog {
         // Selection options are rendered as clickable text in draw(), not as WZ buttons
         // No next/prev buttons for simple selection dialogs
         break;
+      case 'getText':
+      case 'getNumber': {
+        // DOM input field inside the frame; OK submits the value to the engine
+        this.destroyScriptInput();
+        if (this.measureCanvas) {
+          const inputY = bottomY - 30;
+          this.scriptInput = new MapleInput(this.measureCanvas, {
+            x: this.x + TEXT_LEFT,
+            y: inputY,
+            width: 200,
+            height: 16,
+            color: '#000000',
+            background: '#ffffff',
+            border: '1px solid #999999',
+            type: dt === 'getNumber' ? 'number' : 'text',
+          });
+          const def = this.scriptInputConfig?.def;
+          if (def !== undefined && def !== null && def !== '') {
+            this.scriptInput.input.value = String(def);
+          }
+          this.scriptInput.input.focus();
+        }
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY, okBtn, () => {
+          let value = this.scriptInput?.input?.value ?? '';
+          if (dt === 'getNumber') {
+            let num = parseInt(value) || 0;
+            const cfg = this.scriptInputConfig;
+            if (cfg?.min !== undefined) num = Math.max(cfg.min, num);
+            if (cfg?.max !== undefined) num = Math.min(cfg.max, num);
+            value = String(num);
+          }
+          this.scriptInputOnInput?.(value);
+          this.destroyScriptInput();
+          cb(1, 1, -1);
+        });
+        break;
+      }
     }
 
     // Always add close/ESC button
@@ -540,6 +683,13 @@ export default class UIQuestDialog {
     ClickManager.addButton(btn);
   }
 
+  private destroyScriptInput() {
+    if (this.scriptInput) {
+      this.scriptInput.remove();
+      this.scriptInput = null;
+    }
+  }
+
   hide() {
     this.buttons.forEach(btn => ClickManager.removeButton(btn));
     this.buttons = [];
@@ -551,6 +701,9 @@ export default class UIQuestDialog {
     this.selections = [];
     this.selectionRects = [];
     this.hoveredSelection = -1;
+    this.destroyScriptInput();
+    this.scriptInputOnInput = null;
+    this.scriptInputConfig = null;
   }
 
   // Handle click on selection options — returns true if a selection was clicked
@@ -564,11 +717,45 @@ export default class UIQuestDialog {
     for (const rect of this.selectionRects) {
       if (canvasX >= rect.x && canvasX <= rect.x + rect.w &&
           canvasY >= rect.y && canvasY <= rect.y + rect.h) {
-        this.scriptOnAction?.(1, 4, rect.index);
+        if (this.scriptMode) {
+          this.scriptOnAction?.(1, 4, rect.index);
+        } else {
+          this.handleStaticSelection(rect.index);
+        }
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * WZ Say-driven selection click: wrong quiz answers show their reply and
+   * return to the question; correct/plain options advance the dialogue.
+   */
+  private handleStaticSelection(selIndex: number) {
+    const dlg = this.getSayDialogue();
+    const origIdx = this.sayOriginalIndices[this.messageIndex] ?? this.messageIndex;
+    const wrong = dlg?.wrongAnswers?.get(origIdx)?.get(selIndex);
+
+    if (wrong !== undefined) {
+      const qmRef = (window as any).charecter?.questManager;
+      this.quizReply = resolveItemCodes(wrong, qmRef);
+      this.buildPagesForCurrentMessage();
+      this.recalcLayout();
+      return;
+    }
+
+    if (!this.isLastMessage) {
+      this.messageIndex++;
+      this.buildPagesForCurrentMessage();
+      this.recalcLayout();
+    } else {
+      // Last message answered correctly — reveal the accept/decline step
+      this.selectionResolved = true;
+      this.selections = [];
+      this.selectionRects = [];
+      this.recalcLayout();
+    }
   }
 
   // Update hover state for selection options
@@ -689,7 +876,7 @@ export default class UIQuestDialog {
     }
 
     // Draw quest rewards section (on last page of static quest dialogs only — scripts handle their own)
-    if (!this.scriptMode && this.questId && this.isLastPage && !this.accepted) {
+    if (!this.scriptMode && this.questId && this.isLastPage && this.isLastMessage && this.quizReply === null && !this.accepted) {
       const rewards = QuestData.rewards.get(this.questId);
       // Show complete rewards if phase is complete, otherwise start rewards; fall back to whichever has data
       const reward = this.phase === 'complete' ? (rewards?.complete || rewards?.start) : (rewards?.start || rewards?.complete);
@@ -787,8 +974,11 @@ export default class UIQuestDialog {
       }
     }
 
-    // Draw selection options for 'simple' dialog type
-    if (this.scriptMode && this.scriptDialogType === 'simple' && this.selections.length > 0) {
+    // Draw selection options — script 'simple' dialogs and WZ Say #L selections
+    const showSelections = this.selections.length > 0 &&
+      ((this.scriptMode && this.scriptDialogType === 'simple') ||
+       (!this.scriptMode && this.isLastPage));
+    if (showSelections) {
       textY += 4; // small gap before selections
       this.selectionRects = [];
       for (const sel of this.selections) {

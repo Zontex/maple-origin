@@ -67,7 +67,9 @@ export function saveDevSnapshot() {
         }
       }
       if (qm.completedQuests) {
-        for (const qId of qm.completedQuests) quests.push({ quest_id: qId, state: 2 });
+        for (const [qId, completedAt] of qm.completedQuests) {
+          quests.push({ quest_id: qId, state: 2, completed_at: completedAt } as any);
+        }
       }
     }
 
@@ -244,7 +246,7 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
     if (MyCharacter.questManager && charData.quests) {
       for (const q of charData.quests) {
         if (q.state === 2) {
-          MyCharacter.questManager.forceCompleteQuest(q.quest_id);
+          MyCharacter.questManager.forceCompleteQuest(q.quest_id, q.completed_at ?? 0);
         } else if (q.state === 1) {
           let mobProgress: Record<string, number> | undefined;
           try { if (q.mob_progress) mobProgress = JSON.parse(q.mob_progress); } catch {}

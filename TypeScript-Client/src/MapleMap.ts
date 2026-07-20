@@ -934,6 +934,9 @@ async function _handleClickInner(
                   questId,
                   text: pending.text,
                   dialogType: pending.type,
+                  selections: (pending as any).selections,
+                  input: (pending as any).input,
+                  onInput: (pending as any).onInput,
                   onAction: (mode, type, selection) => {
                     if (mode === -1) {
                       dialog.hide();
@@ -1127,6 +1130,8 @@ MapleMap.tryNpcScript = async function (npc: any) {
         text: pending.text,
         dialogType: pending.type,
         selections: pending.selections,
+        input: pending.input,
+        onInput: pending.onInput,
         onAction: (mode: number, type: number, selection: number) => {
           if (mode === -1) {
             dialog.hide();

@@ -333,7 +333,7 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       if (MyChar.questManager && charData.quests) {
         for (const q of charData.quests) {
           if (q.state === 2) {
-            MyChar.questManager.forceCompleteQuest(q.quest_id);
+            MyChar.questManager.forceCompleteQuest(q.quest_id, q.completed_at ?? 0);
           } else if (q.state === 1) {
             let mobProgress: Record<string, number> | undefined;
             try {

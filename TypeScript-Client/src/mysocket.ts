@@ -233,8 +233,8 @@ class MySocket {
         }
       }
       if (qm.completedQuests) {
-        for (const qId of qm.completedQuests) {
-          quests.push({ questId: qId, state: 2 });
+        for (const [qId, completedAt] of qm.completedQuests) {
+          quests.push({ questId: qId, state: 2, completedAt } as any);
         }
       }
     }
@@ -262,6 +262,9 @@ class MySocket {
         mesos: inv?.mesos ?? 0,
         fame: MyCharacter.fame ?? 0,
         sp: MyCharacter.stats?.sp ?? 0,
+        hair: MyCharacter.hair,
+        face: MyCharacter.face,
+        skin: MyCharacter.skinColor,
         equipped,
         inventory: {
           equip: serializeTab(inv?.equip),

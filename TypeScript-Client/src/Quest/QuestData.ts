@@ -31,6 +31,8 @@ export interface QuestRequirement {
   endscript?: string;
   startDate?: string;  // WZ format: YYYYMMDDHH
   endDate?: string;    // WZ format: YYYYMMDDHH
+  meso?: number;       // required mesos
+  interval?: number;   // repeatable-quest cooldown in minutes
 }
 
 export interface QuestReward {
@@ -39,10 +41,22 @@ export interface QuestReward {
   items?: { id: number; count: number; prop?: number }[];
   nextQuest?: number;
   fame?: number;
+  skills?: { id: number; skillLevel: number; masterLevel: number; jobs: number[] }[];
+}
+
+// Same shape NpcScriptEngine.parseSelections produces
+export interface QuestSelectionOption {
+  index: number;
+  label: string;
 }
 
 export interface QuestDialogue {
   messages: string[];
+  // #L selection options per message index (quiz/branch dialogs)
+  messageSelections?: Map<number, QuestSelectionOption[]>;
+  // ask=1 marks quiz-style dialogs whose wrong answers reply via stop/<msg>/<sel>
+  ask?: boolean;
+  wrongAnswers?: Map<number, Map<number, string>>;
   yes?: string[];
   no?: string[];
   stop?: { npc?: string[] };
@@ -162,11 +176,28 @@ function stripFormatCodes(text: any, playerName: string = 'Player'): string {
     .replace(/#m(\d+)#/g, '#m$1#')  // Keep map name codes — resolved at display time after map names load
     .replace(/#i(\d+)#/g, '\x01ITEM:$1\x02')  // item icon placeholder — rendered at display time
     .replace(/#c(\d+)#/g, '#c$1#')  // Keep item count codes — resolved at display time
-    .replace(/#L\d+#/g, '')
-    .replace(/#l/g, '')
     .replace(/\\r\\n/g, '\n')
     .replace(/\\n/g, '\n')
     .replace(/\\r/g, '\n');
+}
+
+// Strip #L selection markup outright — for non-interactive text (QuestInfo)
+function stripSelectionCodes(text: string): string {
+  return text.replace(/#L\d+#/g, '').replace(/#l/g, '');
+}
+
+// Parse #L<i>#label#l selection markup out of a Say message
+function parseSayMessage(raw: string): { text: string; selections: QuestSelectionOption[] } {
+  const selections: QuestSelectionOption[] = [];
+  const remaining = raw.replace(/#L(\d+)#([\s\S]*?)#l/g, (_, idx, label) => {
+    selections.push({
+      index: parseInt(idx),
+      label: stripFormatCodes(label).trim(),
+    });
+    return '';
+  });
+  // Any unclosed #L markup left over is stripped so it never renders raw
+  return { text: stripSelectionCodes(stripFormatCodes(remaining)), selections };
 }
 
 class QuestDataManager {
@@ -268,9 +299,9 @@ class QuestDataManager {
         switch (name) {
           case 'name': info.name = val || ''; break;
           case 'parent': info.parent = val; break;
-          case '0': info.startText = stripFormatCodes(val || ''); break;
-          case '1': info.inProgressText = stripFormatCodes(val || ''); break;
-          case '2': info.completionText = stripFormatCodes(val || ''); break;
+          case '0': info.startText = stripSelectionCodes(stripFormatCodes(val || '')); break;
+          case '1': info.inProgressText = stripSelectionCodes(stripFormatCodes(val || '')); break;
+          case '2': info.completionText = stripSelectionCodes(stripFormatCodes(val || '')); break;
           case 'area': info.area = val || 0; break;
           case 'order': info.order = val; break;
           case 'autoStart': info.autoStart = val === 1; break;
@@ -375,6 +406,13 @@ class QuestDataManager {
         case 'end':
           req.endDate = String(prop.nValue);
           break;
+        case 'meso':
+        case 'endmeso':
+          req.meso = prop.nValue;
+          break;
+        case 'interval':
+          req.interval = prop.nValue;
+          break;
       }
     }
     return req;
@@ -435,6 +473,25 @@ class QuestDataManager {
             }
           }
           break;
+        case 'skill':
+          // Skill rewards: skill/<n>/{id, skillLevel, masterLevel, job/<i>}
+          reward.skills = [];
+          if (prop.nChildren) {
+            for (const skillNode of prop.nChildren) {
+              let skillId = 0, skillLevel = 0, masterLevel = 0;
+              const jobs: number[] = [];
+              for (const p of skillNode.nChildren) {
+                if (p.nName === 'id') skillId = p.nValue;
+                if (p.nName === 'skillLevel') skillLevel = p.nValue;
+                if (p.nName === 'masterLevel') masterLevel = p.nValue;
+                if (p.nName === 'job' && p.nChildren) {
+                  for (const j of p.nChildren) jobs.push(j.nValue);
+                }
+              }
+              if (skillId) reward.skills.push({ id: skillId, skillLevel, masterLevel, jobs });
+            }
+          }
+          break;
       }
     }
     return reward;
@@ -464,9 +521,18 @@ class QuestDataManager {
 
     for (const prop of node.nChildren) {
       const name = prop.nName;
-      // Numbered messages: "0", "1", "2", etc.
+      // Numbered messages: "0", "1", "2", etc. — may embed #L selections
       if (!isNaN(parseInt(name)) && typeof prop.nValue === 'string') {
-        dialogue.messages[parseInt(name)] = stripFormatCodes(prop.nValue);
+        const msgIdx = parseInt(name);
+        const parsed = parseSayMessage(prop.nValue);
+        dialogue.messages[msgIdx] = parsed.text;
+        if (parsed.selections.length > 0) {
+          if (!dialogue.messageSelections) dialogue.messageSelections = new Map();
+          dialogue.messageSelections.set(msgIdx, parsed.selections);
+        }
+      }
+      if (name === 'ask') {
+        dialogue.ask = prop.nValue === 1;
       }
       // Yes branch
       if (name === 'yes') {
@@ -474,7 +540,7 @@ class QuestDataManager {
         if (prop.nChildren) {
           for (const child of prop.nChildren) {
             if (!isNaN(parseInt(child.nName)) && typeof child.nValue === 'string') {
-              dialogue.yes[parseInt(child.nName)] = stripFormatCodes(child.nValue);
+              dialogue.yes[parseInt(child.nName)] = stripSelectionCodes(stripFormatCodes(child.nValue));
             }
           }
         }
@@ -485,22 +551,38 @@ class QuestDataManager {
         if (prop.nChildren) {
           for (const child of prop.nChildren) {
             if (!isNaN(parseInt(child.nName)) && typeof child.nValue === 'string') {
-              dialogue.no[parseInt(child.nName)] = stripFormatCodes(child.nValue);
+              dialogue.no[parseInt(child.nName)] = stripSelectionCodes(stripFormatCodes(child.nValue));
             }
           }
         }
       }
-      // Stop branch (in-progress text)
+      // Stop branch (in-progress text + quiz wrong-answer replies)
       if (name === 'stop') {
         dialogue.stop = {};
         if (prop.nChildren) {
           for (const child of prop.nChildren) {
+            // stop/<msgIndex>/<selIndex> = reply text for a wrong quiz answer
+            const stopMsgIdx = parseInt(child.nName);
+            if (!isNaN(stopMsgIdx) && child.nChildren) {
+              for (const ans of child.nChildren) {
+                const selIdx = parseInt(ans.nName);
+                if (!isNaN(selIdx) && typeof ans.nValue === 'string') {
+                  if (!dialogue.wrongAnswers) dialogue.wrongAnswers = new Map();
+                  if (!dialogue.wrongAnswers.has(stopMsgIdx)) {
+                    dialogue.wrongAnswers.set(stopMsgIdx, new Map());
+                  }
+                  dialogue.wrongAnswers
+                    .get(stopMsgIdx)!
+                    .set(selIdx, stripSelectionCodes(stripFormatCodes(ans.nValue)));
+                }
+              }
+            }
             if (child.nName === 'npc') {
               dialogue.stop.npc = [];
               if (child.nChildren) {
                 for (const msg of child.nChildren) {
                   if (typeof msg.nValue === 'string') {
-                    dialogue.stop.npc.push(stripFormatCodes(msg.nValue));
+                    dialogue.stop.npc.push(stripSelectionCodes(stripFormatCodes(msg.nValue)));
                   }
                 }
               }

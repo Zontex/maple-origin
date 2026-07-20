@@ -254,7 +254,7 @@ class QuestLogMenuSprite extends DragableMenu {
         this.questList = Array.from(qm.activeQuests.keys());
         break;
       case QuestTab.COMPLETED:
-        this.questList = Array.from(qm.completedQuests);
+        this.questList = Array.from(qm.completedQuests.keys());
         break;
     }
 
