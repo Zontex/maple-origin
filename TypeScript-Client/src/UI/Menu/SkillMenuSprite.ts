@@ -25,11 +25,12 @@ const BG_BOTTOM_H = BG_H - BG_BOTTOM_Y; // 32px bottom slice
 
 // ─── All positions from wzLayout('UI.wz/UIWindow.img/Skill/backgrnd') ───
 
-// Tab buttons — GMS ref shows them higher and more left
-const TAB_Y = 25;
-const TAB_H = 16;
+// Tab strip — the backgrnd asset has the strip built in (red underline at
+// y=43-44); tabs are just the WZ Tab/enabled|disabled numeral images on it
+const TAB_Y = 28;
+const TAB_H = 15;
 const TAB_W = 26;
-const TAB_X_START = 4;
+const TAB_X_START = 6;
 const TAB_GAP = 0;
 
 // Job name text on dark center of gold bar (y=62-80)
@@ -59,11 +60,11 @@ const LEVEL_Y = 18;
 const SP_BTN_X = 124;
 const SP_BTN_Y = 11;
 
-// SP number — inside the white box in the bottom slice
-// Bottom slice starts at BG_BOTTOM_Y=257 in original. SP box center is at y=275 in original.
-// So offset within bottom slice = 275 - 257 = 18
-const SP_NUM_X = 126;
-const SP_NUM_BOTTOM_OFFSET = 14; // from start of bottom slice to text baseline
+// SP number — inside the white box in the bottom slice.
+// Measured from the decoded backgrnd PNG: box interior x=83-111, y=266-280;
+// bottom slice starts at y=257, so box center is x=97, slice offset 12
+const SP_NUM_X = 97;
+const SP_NUM_BOTTOM_OFFSET = 12; // from start of bottom slice to text top
 
 class SkillMenuSprite extends DragableMenu {
   opts: any;
@@ -350,46 +351,13 @@ class SkillMenuSprite extends DragableMenu {
     if ((canvas as any).scrolledDown) this.handleScroll(1);
   }
 
-  // ─── Tab buttons with pink/gray backgrounds (same style as inventory) ───
+  // ─── Tabs: WZ numeral images on the built-in strip (no custom chrome) ───
   private drawTabs(canvas: GameCanvas) {
-    const ctx = canvas.context;
-
     for (let i = 0; i < this.maxTabs && i < 5; i++) {
       const isActive = i === this.currentTab;
       const tabX = this.x + TAB_X_START + i * (TAB_W + TAB_GAP);
       const tabY = this.y + TAB_Y;
 
-      // Draw rounded tab background
-      ctx.save();
-      const r = 3;
-      ctx.beginPath();
-      ctx.moveTo(tabX + r, tabY);
-      ctx.lineTo(tabX + TAB_W - r, tabY);
-      ctx.arcTo(tabX + TAB_W, tabY, tabX + TAB_W, tabY + r, r);
-      ctx.lineTo(tabX + TAB_W, tabY + TAB_H);
-      ctx.lineTo(tabX, tabY + TAB_H);
-      ctx.lineTo(tabX, tabY + r);
-      ctx.arcTo(tabX, tabY, tabX + r, tabY, r);
-      ctx.closePath();
-
-      if (isActive) {
-        ctx.fillStyle = '#dd4466'; // pink
-        ctx.fill();
-        ctx.save();
-        ctx.clip();
-        ctx.fillStyle = '#ee6688'; // lighter top highlight
-        ctx.fillRect(tabX, tabY, TAB_W, 2);
-        ctx.restore();
-      } else {
-        ctx.fillStyle = '#b8c4d8'; // light gray-blue
-        ctx.fill();
-      }
-      ctx.strokeStyle = '#8899bb';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.restore();
-
-      // Draw tab label image (roman numeral) centered on the tab
       const tabImg = isActive ? this.tabEnabled[i] : this.tabDisabled[i];
       if (tabImg && tabImg.complete && tabImg.width > 0) {
         const ix = tabX + Math.floor((TAB_W - tabImg.width) / 2);
