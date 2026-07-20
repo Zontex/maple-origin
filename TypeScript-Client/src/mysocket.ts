@@ -1255,6 +1255,12 @@ class MySocket {
     if (!this.isMobHost) return;
     const mob = MapleMap.findMonsterByOId(data.oId);
     if (!mob || mob.destroyed || mob.dying) return;
+    // Aggro the mob onto the remote attacker (EXP attribution stays null so
+    // the host doesn't award itself EXP for a remote player's kill)
+    const attacker = data.sourcePlayerId
+      ? this.otherPlayers.get(data.sourcePlayerId)
+      : null;
+    if (attacker) mob.aggroTarget = attacker;
     // Apply damage on host — hit() handles HP, death, drops
     mob.hit(data.damage, data.knockbackDir || 1, null);
   }

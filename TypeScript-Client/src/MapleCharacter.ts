@@ -1712,6 +1712,97 @@ isCloseToMob = (inAllDirections = true) => {
     }
   }
 
+  /**
+   * Apply damage from a mob to this (local) player — shared by touch damage,
+   * mob melee/magic attacks, and mob projectiles. Respects i-frames, rolls
+   * miss, computes v83 damage from mob PAD (or an attack override), handles
+   * Magic Guard, knockback, indicators, and network notification.
+   */
+  applyMobAttack = (monster: any, padOverride?: number, isMagic = false) => {
+    if (!this.map || this.isRemote || this.isDead) return;
+
+    const currentTime = Date.now();
+    if (currentTime - this.lastHitTime < this.hitCooldownTimeInMS) return;
+    this.lastHitTime = currentTime;
+
+    // Tutorial mobs always miss the player
+    const TUTORIAL_MOB_IDS = [9300018, 9300328, 9300383, 9409000, 9409001];
+    const isTutorialMob = TUTORIAL_MOB_IDS.includes(monster.id);
+
+    const isMiss = isTutorialMob || (isMagic
+      ? this.stats.getRandomMonsterMagicMiss(monster.mobLevel, monster.acc)
+      : this.stats.getRandomMonsterTouchMiss(monster.mobLevel, monster.acc));
+
+    const minXYPosition = findMinXY(this.bodyRects);
+    const middleX = (minXYPosition.minX + this.pos.x) / 2;
+
+    if (isMiss) {
+      this.DamageIndicator.addDamageIndicator(
+        DamageIndicatorType.MobHitPlayer,
+        {
+          x: middleX,
+          y: minXYPosition.minY - 20,
+        },
+        0
+      );
+      if ((window as any).__mySocket) {
+        (window as any).__mySocket.sendPlayerHitByMob(monster.oId, 0, true);
+      }
+      return;
+    }
+
+    const knowbackXdirection = this.pos.x - monster.pos.x > 0 ? 1 : -1;
+    const knowbackYdirection = this.pos.y > monster.pos.y ? 1 : -1;
+    this.pos.applyKnockback(knowbackXdirection, knowbackYdirection);
+
+    // v83 mob damage: mob attack scaled by level gap, reduced by the player's
+    // matching defense (weapon def for physical, magic def for magic)
+    const pad = padOverride ?? (monster.pad || 1);
+    const def = isMagic
+      ? this.stats.getMagicDefense()
+      : this.stats.getWeaponDefense();
+    const levelFactor =
+      1 + 0.01 * Math.max(0, (monster.mobLevel || 1) - this.stats.level);
+    const damageRange = new DamageRange(
+      Math.floor(pad * levelFactor * 0.7 - def * 0.6),
+      Math.floor(pad * levelFactor - def * 0.5)
+    );
+    const finalTakenDamage = Math.max(
+      1,
+      Stats.getRandomAttackDamageFromAttackRange(damageRange)
+    );
+
+    // Magic Guard: a portion of the damage is taken from MP instead
+    let hpDamage = finalTakenDamage;
+    const magicGuard = this.buffManager?.activeBuffs?.get?.(2001002);
+    if (magicGuard) {
+      const mpPortion = Math.min(
+        this.mp,
+        Math.floor((finalTakenDamage * (magicGuard.effect.x || 0)) / 100)
+      );
+      this.mp -= mpPortion;
+      hpDamage = finalTakenDamage - mpPortion;
+    }
+    this.takeDamage(hpDamage);
+
+    this.DamageIndicator.addDamageIndicator(
+      DamageIndicatorType.MobHitPlayer,
+      {
+        x: middleX,
+        y: minXYPosition.minY - 20,
+      },
+      finalTakenDamage
+    );
+
+    if (!this.isInAttack) {
+      this.setAlert();
+    }
+
+    if ((window as any).__mySocket) {
+      (window as any).__mySocket.sendPlayerHitByMob(monster.oId, finalTakenDamage, false);
+    }
+  };
+
   checkForMobsHit = () => {
     try {
     if (!this.map || this.isRemote) return;
@@ -1720,10 +1811,9 @@ isCloseToMob = (inAllDirections = true) => {
 
       if (currentTime - this.lastHitTime >= this.hitCooldownTimeInMS) {
         const monster = this.map!.monsters.filter(
-          (monster: Monster) => monster.dying === false
+          // bodyAttack === 0 mobs (ranged-only) deal no touch damage
+          (monster: Monster) => monster.dying === false && (monster as any).bodyAttack !== 0
         ).find((monster: Monster) => {
-          const monsterPos = monster.pos;
-          const playerPos = this.pos;
           const isHit = areAnyRectanglesOverlapping(
             this.bodyRects,
             {
@@ -1739,82 +1829,7 @@ isCloseToMob = (inAllDirections = true) => {
         });
 
         if (monster) {
-          this.lastHitTime = currentTime;
-
-          // Tutorial mobs always miss the player
-          const TUTORIAL_MOB_IDS = [9300018, 9300328, 9300383, 9409000, 9409001];
-          const isTutorialMob = TUTORIAL_MOB_IDS.includes(monster.id);
-
-          const isMiss = isTutorialMob || this.stats.getRandomMonsterTouchMiss(
-            monster.mobLevel,
-            monster.acc
-          );
-
-          const minXYPosition = findMinXY(this.bodyRects);
-          const middleX = (minXYPosition.minX + this.pos.x) / 2;
-
-          if (isMiss) {
-            this.DamageIndicator.addDamageIndicator(
-              DamageIndicatorType.MobHitPlayer,
-              {
-                x: middleX,
-                y: minXYPosition.minY - 20,
-              },
-              0
-            );
-            if ((window as any).__mySocket) {
-              (window as any).__mySocket.sendPlayerHitByMob(monster.oId, 0, true);
-            }
-          } else {
-            const knowbackXdirection = this.pos.x - monster.pos.x > 0 ? 1 : -1;
-            const knowbackYdirection = this.pos.y > monster.pos.y ? 1 : -1;
-            this.pos.applyKnockback(knowbackXdirection, knowbackYdirection);
-
-            // v83 mob contact damage: mob PAD scaled by level gap, reduced by
-            // player weapon defense (mirrors the player-vs-mob defense model)
-            const pad = monster.pad || 1;
-            const pdd = this.stats.getWeaponDefense();
-            const levelFactor =
-              1 + 0.01 * Math.max(0, (monster.mobLevel || 1) - this.stats.level);
-            const touchRange = new DamageRange(
-              Math.floor(pad * levelFactor * 0.7 - pdd * 0.6),
-              Math.floor(pad * levelFactor - pdd * 0.5)
-            );
-            const finalTakenDamage = Math.max(
-              1,
-              Stats.getRandomAttackDamageFromAttackRange(touchRange)
-            );
-
-            // Magic Guard: a portion of the damage is taken from MP instead
-            let hpDamage = finalTakenDamage;
-            const magicGuard = this.buffManager?.activeBuffs?.get?.(2001002);
-            if (magicGuard) {
-              const mpPortion = Math.min(
-                this.mp,
-                Math.floor((finalTakenDamage * (magicGuard.effect.x || 0)) / 100)
-              );
-              this.mp -= mpPortion;
-              hpDamage = finalTakenDamage - mpPortion;
-            }
-            this.takeDamage(hpDamage);
-
-            this.DamageIndicator.addDamageIndicator(
-              DamageIndicatorType.MobHitPlayer,
-              {
-                x: middleX,
-                y: minXYPosition.minY - 20,
-              },
-              finalTakenDamage
-            );
-
-            if (!this.isInAttack) {
-              this.setAlert();
-            }
-
-            if ((window as any).__mySocket) {
-              (window as any).__mySocket.sendPlayerHitByMob(monster.oId, finalTakenDamage, false);
-            }
-          }
+          this.applyMobAttack(monster);
         }
       }
     }

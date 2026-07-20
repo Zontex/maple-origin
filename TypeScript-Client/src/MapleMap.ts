@@ -42,6 +42,7 @@ export interface MapleMap {
   npcScriptEngine: NpcScriptEngine;
   mapId: number;
   monsters: any;
+  mobProjectiles: any[];
   reactors: Reactor[];
   itemDrops: any;
   PlayerCharacter: any;
@@ -113,6 +114,7 @@ MapleMap.load = async function (id: number | string) {
   console.log("Map WZ Node:", this.wzNode);
   this.npcs = [];
   this.monsters = [];
+  this.mobProjectiles = [];
   this.reactors = [];
   this.characters = [];
 
@@ -411,9 +413,14 @@ async function initializeMonster(opts: any) {
   const whichFoothold = footholds[mob.fh];
   if (whichFoothold) {
     mob.layer = whichFoothold.layer;
-    // Place mob on its foothold so it doesn't fall from the air
-    mob.pos.fh = whichFoothold;
-    mob.pos.vy = 0;
+    if (mob.moveType === "fly") {
+      // Flying mobs hover at their spawn cy — no foothold attach
+      mob.pos.fh = null;
+    } else {
+      // Place mob on its foothold so it doesn't fall from the air
+      mob.pos.fh = whichFoothold;
+      mob.pos.vy = 0;
+    }
   }
   return mob;
 }
@@ -453,15 +460,17 @@ MapleMap.getMonsterSpawnDefs = function () {
   return monsterSpawnDefs;
 };
 
-// Store original spawn definitions for respawning
+// Store original spawn definitions for respawning.
+// Cosmic-style respawn: a 10s tick refills the map up to a player-scaled
+// capacity, instead of one flat timer per killed mob.
 let monsterSpawnDefs: any[] = [];
-let respawnTimers: any[] = [];
-const DEFAULT_MOB_INTERVAL = 7560; // v83 default for mobTime=0 (milliseconds)
+const RESPAWN_TICK_MS = 10000;
+const MOB_INTERVAL_MS = 5000; // earliest respawn for mobTime=0 defs
+let respawnAccumulator = 0;
 
 MapleMap.clearRespawnTimers = function () {
-  for (const timer of respawnTimers) clearTimeout(timer);
-  respawnTimers = [];
   monsterSpawnDefs = [];
+  respawnAccumulator = 0;
   for (const timer of reactorRespawnTimers) clearTimeout(timer);
   reactorRespawnTimers = [];
   reactorSpawnDefs = [];
@@ -489,6 +498,8 @@ MapleMap.loadMonsters = async function (wzNode) {
       maxX: mobNode.rx1.nValue,
       mobTime,            // Respawn time in seconds (-1 = no respawn, 0 = default)
       map: this,
+      alive: true,
+      nextPossibleSpawn: 0,
     };
     monsterSpawnDefs.push(spawnDef);
     await this.spawnMonster(spawnDef);
@@ -551,6 +562,7 @@ MapleMap.changeMap = async function (newMapId: number) {
   // Optionally, clear current map state
   this.npcs = [];
   this.monsters = [];
+  this.mobProjectiles = [];
   this.reactors = [];
   this.characters = [];
   this.itemDrops = [];
@@ -626,30 +638,60 @@ MapleMap.update = function (msPerTick) {
     return;
   }
 
-  // Remove destroyed monsters and schedule respawns (host only)
+  // Remove destroyed monsters and mark their spawn defs for the respawn tick
   const mapRef = this;
   const isMobHost = (window as any).__mySocket?.isMobHost ?? true;
+  const now = Date.now();
   for (const mob of this.monsters) {
     if (mob.destroyed && !mob.respawnScheduled) {
       mob.respawnScheduled = true;
-      if (!isMobHost) continue; // Non-host waits for mob_respawn message
-      // Find the matching spawn definition to respawn from
       const spawnDef = monsterSpawnDefs.find((s: any) => s.oId === mob.oId);
-      if (!spawnDef || spawnDef.mobTime < 0) continue; // mobTime -1 = no respawn
-      // v83: mobTime > 0 = respawn after N seconds, mobTime 0 = default interval
-      const delay = spawnDef.mobTime > 0 ? spawnDef.mobTime * 1000 : DEFAULT_MOB_INTERVAL;
-      const timer = setTimeout(async () => {
-        // Only respawn if we're still on the same map
-        if (mapRef.mapId === spawnDef.map?.mapId) {
-          await mapRef.spawnMonster({ ...spawnDef, fadeIn: true });
-          // Broadcast respawn to non-host clients
-          try { (window as any).__mySocket?.sendMobRespawn(spawnDef.oId); } catch {}
-        }
-      }, delay);
-      respawnTimers.push(timer);
+      if (!spawnDef) continue;
+      spawnDef.alive = false;
+      spawnDef.nextPossibleSpawn =
+        spawnDef.mobTime > 0
+          ? now + spawnDef.mobTime * 1000
+          : spawnDef.mobTime < 0
+            ? Infinity // mobTime -1 = never respawns
+            : now + MOB_INTERVAL_MS;
     }
   }
   this.monsters = this.monsters.filter((m: Monster) => !m.destroyed);
+
+  // Cosmic-style respawn tick (host only): every 10s refill the map up to a
+  // capacity that scales 70-100% with player count
+  respawnAccumulator += msPerTick;
+  if (respawnAccumulator >= RESPAWN_TICK_MS) {
+    respawnAccumulator = 0;
+    if (isMobHost && monsterSpawnDefs.length > 0) {
+      const players = 1 + (this.characters?.length || 0);
+      const capacity = Math.ceil(
+        (0.70 + 0.05 * Math.min(6, players)) * monsterSpawnDefs.length
+      );
+      const aliveCount = monsterSpawnDefs.filter((s: any) => s.alive).length;
+      let toSpawn = capacity - aliveCount;
+      if (toSpawn > 0) {
+        const eligible = monsterSpawnDefs
+          .filter((s: any) => !s.alive && s.nextPossibleSpawn <= now)
+          .sort(() => Math.random() - 0.5);
+        for (const def of eligible) {
+          if (toSpawn <= 0) break;
+          toSpawn--;
+          def.alive = true;
+          (async () => {
+            if (mapRef.mapId === def.map?.mapId) {
+              await mapRef.spawnMonster({ ...def, fadeIn: true });
+              try { (window as any).__mySocket?.sendMobRespawn(def.oId); } catch {}
+            }
+          })();
+        }
+      }
+    }
+  }
+
+  // Mob attack projectiles
+  this.mobProjectiles = (this.mobProjectiles || []).filter((p: any) => !p.destroyed);
+  this.mobProjectiles.forEach((p: any) => p.update(msPerTick));
 
   // Reactor respawn handling
   // Reactor respawn — only the mob host handles timers, broadcasts to others
@@ -773,6 +815,8 @@ MapleMap.render = function (
   (this.reactors as any[]).filter(notInAnyLayer).forEach(draw);
   this.characters.filter(notInAnyLayer).forEach(draw);
   this.npcs.filter(notInAnyLayer).forEach(draw);
+
+  (this.mobProjectiles || []).forEach((p: any) => p.draw(canvas, camera));
 
   this.characters
     .filter((c: MapleCharacter) => !!c.levelingUp)

@@ -12,6 +12,16 @@ import DropRandomizer from "./DropItem/DropRandomizer";
 import GameCanvas from "./GameCanvas";
 import { CameraInterface } from "./Camera";
 import MySocket from "./mysocket";
+import MobProjectile from "./Projectile/MobProjectile";
+
+// Aggro tuning (v83-style: firstAttack mobs charge on sight, others when hit)
+const AGGRO_RANGE_X = 250;
+const AGGRO_RANGE_Y = 100;
+const DEAGGRO_RANGE_X = 400;
+const DEAGGRO_GRACE_MS = 3000;
+const TARGET_SCAN_MS = 250;
+
+type MobMoveType = "stationary" | "walk" | "jump" | "fly";
 
 class Monster {
   opts: any;
@@ -67,6 +77,28 @@ class Monster {
   _targetX: number = 0;
   _targetY: number = 0;
 
+  // Movement/AI (derived from WZ stances + info in load())
+  moveType: MobMoveType = "walk";
+  firstAttack: boolean = false;
+  bodyAttack: number = 1;
+  flySpeed: number = 0;
+  mad: number = 0;
+  spawnCy: number = 0;
+  aggroTarget: any = null;
+  lastTargetScan: number = 0;
+  outOfRangeSince: number = 0;
+  flyTargetX: number = 0;
+  flyTargetY: number = 0;
+  lastFlyTargetPick: number = 0;
+
+  // Attacks (parsed from WZ attack1-4)
+  attacks: any[] = [];
+  isAttacking: boolean = false;
+  currentAttack: any = null;
+  nextAttackTime: number = 0;
+  attackElapsed: number = 0;
+  attackFired: boolean = false;
+
   static async fromOpts(opts: any) {
     const mob = new Monster(opts);
     await mob.load();
@@ -108,12 +140,100 @@ class Monster {
       mobFile = await WZManager.get(`${WZFiles.Mob}/${strId}.img`);
     }
     this.mobFile = mobFile;
-    // console.log("mobFile", mobFile);
-    this.pos = new Physics(opts.x, opts.y, mobFile.info.speed.nValue);
+
+    // Movement type: v83 has no info.moveAbility — Cosmic derives mobility
+    // from stance presence. Honor moveAbility as an override if present.
+    const stanceNames = mobFile.nChildren.map((c: any) => c.nName);
+    const moveAbility = mobFile.info.moveAbility?.nValue;
+    if (moveAbility !== undefined && moveAbility !== null) {
+      this.moveType =
+        moveAbility === 0 ? "stationary"
+        : moveAbility === 2 ? "jump"
+        : moveAbility === 3 ? "fly"
+        : "walk";
+    } else if (stanceNames.includes("fly")) {
+      this.moveType = "fly";
+    } else if (stanceNames.includes("jump")) {
+      this.moveType = "jump";
+    } else if (stanceNames.includes("move")) {
+      this.moveType = "walk";
+    } else {
+      this.moveType = "stationary";
+    }
+    this.firstAttack = (mobFile.info.firstAttack?.nValue ?? 0) > 0;
+    this.bodyAttack = mobFile.info.bodyAttack?.nValue ?? 1;
+    this.flySpeed = mobFile.info.flySpeed?.nValue ?? 0;
+    this.mad = mobFile.info.MADamage?.nValue ?? 0;
+    this.spawnCy = opts.y;
+
+    // Authentic mob speed: 125 px/s scaled by WZ speed percent delta
+    const mobWalkSpeed =
+      (125 * (100 + (mobFile.info.speed?.nValue ?? 0))) / 100;
+    this.pos = new Physics(opts.x, opts.y, mobWalkSpeed, true);
+    if (this.moveType === "fly") {
+      this.pos.flying = true;
+    }
     this.jumpProbability = 0.05;
     this.lastDirectionChangeTime = 0;
     this.delayBetweenDirectionChange = 300;
-    this.randomInitialDirection();
+    if (this.moveType === "walk" || this.moveType === "jump") {
+      this.randomInitialDirection();
+    }
+
+    // Parse attack stances (attack1-4): type 0 melee, 1 magic, 2 ranged ball.
+    // Range comes as an lt/rb rect or an sp vector + r radius, relative to a
+    // left-facing mob's origin.
+    this.attacks = [];
+    for (const child of mobFile.nChildren) {
+      if (!/^attack[1-4]$/.test(child.nName)) continue;
+      const ainfo = child.nGet("info");
+      const type = ainfo.nGet("type").nGet("nValue", 0);
+      const attackAfter = ainfo.nGet("attackAfter").nGet("nValue", 0);
+      const padOverrideNode = ainfo.nGet("PADamage");
+      const padOverride = padOverrideNode.nGet
+        ? padOverrideNode.nGet("nValue", undefined)
+        : undefined;
+      const isMagicAttack =
+        type === 1 || ainfo.nGet("magic").nGet("nValue", 0) > 0;
+
+      let rangeRect: any = null;
+      let rangeR = 0;
+      const range = ainfo.nGet("range");
+      const lt = range.nGet("lt");
+      const sp = range.nGet("sp");
+      if (lt.nGet && lt.nGet("nX", null) !== null) {
+        const rb = range.nGet("rb");
+        rangeRect = {
+          x1: lt.nGet("nX", 0),
+          y1: lt.nGet("nY", 0),
+          x2: rb.nGet("nX", 0),
+          y2: rb.nGet("nY", 0),
+        };
+      } else if (sp.nGet && sp.nGet("nX", null) !== null) {
+        rangeR = range.nGet("r").nGet("nValue", 0);
+        const spX = sp.nGet("nX", 0);
+        const spY = sp.nGet("nY", 0);
+        rangeRect = {
+          x1: spX - rangeR,
+          y1: spY - rangeR,
+          x2: spX + rangeR,
+          y2: spY + rangeR,
+        };
+      }
+
+      // Ball/effect/hit frame dirs live under attackN/info in Mob.wz
+      const ballNode = ainfo.nGet("ball");
+      this.attacks.push({
+        stance: child.nName,
+        type,
+        attackAfter,
+        padOverride,
+        isMagicAttack,
+        rangeRect,
+        rangeR,
+        ballNode: ballNode.nChildren?.length ? ballNode : null,
+      });
+    }
 
     this.isBoss = false;
     if (mobFile.info.boss && mobFile.info.boss.nValue === 1) {
@@ -458,6 +578,11 @@ async addDrops() {
       return;
     }
 
+    // Being hit aggros passive mobs onto the attacker
+    if (responsibleMapleCharacter && !this.dying) {
+      this.aggroTarget = responsibleMapleCharacter;
+    }
+
     // Host: apply damage authoritatively
     if (this.hp - damage <= 0) {
       this.isInHit = true;
@@ -540,8 +665,11 @@ async addDrops() {
     if (timeSinceLastChange > this.delayBetweenDirectionChange) {
       // if not jumping
       if (this.pos.fh) {
-        // Mobs don't randomly jump — prevents them from landing on wrong platforms
-        if (Math.random() < 0.2) {
+        if (this.moveType === "jump" && Math.random() < this.jumpProbability) {
+          // Jump-capable mobs (jump stance in WZ) occasionally hop
+          this.jump();
+          Math.random() < 0.5 ? this.right() : this.left();
+        } else if (Math.random() < 0.2) {
           this.stand();
         } else if (Math.random() < 0.5) {
           this.left();
@@ -551,6 +679,216 @@ async addDrops() {
       }
 
       this.lastDirectionChangeTime = currentTime;
+    }
+  }
+
+  /**
+   * Host-only target scan: validate/de-aggro the current target and let
+   * firstAttack mobs auto-acquire a nearby player inside patrol bounds.
+   */
+  updateAggro(now: number) {
+    if (now - this.lastTargetScan < TARGET_SCAN_MS) return;
+    this.lastTargetScan = now;
+
+    const candidates = [
+      (window as any).charecter,
+      ...(this.map?.characters || []),
+    ].filter((c: any) => c && !c.isDead && c.pos);
+
+    if (this.aggroTarget) {
+      const t = this.aggroTarget;
+      const stillPresent = candidates.includes(t);
+      const dx = Math.abs((t.pos?.x ?? Infinity) - this.pos.x);
+      if (!stillPresent || t.isDead || dx > DEAGGRO_RANGE_X) {
+        this.aggroTarget = null;
+        this.outOfRangeSince = 0;
+      } else if (t.pos.x < this.minX || t.pos.x > this.maxX) {
+        // Target left the patrol area — give up after a grace period
+        if (!this.outOfRangeSince) {
+          this.outOfRangeSince = now;
+        } else if (now - this.outOfRangeSince > DEAGGRO_GRACE_MS) {
+          this.aggroTarget = null;
+          this.outOfRangeSince = 0;
+        }
+      } else {
+        this.outOfRangeSince = 0;
+      }
+    }
+
+    if (!this.aggroTarget && this.firstAttack) {
+      let best: any = null;
+      let bestDx = Infinity;
+      for (const c of candidates) {
+        const dx = Math.abs(c.pos.x - this.pos.x);
+        const dy = Math.abs(c.pos.y - this.pos.y);
+        if (
+          dx <= AGGRO_RANGE_X &&
+          dy <= AGGRO_RANGE_Y &&
+          c.pos.x >= this.minX &&
+          c.pos.x <= this.maxX &&
+          dx < bestDx
+        ) {
+          best = c;
+          bestDx = dx;
+        }
+      }
+      if (best) this.aggroTarget = best;
+    }
+  }
+
+  /** Walk/jump mobs chase the aggro target at their WZ walk speed. */
+  updateChase() {
+    const dx = this.aggroTarget.pos.x - this.pos.x;
+    if (Math.abs(dx) > 10) {
+      dx > 0 ? this.right() : this.left();
+    } else {
+      this.stand();
+    }
+  }
+
+  /** Flying mobs steer toward a wander point (or the aggro target). */
+  updateFlying(now: number) {
+    const flyVel = Math.max(60, this.pos.walk_speed * 0.6);
+    let targetX: number;
+    let targetY: number;
+
+    if (this.aggroTarget) {
+      targetX = this.aggroTarget.pos.x;
+      targetY = this.aggroTarget.pos.y - 30;
+    } else {
+      if (
+        (!this.flyTargetX && !this.flyTargetY) ||
+        now - this.lastFlyTargetPick > 1500 + Math.random() * 1500
+      ) {
+        this.flyTargetX = this.minX + Math.random() * (this.maxX - this.minX);
+        this.flyTargetY = this.spawnCy - 60 + Math.random() * 80;
+        this.lastFlyTargetPick = now;
+      }
+      targetX = this.flyTargetX;
+      targetY = this.flyTargetY;
+    }
+
+    targetY = Math.max(this.spawnCy - 80, Math.min(this.spawnCy + 40, targetY));
+    const dx = targetX - this.pos.x;
+    const dy = targetY - this.pos.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 5) {
+      this.pos.vx = (dx / dist) * flyVel;
+      this.pos.vy = (dy / dist) * flyVel;
+    } else {
+      this.pos.vx = 0;
+      this.pos.vy = 0;
+    }
+    if (this.pos.vx > 1) {
+      this.right();
+    } else if (this.pos.vx < -1) {
+      this.left();
+    }
+  }
+
+  /** World-space range test for an attack rect (WZ rects assume facing left). */
+  inAttackRange(atk: any, target: any): boolean {
+    if (!atk.rangeRect || !target?.pos) return false;
+    let x1 = atk.rangeRect.x1;
+    let x2 = atk.rangeRect.x2;
+    if (this.flipped) {
+      const tmp = x1;
+      x1 = -x2;
+      x2 = -tmp;
+    }
+    const wx1 = this.pos.x + Math.min(x1, x2);
+    const wx2 = this.pos.x + Math.max(x1, x2);
+    const wy1 = this.pos.y + Math.min(atk.rangeRect.y1, atk.rangeRect.y2);
+    const wy2 = this.pos.y + Math.max(atk.rangeRect.y1, atk.rangeRect.y2);
+    return (
+      target.pos.x >= wx1 &&
+      target.pos.x <= wx2 &&
+      target.pos.y >= wy1 &&
+      target.pos.y <= wy2
+    );
+  }
+
+  /** Host-only: start an attack when the target is inside a range and off cooldown. */
+  tryAttack(now: number) {
+    if (
+      this.isAttacking ||
+      this.attacks.length === 0 ||
+      now < this.nextAttackTime ||
+      !this.aggroTarget
+    ) {
+      return;
+    }
+    for (const atk of this.attacks) {
+      if (this.inAttackRange(atk, this.aggroTarget)) {
+        this.flipped = this.aggroTarget.pos.x > this.pos.x;
+        this.pos.vx = 0;
+        this.stand();
+        this.isAttacking = true;
+        this.currentAttack = atk;
+        this.attackElapsed = 0;
+        this.attackFired = false;
+        this.setStance(atk.stance, 0, () => {
+          this.isAttacking = false;
+          this.currentAttack = null;
+        });
+        // Cosmic uses attackAfter as the cooldown; floor keeps melee spam sane
+        this.nextAttackTime =
+          now + Math.max(atk.attackAfter || 0, 2500) + Math.random() * 1500;
+        break;
+      }
+    }
+  }
+
+  /**
+   * Stance-driven attack execution — runs on host AND remote clients (remote
+   * mobs enter attack stances via mob_state_batch), so every client resolves
+   * damage against its own local player.
+   */
+  updateAttackFire(msPerTick: number) {
+    const stanceName = typeof this.stance === "string" ? this.stance : "";
+    if (!stanceName.startsWith("attack")) {
+      this.attackElapsed = 0;
+      this.attackFired = false;
+      return;
+    }
+    const atk =
+      this.currentAttack?.stance === stanceName
+        ? this.currentAttack
+        : this.attacks.find((a: any) => a.stance === stanceName);
+    if (!atk) return;
+
+    this.attackElapsed += msPerTick;
+    const fireAt = Math.min(atk.attackAfter || 400, 1500);
+    if (!this.attackFired && this.attackElapsed >= fireAt) {
+      this.attackFired = true;
+      this.fireAttack(atk);
+    }
+  }
+
+  fireAttack(atk: any) {
+    if (atk.type === 2 && atk.ballNode?.nChildren?.length) {
+      const proj = new MobProjectile({
+        x: this.pos.x,
+        y: this.pos.y - this.height / 2,
+        facingRight: !!this.flipped,
+        ballNode: atk.ballNode,
+        maxDistance: atk.rangeR > 0 ? atk.rangeR * 2 : 600,
+        sourceMob: this,
+        padOverride: atk.isMagicAttack ? atk.padOverride ?? this.mad : atk.padOverride,
+        isMagic: atk.isMagicAttack,
+      });
+      if (this.map?.mobProjectiles) {
+        this.map.mobProjectiles.push(proj);
+      }
+    } else {
+      // Melee swing / magic zone: each client tests only its own player
+      const player = (window as any).charecter;
+      if (player && !player.isDead && this.inAttackRange(atk, player)) {
+        const pad = atk.isMagicAttack
+          ? atk.padOverride ?? this.mad
+          : atk.padOverride;
+        player.applyMobAttack?.(this, pad, atk.isMagicAttack);
+      }
     }
   }
 
@@ -585,14 +923,31 @@ async addDrops() {
         x: this.pos.x,
         y: this.pos.y - this.height / 2,
       };
+
+      // Remote mobs still fire attacks locally when the batched stance flips
+      // to attackN — each client damages only its own player
+      if (!this.dying) {
+        this.updateAttackFire(msPerTick);
+      }
       return;
     }
 
     // --- Local AI (host only) ---
+    const now = Date.now();
+
+    if (!this.dying && !this.isInHit) {
+      this.updateAggro(now);
+      this.tryAttack(now);
+    }
+
     if (this.dying) {
       this.setStance(MobStance.die1);
     } else if (this.isInHit) {
       // already added stance with callback in the hit function
+    } else if (this.isAttacking) {
+      // keep the attack stance until its frames finish
+    } else if (this.moveType === "fly") {
+      this.setStance(MobStance.fly);
     } else if (!this.pos.fh) {
       // if not on ground
       if (this.stances[MobStance.jump]) {
@@ -602,7 +957,9 @@ async addDrops() {
       }
     } else {
       if (this.pos.right || this.pos.left) {
-        this.setStance(MobStance.move);
+        this.setStance(
+          this.stances[MobStance.move] ? MobStance.move : MobStance.stand
+        );
       } else {
         this.setStance(MobStance.stand);
       }
@@ -617,33 +974,47 @@ async addDrops() {
       this.setFrame(this.stance, this.frame + 1, this.delay - this.nextDelay);
     }
 
-    if (!this.isInHit) {
-      // need to add some time between changes to avoid jitter
-      if (Math.random() < 0.02) {
-        // Adjust probability as needed
-        this.changeDirectionRandomly();
+    // Movement decisions per move type
+    if (!this.isInHit && !this.dying && !this.isAttacking) {
+      if (this.moveType === "fly") {
+        this.updateFlying(now);
+      } else if (this.aggroTarget && this.moveType !== "stationary") {
+        this.updateChase();
+      } else if (this.moveType === "walk" || this.moveType === "jump") {
+        // need to add some time between changes to avoid jitter
+        if (Math.random() < 0.02) {
+          this.changeDirectionRandomly();
+        }
+      } else {
+        this.stand();
       }
-
     }
 
+    this.updateAttackFire(msPerTick);
+
     // Prevent mobs from walking off foothold edges (GMS behavior)
-    // Mobs stay on their foothold — reverse direction at edges
-    if (this.isMovementEnabled && this.pos.fh && !this.dying) {
+    // Wandering mobs reverse at edges; chasing mobs stop and wait
+    if (
+      this.isMovementEnabled &&
+      this.pos.fh &&
+      !this.dying &&
+      this.moveType !== "fly"
+    ) {
       const fh = this.pos.fh;
       const margin = 2;
       if (this.pos.x >= fh.x2 - margin && this.pos.vx > 0) {
-        // At right edge of foothold — only reverse if no connected next foothold
+        // At right edge of foothold — only stop if no connected next foothold
         if (!fh.next || fh.next.x1 >= fh.next.x2) {
           this.pos.x = fh.x2 - margin;
           this.pos.vx = 0;
-          this.left();
+          this.aggroTarget ? this.stand() : this.left();
         }
       } else if (this.pos.x <= fh.x1 + margin && this.pos.vx < 0) {
-        // At left edge of foothold — only reverse if no connected prev foothold
+        // At left edge of foothold — only stop if no connected prev foothold
         if (!fh.prev || fh.prev.x1 >= fh.prev.x2) {
           this.pos.x = fh.x1 + margin;
           this.pos.vx = 0;
-          this.right();
+          this.aggroTarget ? this.stand() : this.right();
         }
       }
     }
@@ -656,11 +1027,19 @@ async addDrops() {
     if (this.pos.x < this.minX) {
       this.pos.x = this.minX;
       this.pos.vx = 0;
-      this.right();
+      this.aggroTarget ? this.stand() : this.right();
     } else if (this.pos.x > this.maxX) {
       this.pos.x = this.maxX;
       this.pos.vx = 0;
-      this.left();
+      this.aggroTarget ? this.stand() : this.left();
+    }
+
+    // Flying mobs stay inside their vertical band
+    if (this.moveType === "fly") {
+      const yMin = this.spawnCy - 80;
+      const yMax = this.spawnCy + 40;
+      if (this.pos.y < yMin) this.pos.y = yMin;
+      else if (this.pos.y > yMax) this.pos.y = yMax;
     }
 
     this.centerPosition = {

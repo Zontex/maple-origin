@@ -65,16 +65,18 @@ class Physics {
   lf: any = null;
   djump: any = null;
   isClimbing: boolean = false;
+  flying: boolean = false;
   walk_speed: number = default_walk_speed;
   landingImpactVy: number = 0; // Records vy at moment of landing for fall damage
   fallStartY: number = 0; // Y position when player left a foothold
   fallDistance: number = 0; // Total Y distance fallen on landing
 
-  constructor(x = 0, y = 0, walkSpeed = default_walk_speed) {
+  constructor(x = 0, y = 0, walkSpeed = default_walk_speed, exactSpeed = false) {
     this.x = x;
     this.y = y;
-    this.walk_speed =
-      walkSpeed === default_walk_speed
+    this.walk_speed = exactSpeed
+      ? walkSpeed
+      : walkSpeed === default_walk_speed
         ? default_walk_speed
         : walkSpeed + speedFactor;
   }
@@ -208,6 +210,14 @@ class Physics {
     let vx = this.vx;
     let vy = this.vy;
     let fh = this.fh;
+
+    // Flying entities (mobs with a fly stance) ignore gravity and footholds;
+    // their AI steers vx/vy directly
+    if (this.flying) {
+      this.x = this.x + vx * delta;
+      this.y = this.y + vy * delta;
+      return;
+    }
 
     if (this.isClimbing) {
       this.x = this.x + vx * delta;

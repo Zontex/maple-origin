@@ -112,6 +112,7 @@ enum Stance {
 export enum MobStance {
   attack1 = "attack1",
   die1 = "die1",
+  fly = "fly",
   hit1 = "hit1",
   jump = "jump",
   move = "move",
