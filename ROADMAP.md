@@ -4,48 +4,56 @@ Full-codebase audit (2026-07-20) comparing the current implementation against au
 pre-Big Bang v83 behavior, using the Cosmic Java source in `backend/` as reference.
 Severity: **broken** (doesn't work) / **missing** (absent) / **inaccurate** (works but wrong vs v83).
 
+> **Progress (2026-07-20):** Tiers 0-2 executed in commits `175ba2ad`..`20e09d1f` —
+> Tier 0 bug sweep, stat aggregation (equips/buffs/passives), magic/mastery/crits/elements,
+> authentic touch damage/knockback/ammo/death/attack speed, mob AI (move types, aggro,
+> attacks, Cosmic respawn), quest/NPC unbreaking (#L selections, cm/qm hardening, styling,
+> quest req/reward gaps), and item systems (slotMax, return scrolls, authentic drops,
+> scroll upgrades, shop). Checked items below are done; *partial* notes mark remainders.
+
+
 ---
 
 ## Tier 0 — Outright bugs (small fixes, big payoff)
 
-- [ ] **`forbidFallDown` typo** — `FootHold.ts:48` stores the flag as `this.forbid`, but `Physics.ts:101` reads `fh.forbit` (always undefined). Footholds flagged no-jump-down can be jumped through. *(broken)*
-- [ ] **Shop list can't scroll** — `ShopUI.ts:347` reads `(canvas as any).scrollDelta`, a property `GameCanvas` never sets (it exposes `scrolledUp`/`scrolledDown`). Any shop with >5 items has unreachable entries. *(broken)*
-- [ ] **Meso/fame wiped to 0 by fallback auto-save** — `server/handlers/auth.js:132-135` builds save data from `player.info` (a positional-update object that never carries meso/fame), and `Character.js:238-242` writes `mesos ?? 0`. Disconnect before the first full client save = meso/fame wipe. *(broken)*
-- [ ] **Inventory slot positions not stable across save/load** — client serializes with `.filter(Boolean)` (`mysocket.ts:210-211`), collapsing empty slots; items compact to the front on every login. *(inaccurate)*
-- [ ] **`getLocationAboveRandomFoothold` indexing bug** — `MapleMap.ts:223-228` mixes keys of horizontal footholds with `this.footholds.length`; picks nonsense footholds. *(broken)*
-- [ ] **Latent: `getMagicDamageAfterMonsterDefense` min uses `damageRange.max`** — `Stats.ts:331`. Dead code today but wrong when magic lands. *(inaccurate)*
+- [x] **`forbidFallDown` typo** — `FootHold.ts:48` stores the flag as `this.forbid`, but `Physics.ts:101` reads `fh.forbit` (always undefined). Footholds flagged no-jump-down can be jumped through. *(broken)*
+- [x] **Shop list can't scroll** — `ShopUI.ts:347` reads `(canvas as any).scrollDelta`, a property `GameCanvas` never sets (it exposes `scrolledUp`/`scrolledDown`). Any shop with >5 items has unreachable entries. *(broken)*
+- [x] **Meso/fame wiped to 0 by fallback auto-save** — `server/handlers/auth.js:132-135` builds save data from `player.info` (a positional-update object that never carries meso/fame), and `Character.js:238-242` writes `mesos ?? 0`. Disconnect before the first full client save = meso/fame wipe. *(broken)*
+- [x] **Inventory slot positions not stable across save/load** — client serializes with `.filter(Boolean)` (`mysocket.ts:210-211`), collapsing empty slots; items compact to the front on every login. *(inaccurate)*
+- [x] **`getLocationAboveRandomFoothold` indexing bug** — `MapleMap.ts:223-228` mixes keys of horizontal footholds with `this.footholds.length`; picks nonsense footholds. *(broken)*
+- [x] **Latent: `getMagicDamageAfterMonsterDefense` min uses `damageRange.max`** — `Stats.ts:331`. Dead code today but wrong when magic lands. *(inaccurate)*
 
 ## Tier 1 — Core combat correctness (biggest gameplay gaps)
 
-- [ ] **Equipment stats are never applied** — `equipItem` (`InventoryMenuSprite.ts:895-927`) only changes visuals. No STR/DEX/WATK/WDEF/HP aggregation from equips exists anywhere; combat and the stats window ignore gear entirely. *(broken — highest impact single fix in the game)*
-- [ ] **Buffs/passives have zero effect** — `BuffManager.getTotalPad/Acc/...` and `SkillManager.getPassiveBonuses()` are computed but never read by any damage/stat formula (`Stats.ts:18` TODO). Rage, Booster, Iron Body, Magic Guard, mastery passives etc. only show an icon. *(broken)*
-- [ ] **No magic attack system** — `Stats.getAttackRange` (`Stats.ts:140-144`) has no magic branch; wands/staffs use `str·4.0` physical. Magicians are unplayable. Needs authentic v83 magic formula (INT + MATK + spell mastery). *(missing)*
-- [ ] **Mastery hardcoded to 0.1** — `Stats.ts:123`; should come from learned mastery skills. *(inaccurate)*
-- [ ] **Critical hits absent** — `criticalChance/criticalDamage` set but never used; crit indicator exists but never triggers (Critical Shot/Throw dead). *(missing)*
-- [ ] **Elemental weakness/immunity missing** — no reading of mob elemental resistances (Cosmic `ElementalEffectiveness`). *(missing)*
-- [ ] **Mob combat AI missing** — mobs only wander randomly (`Monster.ts:506-524`). No aggro/chase (`firstAttack`), no mob ranged/magic attacks, no mob skills (heal/buff/poison/stun/seduce/dispel), no self-destruct, no summons/revives. *(missing — major)*
-- [ ] **`moveAbility` ignored** — flying mobs fall under gravity, stationary mobs wander, no platform jumping (`Monster.ts:112, 512-513`). *(inaccurate)*
-- [ ] **Invented touch-damage/knockback/accuracy formulas** — touch damage `pad·(0.8–1.2)−WDEF` (`MapleCharacter.ts:1616`), knockback on any damage>0 with fixed force (`Monster.ts:448`, `Physics.ts:187` — bosses get knocked back; authentic requires ~1% max-HP damage), job-branched accuracy formula (`Stats.ts:240-260`; authentic is uniform `dex·0.8+luk·0.5`). *(inaccurate)*
-- [ ] **No ammo consumption** — arrows/stars never deducted; `fireProjectile` uses hardcoded `DEFAULT_PROJECTILE_ID` (`MapleCharacter.ts:1020-1047`). *(missing)*
-- [ ] **No attack speed model** — no weapon attackSpeed, no Booster effect; gated only by animation (`MapleCharacter.ts:670-715`). *(missing)*
-- [ ] **No EXP loss on death; revive HP hardcoded 100** (`MapleCharacter.ts:214, 1333, 1449`). v83 loses % EXP on death, revives at HP 50. *(inaccurate)*
+- [x] **Equipment stats are never applied** — `equipItem` (`InventoryMenuSprite.ts:895-927`) only changes visuals. No STR/DEX/WATK/WDEF/HP aggregation from equips exists anywhere; combat and the stats window ignore gear entirely. *(broken — highest impact single fix in the game)*
+- [x] **Buffs/passives have zero effect** — `BuffManager.getTotalPad/Acc/...` and `SkillManager.getPassiveBonuses()` are computed but never read by any damage/stat formula (`Stats.ts:18` TODO). Rage, Booster, Iron Body, Magic Guard, mastery passives etc. only show an icon. *(broken)*
+- [x] **No magic attack system** — `Stats.getAttackRange` (`Stats.ts:140-144`) has no magic branch; wands/staffs use `str·4.0` physical. Magicians are unplayable. Needs authentic v83 magic formula (INT + MATK + spell mastery). *(missing)*
+- [x] **Mastery hardcoded to 0.1** — `Stats.ts:123`; should come from learned mastery skills. *(inaccurate)*
+- [x] **Critical hits absent** — `criticalChance/criticalDamage` set but never used; crit indicator exists but never triggers (Critical Shot/Throw dead). *(missing)*
+- [x] **Elemental weakness/immunity missing** — no reading of mob elemental resistances (Cosmic `ElementalEffectiveness`). *(missing)*
+- [x] **Mob combat AI missing** — mobs only wander randomly (`Monster.ts:506-524`). No aggro/chase (`firstAttack`), no mob ranged/magic attacks, no mob skills (heal/buff/poison/stun/seduce/dispel), no self-destruct, no summons/revives. *(missing — major)* — *partial: aggro/chase + WZ attack1-4 melee/magic/ball attacks done; mob skills (heal/summon/poison/etc) still out of scope*
+- [x] **`moveAbility` ignored** — flying mobs fall under gravity, stationary mobs wander, no platform jumping (`Monster.ts:112, 512-513`). *(inaccurate)*
+- [x] **Invented touch-damage/knockback/accuracy formulas** — touch damage `pad·(0.8–1.2)−WDEF` (`MapleCharacter.ts:1616`), knockback on any damage>0 with fixed force (`Monster.ts:448`, `Physics.ts:187` — bosses get knocked back; authentic requires ~1% max-HP damage), job-branched accuracy formula (`Stats.ts:240-260`; authentic is uniform `dex·0.8+luk·0.5`). *(inaccurate)*
+- [x] **No ammo consumption** — arrows/stars never deducted; `fireProjectile` uses hardcoded `DEFAULT_PROJECTILE_ID` (`MapleCharacter.ts:1020-1047`). *(missing)*
+- [x] **No attack speed model** — no weapon attackSpeed, no Booster effect; gated only by animation (`MapleCharacter.ts:670-715`). *(missing)*
+- [x] **No EXP loss on death; revive HP hardcoded 100** (`MapleCharacter.ts:214, 1333, 1449`). v83 loses % EXP on death, revives at HP 50. *(inaccurate)*
 - [ ] **Job advancement is a stub** — `changeJob` (`MapleCharacter.ts:510-522`) just sets ID + 1 SP; no proper advancement flow. *(inaccurate)*
-- [ ] **i-frame 1500ms** (`MapleCharacter.ts:212`) — authentic ~1000ms. *(minor)*
+- [x] **i-frame 1500ms** (`MapleCharacter.ts:212`) — authentic ~1000ms. *(minor)*
 - [ ] **Melee hit effect is a `console.log` placeholder** (`MapleCharacter.ts:1052-1067`). *(missing)*
 
 ## Tier 2 — Quests / NPCs / items
 
-- [ ] **Say.img `#L` selections stripped instead of parsed** — `QuestData.ts:165-166` deletes `#L…#l` markup, so ~1112 quests show branch text mashed together with no clickable options. Fix: parse like `NpcScriptEngine.parseSelections` and route through `UIQuestDialog.selections`. *(broken — known issue, confirmed)*
-- [ ] **NPC script engine crashes on missing cm methods** — undefined methods throw and silently close the dialog (`NpcScriptEngine.ts:197-201`). Missing with high usage: `getQuestStatus` (11), `sendGetNumber` (19), `sendGetText` (16), `getText`/`getNumber`, `itemQuantity` (23), `hasItem` (10), `getJob` (12), `removeAll` (25), `getPlayerCount` (20), `mapMessage` (14), plus party/PQ/event/gachapon/marriage methods. *(broken)*
-- [ ] **Styling NPCs do nothing** — `sendStyle` ignores options (`NpcScriptEngine.ts:263`); `setHair/setFace/setSkin` are empty stubs (`:328-330`). Beauty salon dead. *(missing)*
-- [ ] **Scroll/upgrade system entirely absent** — no scrolling, no upgrade slots (`tuc`), no success/fail/boom; equips have no per-instance stats (`Inventory/Item.ts` holds only itemId+quantity — no flags, no expiry, no potential). *(missing subsystem)*
-- [ ] **Use-item variety absent** — only HP/MP potions work. Return scrolls, teleport rocks, pet food, mastery books, summoning sacks, AP/SP resets all dead (`InventoryMenuSprite.ts:930-1002`). *(missing)*
-- [ ] **Quest requirement gaps** — item-to-start explicitly skipped (`QuestManager.ts:347`), meso, pet/tameness, monster book, INTERVAL (all repeatables become one-time!), FIELD_ENTER, INFO_NUMBER/INFO_EX, buff checks, start-date window not enforced. *(missing)*
-- [ ] **Quest reward gaps** — SKILL rewards not applied (breaks skill quests/advancement), buff rewards, pet rewards, Info action; prop-item random pick is equal-weighted instead of prop-weighted (`QuestManager.ts:161-166`). *(missing)*
-- [ ] **Quest-gated mob drops not filtered** — `questid` on drop entries ignored (`DropRandomizer.ts:186-197`, `Monster.ts:185-240`); quest items always drop. (Reactor path does this correctly.) *(inaccurate)*
-- [ ] **Meso drops faked** — flat 10-100 @ 30% only when the item table is empty (`Monster.ts:194-210`); real per-mob formula is commented out (`DropRandomizer.ts:199-215`). *(inaccurate)*
-- [ ] **Shop gaps** — no rechargeable stars/bullets (buy full slot at unitPrice×slotMax, recharge), no buy/sell quantity dialog (always qty 1), sell price is a custom `wzPrice/3` heuristic (`ShopData.ts:57`). *(missing/inaccurate)*
-- [ ] **slotMax / inventory capacity not enforced** — stacks grow unbounded, inventory never "full" (`Inventory.ts:26-68`); `canHold` always true in script engines. Meso not clamped to int32 max. *(inaccurate)*
+- [x] **Say.img `#L` selections stripped instead of parsed** — `QuestData.ts:165-166` deletes `#L…#l` markup, so ~1112 quests show branch text mashed together with no clickable options. Fix: parse like `NpcScriptEngine.parseSelections` and route through `UIQuestDialog.selections`. *(broken — known issue, confirmed)*
+- [x] **NPC script engine crashes on missing cm methods** — undefined methods throw and silently close the dialog (`NpcScriptEngine.ts:197-201`). Missing with high usage: `getQuestStatus` (11), `sendGetNumber` (19), `sendGetText` (16), `getText`/`getNumber`, `itemQuantity` (23), `hasItem` (10), `getJob` (12), `removeAll` (25), `getPlayerCount` (20), `mapMessage` (14), plus party/PQ/event/gachapon/marriage methods. *(broken)*
+- [x] **Styling NPCs do nothing** — `sendStyle` ignores options (`NpcScriptEngine.ts:263`); `setHair/setFace/setSkin` are empty stubs (`:328-330`). Beauty salon dead. *(missing)*
+- [x] **Scroll/upgrade system entirely absent** — no scrolling, no upgrade slots (`tuc`), no success/fail/boom; equips have no per-instance stats (`Inventory/Item.ts` holds only itemId+quantity — no flags, no expiry, no potential). *(missing subsystem)* — *partial: scrolling + per-instance stats/tuc done; flags/expiry/potential still absent*
+- [x] **Use-item variety absent** — only HP/MP potions work. Return scrolls, teleport rocks, pet food, mastery books, summoning sacks, AP/SP resets all dead (`InventoryMenuSprite.ts:930-1002`). *(missing)* — *partial: return scrolls done; pet food/mastery books/sacks/AP-SP resets still absent*
+- [x] **Quest requirement gaps** — item-to-start explicitly skipped (`QuestManager.ts:347`), meso, pet/tameness, monster book, INTERVAL (all repeatables become one-time!), FIELD_ENTER, INFO_NUMBER/INFO_EX, buff checks, start-date window not enforced. *(missing)* — *partial: item-to-start/meso/startDate/INTERVAL done; pet/monsterbook/FIELD_ENTER/INFO_NUMBER/buff still missing*
+- [x] **Quest reward gaps** — SKILL rewards not applied (breaks skill quests/advancement), buff rewards, pet rewards, Info action; prop-item random pick is equal-weighted instead of prop-weighted (`QuestManager.ts:161-166`). *(missing)* — *partial: SKILL rewards + prop-weighted pick done; buff/pet/Info actions still missing*
+- [x] **Quest-gated mob drops not filtered** — `questid` on drop entries ignored (`DropRandomizer.ts:186-197`, `Monster.ts:185-240`); quest items always drop. (Reactor path does this correctly.) *(inaccurate)*
+- [x] **Meso drops faked** — flat 10-100 @ 30% only when the item table is empty (`Monster.ts:194-210`); real per-mob formula is commented out (`DropRandomizer.ts:199-215`). *(inaccurate)*
+- [x] **Shop gaps** — no rechargeable stars/bullets (buy full slot at unitPrice×slotMax, recharge), no buy/sell quantity dialog (always qty 1), sell price is a custom `wzPrice/3` heuristic (`ShopData.ts:57`). *(missing/inaccurate)* — *partial: rechargeables/quantity dialogs/WZ sell price done*
+- [x] **slotMax / inventory capacity not enforced** — stacks grow unbounded, inventory never "full" (`Inventory.ts:26-68`); `canHold` always true in script engines. Meso not clamped to int32 max. *(inaccurate)*
 
 ## Tier 3 — Movement / world fidelity
 
