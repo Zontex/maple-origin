@@ -473,7 +473,10 @@ async addDrops() {
         this.pos.right = false;
         this.pos.left = false;
 
-        this.pos.applyKnockbackX(knockBackDirection);
+        // v83 knockback: requires damage >= 1% of max HP; bosses never budge
+        if (!this.isBoss && damage >= this.maxHp * 0.01) {
+          this.pos.applyKnockbackX(knockBackDirection);
+        }
         this.setStance(MobStance.hit1, 0, () => {
           this.isInHit = false;
         });

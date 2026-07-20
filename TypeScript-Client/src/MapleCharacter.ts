@@ -12,6 +12,7 @@ import {
 } from "./Physics/Collision";
 import ClimbDirections from "./Constants/enums/ClimbDirections";
 import getEquipTypeById, {
+  WeaponType,
   getWeaponConfig,
   DEFAULT_PROJECTILE_ID,
   playAudioForAttackByWeaponType,
@@ -23,7 +24,8 @@ import DamageIndicator, {
 } from "./Effects/DamageIndicator";
 import { AttackType } from "./Constants/AttackType";
 import Inventory from "./Inventory/Inventory";
-import Stats from "./Stats/Stats";
+import Stats, { DamageRange } from "./Stats/Stats";
+import { BOOSTER_SKILL_IDS } from "./Constants/CombatSkills";
 import { MapleMap } from "./MapleMap";
 import Monster from "./Monster";
 import Portal from "./Portal";
@@ -98,6 +100,7 @@ class MapleCharacter {
   maxCloseToMobDistance: number = 0;
   mobHitMinOverlapPercentage: number = 0;
   hitCooldownTimeInMS: number = 0;
+  lastAttackTime: number = 0;
   lastHitTime: number = 0;
   spawnDefaultHp: number = 0;
   weaponEquip: any = null;
@@ -209,9 +212,10 @@ class MapleCharacter {
 
     this.maxCloseToMobDistance = 80;
     this.mobHitMinOverlapPercentage = 10;
-    this.hitCooldownTimeInMS = 1500;
+    this.hitCooldownTimeInMS = 1000;
     this.lastHitTime = Date.now();
-    this.spawnDefaultHp = 100;
+    this.spawnDefaultHp = 50;
+    this.lastAttackTime = 0;
 
     this.weaponEquip = null;
     this.weaponEquipId = null;
@@ -238,7 +242,7 @@ class MapleCharacter {
       baseMaxMp: this.maxMp,
       buffBonuses: this.buffManager?.getStatTotals() ?? null,
       passiveBonuses: this.skillManager?.getPassiveBonuses() ?? null,
-      projectileWatk: 0,
+      projectileWatk: this.getEquippedAmmoWatk?.() ?? 0,
     });
     // A buff expiring can lower max HP/MP below current values
     this.hp = Math.min(this.hp, this.stats.localMaxHp);
@@ -703,25 +707,85 @@ class MapleCharacter {
  /**
  * Attack method — uses WeaponConfig to determine stance, range, and melee vs projectile behavior.
  */
+/**
+ * Ammo lookup for ranged weapons: first matching Use-tab stack with quantity.
+ * Bows use arrows (2060xxx), crossbows bolts (2061xxx), claws stars (207xxxx),
+ * guns bullets (233xxxx).
+ */
+findAmmo(weaponType: number): any | null {
+  const useTab = this.inventory?.use || [];
+  for (const item of useTab) {
+    if (!item || (item.quantity ?? 0) <= 0) continue;
+    const id = item.itemId;
+    const matches =
+      (weaponType === WeaponType.BOW && Math.floor(id / 1000) === 2060) ||
+      (weaponType === WeaponType.CROSSBOW && Math.floor(id / 1000) === 2061) ||
+      (weaponType === WeaponType.CLAW && Math.floor(id / 10000) === 207) ||
+      (weaponType === WeaponType.PISTOL && Math.floor(id / 10000) === 233);
+    if (matches) return item;
+  }
+  return null;
+}
+
+/**
+ * Equipped ammo weapon attack (Cosmic reapplyLocalStats parity): the first
+ * usable stack's incPAD feeds into localWatk for ranged weapons.
+ */
+getEquippedAmmoWatk(): number {
+  const weaponType = getEquipTypeById(this.weaponEquipId);
+  const config = getWeaponConfig(weaponType);
+  if (!config?.isRanged) return 0;
+  const ammo = this.findAmmo(weaponType);
+  return ammo?.node?.info?.incPAD?.nValue ?? 0;
+}
+
+/**
+ * Attack period from weapon attackSpeed (WZ stage 2=fastest..9=slowest,
+ * default 6) adjusted by an active Booster buff (effect.x is negative).
+ */
+getAttackDelayMs(): number {
+  const weaponSpeed = this.weaponEquip?.info?.attackSpeed?.nValue ?? 6;
+  let boosterDelta = 0;
+  if (this.buffManager) {
+    for (const skillId of BOOSTER_SKILL_IDS) {
+      const buff = this.buffManager.activeBuffs?.get?.(skillId);
+      if (buff) {
+        boosterDelta = buff.effect.x || 0;
+        break;
+      }
+    }
+  }
+  const speed = Math.min(9, Math.max(2, weaponSpeed + boosterDelta));
+  // Approximate v83 attack periods per speed stage
+  const delayTable: Record<number, number> = {
+    2: 600, 3: 660, 4: 720, 5: 780, 6: 840, 7: 900, 8: 960, 9: 1020,
+  };
+  return delayTable[speed] ?? 840;
+}
+
 async attack() {
   if (this.isInAttack) return;
-
-  this.isInAttack = true;
-  this.rightClickRelease();
-  this.leftClickRelease();
-  this.isInAlert = false;
+  if (Date.now() - this.lastAttackTime < this.getAttackDelayMs()) return;
 
   const weaponType = getEquipTypeById(this.weaponEquipId);
   const config = getWeaponConfig(weaponType);
 
   if (!config) {
     console.error('Unknown weapon type:', weaponType);
-    this.isInAttack = false;
     return;
   }
 
   // Ranged weapons fire projectiles unless the player is right next to a mob
   const useRanged = config.isRanged && !this.isCloseToMob(false);
+
+  // No ammo, no shot (authentic v83: the attack simply doesn't happen)
+  if (useRanged && !this.findAmmo(weaponType)) return;
+
+  this.isInAttack = true;
+  this.lastAttackTime = Date.now();
+  this.rightClickRelease();
+  this.leftClickRelease();
+  this.isInAlert = false;
   const stancePool = useRanged ? config.stances.ranged : config.stances.melee;
 
   if (stancePool.length === 0) {
@@ -867,6 +931,10 @@ async useSkill(skillId: number, effect: any) {
   if (!info) return;
 
   if (info.isAttack) {
+    // Attack skills respect weapon attack speed like regular attacks
+    if (Date.now() - this.lastAttackTime < this.getAttackDelayMs()) return;
+    this.lastAttackTime = Date.now();
+
     // Check if this is a projectile (ball) skill
     const hasBall = effect.ballNode && effect.ballNode.nChildren?.length > 0;
 
@@ -876,7 +944,7 @@ async useSkill(skillId: number, effect: any) {
       const inv = this.inventory;
       const foundItem = shellItems.find((itemId: number) => {
         const tabs = [inv.equip, inv.use, inv.setup, inv.etc, inv.cash];
-        return tabs.some(tab => tab.some((item: any) => item.itemId === itemId && item.quantity > 0));
+        return tabs.some(tab => tab.some((item: any) => item?.itemId === itemId && item.quantity > 0));
       });
       if (!foundItem) {
         console.log(`[Skill] No shells for Three Snails`);
@@ -1099,7 +1167,14 @@ async fireProjectile(weaponType: number) {
   const attackType = this.getAttackTypeFromStance();
   const rangedMastery = this.skillManager?.getWeaponMastery?.(weaponType) ?? 0.1;
   const weaponAttackRange = this.stats.getAttackRange(weaponType, attackType, rangedMastery);
-  const projectileItemId = DEFAULT_PROJECTILE_ID[weaponType] || 2060000;
+
+  // Fire the actual equipped ammo and consume one
+  const ammo = this.findAmmo(weaponType);
+  const projectileItemId = ammo?.itemId || DEFAULT_PROJECTILE_ID[weaponType] || 2060000;
+  if (ammo) {
+    this.inventory.removeFromInventory(ammo.itemId, 1);
+    this.recalcLocalStats();
+  }
 
   try {
     const projectile = await Projectile.fromOpts({
@@ -1412,6 +1487,15 @@ isCloseToMob = (inAllDirections = true) => {
     this.deathPosX = this.pos.x;
     this.deathPosY = this.pos.y;
 
+    // v83 death EXP loss (Beginners exempt, no de-leveling): 1% in town,
+    // otherwise 10% (LUK < 50) or 5% of the level's total EXP
+    if (this.stats.jobId !== 0 && !this.isRemote) {
+      const divisor = this.map?.isTown ? 100 : this.stats.luk < 50 ? 10 : 20;
+      const expLoss = Math.floor(this.maxExp / divisor);
+      this.exp = Math.max(0, this.exp - expLoss);
+      console.log(`[Death] Lost ${expLoss} EXP`);
+    }
+
     // Tombstone fall: starts 300px above death position, falls down
     this.tombstoneYOffset = -300;
     this.tombstoneActive = true;
@@ -1524,7 +1608,7 @@ isCloseToMob = (inAllDirections = true) => {
     this.tombstoneActive = false;
     this.tombstoneDone = false;
     this.isDead = false;
-    this.hp = this.spawnDefaultHp;
+    this.hp = Math.min(this.spawnDefaultHp, this.effectiveMaxHp);
 
     const { fadeToBlack } = await import('./MapState');
     fadeToBlack();
@@ -1686,12 +1770,33 @@ isCloseToMob = (inAllDirections = true) => {
             const knowbackYdirection = this.pos.y > monster.pos.y ? 1 : -1;
             this.pos.applyKnockback(knowbackXdirection, knowbackYdirection);
 
-            // v83 mob contact damage: random range around PAD, minus player defense
+            // v83 mob contact damage: mob PAD scaled by level gap, reduced by
+            // player weapon defense (mirrors the player-vs-mob defense model)
             const pad = monster.pad || 1;
-            const rawDamage = Math.floor(pad * (0.8 + Math.random() * 0.4));
             const pdd = this.stats.getWeaponDefense();
-            const finalTakenDamage = Math.max(1, rawDamage - pdd);
-            this.takeDamage(finalTakenDamage);
+            const levelFactor =
+              1 + 0.01 * Math.max(0, (monster.mobLevel || 1) - this.stats.level);
+            const touchRange = new DamageRange(
+              Math.floor(pad * levelFactor * 0.7 - pdd * 0.6),
+              Math.floor(pad * levelFactor - pdd * 0.5)
+            );
+            const finalTakenDamage = Math.max(
+              1,
+              Stats.getRandomAttackDamageFromAttackRange(touchRange)
+            );
+
+            // Magic Guard: a portion of the damage is taken from MP instead
+            let hpDamage = finalTakenDamage;
+            const magicGuard = this.buffManager?.activeBuffs?.get?.(2001002);
+            if (magicGuard) {
+              const mpPortion = Math.min(
+                this.mp,
+                Math.floor((finalTakenDamage * (magicGuard.effect.x || 0)) / 100)
+              );
+              this.mp -= mpPortion;
+              hpDamage = finalTakenDamage - mpPortion;
+            }
+            this.takeDamage(hpDamage);
 
             this.DamageIndicator.addDamageIndicator(
               DamageIndicatorType.MobHitPlayer,
