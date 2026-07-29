@@ -116,7 +116,11 @@ function autoSaveCharacter(player) {
     return;
   }
 
-  // Fallback: save from player.info only (no inventory/equip data)
+  // Fallback: save from player.info only. info comes from player_info/
+  // player_update render-sync messages — its equipped list can be empty
+  // (sent before the client finished attaching gear) and lacks scroll
+  // equipData, so item data must NEVER be persisted from here: a crash
+  // before the first full save would wipe the character's equipped rows
   if (!player.info) return;
   const info = player.info;
   const saveData = {
@@ -130,9 +134,6 @@ function autoSaveCharacter(player) {
     jobId: info.job ?? info.jobId,
     mesos: info.mesos,
     fame: info.fame,
-    equipped: info.equipped,
-    inventory: info.inventory,
-    quests: info.quests,
   };
   const result = Character.saveCharacter(player.characterId, saveData);
   if (result.success) {

@@ -475,10 +475,14 @@ MapStateInstance.doUpdate = function (
 
       MyCharacter.update(msPerTick);
 
-      if (!canvas.isKeyDown("up")) {
+      // Releases must fire only on the actual key-up transition. Calling
+      // them every not-held frame broke climbing: downClickRelease() ran on
+      // every frame while climbing UP, zeroing the climb velocity and the
+      // isClimbMoving animation flag right before each draw
+      if (!canvas.isKeyDown("up") && this.previousKeyboardState.up) {
         MyCharacter.upClickRelease();
       }
-      if (!canvas.isKeyDown("down")) {
+      if (!canvas.isKeyDown("down") && this.previousKeyboardState.down) {
         MyCharacter.downClickRelease();
       }
       if (!canvas.isKeyDown("left")) {

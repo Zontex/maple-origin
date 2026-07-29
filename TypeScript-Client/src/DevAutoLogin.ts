@@ -39,6 +39,12 @@ export function saveDevSession(username: string, password: string, worldId: numb
  */
 export function saveDevSnapshot() {
   if (!import.meta.env.DEV) return;
+  // Never snapshot a half-restored character — it would become the "fresh"
+  // state on the next reload and overwrite the real data
+  if (!(MyCharacter as any)._restoreComplete) {
+    console.warn('[DevAutoLogin] Skipping snapshot — restore not complete');
+    return;
+  }
   try {
     const MapleMap = (window as any).__MapleMap;
     const inv = MyCharacter.inventory;
@@ -179,7 +185,16 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
     if (snapshotRaw) {
       try {
         const snapshot = JSON.parse(snapshotRaw);
-        if (snapshot.id === session.characterId) {
+        // A snapshot with no equips while the DB has some is a broken state
+        // (e.g. captured mid-restore or after a wipe) — trusting it would
+        // re-save the naked state and perpetuate the wipe forever
+        const snapshotNaked = !snapshot.equipped || snapshot.equipped.length === 0;
+        const dbHasEquips = (result.character.equipped?.length ?? 0) > 0;
+        if (snapshot.id !== session.characterId) {
+          // different character — ignore
+        } else if (snapshotNaked && dbHasEquips) {
+          console.warn('[DevAutoLogin] Snapshot has no equips but DB does — using DB data');
+        } else {
           console.log('[DevAutoLogin] Using sessionStorage snapshot (fresher than DB)');
           charData = snapshot;
         }
@@ -187,6 +202,9 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
     }
     // 4. Apply character data — set properties only (no WZ loading here,
     //    MapState.initialize → MyCharacter.load() handles sprite loading)
+    // Block saves until the restore below succeeds (prevents empty-state
+    // saves from wiping DB inventory/equips)
+    (MyCharacter as any)._restoreComplete = false;
     MyCharacter.name = charData.name || 'Player';
     MyCharacter.skinColor = charData.skin ?? 0;
     MyCharacter.face = charData.face ?? 20000;
@@ -269,6 +287,9 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
     (MyCharacter as any)._startMapId = charData.mapId;
     (MyCharacter as any)._startPosX = charData.posX;
     (MyCharacter as any)._startPosY = charData.posY;
+
+    // Restore finished — saves are safe from here on
+    (MyCharacter as any)._restoreComplete = true;
 
     // 5. Enter game directly (skip login state entirely)
     const MapState = (await import('./MapState')).default;

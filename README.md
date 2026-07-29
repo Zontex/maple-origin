@@ -9,8 +9,9 @@ TypeScript + HTML5 Canvas client, Node.js WebSocket server, everything rendered 
 
 ## Screenshots
 
-![Login Screen](https://github.com/Jeck-Sparrow-5/MapleWeb/assets/162882278/a865ca04-ff39-41df-8e58-04a457825e10)
-![Gameplay](https://github.com/Jeck-Sparrow-5/MapleWeb/assets/162882278/6231bd8f-d593-44d4-96d6-83cd72dad603)
+![Login Screen](images/login.png)
+![World Select](images/world-select.png)
+![Gameplay](images/gameplay.png)
 
 ---
 
@@ -35,7 +36,7 @@ node tools/wz-to-json.js 83/UI.wz TypeScript-Client/public/wz_client/UI.wz/
 npm install && npm run dev          # WebSocket + SQLite on :3001
 
 # Terminal 2 — Client
-cd TypeScript-Client && npm install && npm run dev   # Vite dev server on :5173
+cd TypeScript-Client && npm install && npm run dev   # Vite dev server on :3000
 ```
 
 Login: `admin` / `admin`
@@ -66,7 +67,7 @@ npm start                           # Serves client + server on :3001
 ## Features
 
 ### Core Engine
-- 1024x768 canvas with fullscreen CSS scaling (4:3 letterboxing)
+- Authentic 800x600 v83 resolution with fullscreen CSS scaling (4:3 letterboxing, single resample)
 - 60 FPS game loop with camera easing and integer-snapped rendering
 - Physics: gravity, walking, jumping, climbing, knockback, fall damage
 - Lazy asset loading with parallelized map fetches and automatic eviction of map-specific data on map change
@@ -99,9 +100,15 @@ npm start                           # Serves client + server on :3001
 
 ### Inventory & Equipment
 - 5-tab inventory (Equip, Use, Setup, Etc, Cash)
-- Equipment window with 16+ slots, equip/unequip via double-click
-- Item consumption (potions/food), NPC shops, tooltips, drop dialogs
+- Equipment window with 16+ slots — equip/unequip via double-click, drag out to unequip or drop
+- GMS-style equip tooltips: REQ stats, job class bar, category, scroll bonuses, remaining upgrade slots
+- Item consumption (potions/food), NPC shops, drop dialogs, drag ghost icons
+- Ground drops for all item types (including equips, with scroll data preserved through drop/pickup)
 - Quest item protection
+
+### Skills
+- Skill window (K) with SP allocation, skill hotkey bar with drag-and-drop assignment
+- Attack skills with WZ ball projectiles (Three Snails consumes tier-matched shells, v83 fixed damage), buffs, and skill sounds/effects
 
 ### Multiplayer
 - Real-time WebSocket sync: position, stance, animation, equipment
@@ -160,8 +167,8 @@ See [CHANGELOG.md](CHANGELOG.md) for recent fixes. Major remaining work:
 - **Cash Shop**: Not implemented — blocks Yoona's Shopping Quiz quest chain (8020-8025) which requires purchasing Beginner's Shopping Guide
 - **Quest reward selection**: Quests with "choose one" rewards (e.g., quiz chain final reward: Blue Potion x30 OR Stolen Fence) don't present a choice UI yet
 - **Quiz quests**: `#L` selection codes in Say.img dialogue (530 quests) need full parse+render as clickable options with per-selection responses
-- **Job trial system**: Maple Island job instructors (Dances with Balrog, Athena Pierce, Grendel, etc.) offer job trial quests (1048-1053) that temporarily change job, teach trial skills, and warp to trial maps — requires skill system + temporary job change + trial map instances
-- **Skill system**: No skill data, skill UI, skill hotkey bar, or skill effects — blocks job trials, job advancement skill rewards, and all active combat skills
+- **Job trial system**: Maple Island job instructors (Dances with Balrog, Athena Pierce, Grendel, etc.) offer job trial quests (1048-1053) that temporarily change job, teach trial skills, and warp to trial maps — requires temporary job change + trial map instances
+- **Skill coverage**: skill window, hotkey bar, and beginner/attack/buff skills work; full per-job skill coverage (mob skills, summons, party buffs) still in progress
 - **Quest system**: Fame reward bug (104 quests), item start requirements (488 quests)
 - **Scripts**: 214 broken NPC scripts and 65 broken quest scripts (Java.type calls, missing API methods)
 - **Missing features**: Party system, facial expressions, passive HP/MP regen, world map

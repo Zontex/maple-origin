@@ -146,6 +146,8 @@ function getItemDescSync(itemId: number): string {
 // Resolve deferred #t and #c codes in text (call after ensureItemNames)
 export function resolveItemCodes(text: string, questManager?: any): string {
   return text
+    .replace(/#h0#/g, () =>
+      questManager?.character?.name || (window as any).charecter?.name || 'Player')
     .replace(/#t(\d+)#?/g, (_, id) => getItemNameSync(parseInt(id)))
     .replace(/#c(\d+)#?/g, (_, id) => {
       if (questManager) {
@@ -157,7 +159,7 @@ export function resolveItemCodes(text: string, questManager?: any): string {
 }
 
 // Strip MapleStory text formatting codes
-function stripFormatCodes(text: any, playerName: string = 'Player'): string {
+function stripFormatCodes(text: any): string {
   if (!text) return '';
   if (typeof text !== 'string') return String(text);
   return text
@@ -168,7 +170,10 @@ function stripFormatCodes(text: any, playerName: string = 'Player'): string {
     .replace(/#e/g, '')    // bold
     .replace(/#d/g, '')    // purple
     .replace(/#g/g, '')    // green
-    .replace(/#h0#/g, playerName)
+    // Keep player-name codes (normalize `#h #` → `#h0#`) — the character
+    // name isn't known at quest-data load time; resolved at display time
+    // by resolveItemCodes like #t/#c/#m
+    .replace(/#h\s*0?\s*#/g, '#h0#')
     .replace(/#p(\d+)#/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
     .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
     .replace(/#a\d+#/g, '')   // quest progress counter (dynamic, strip)

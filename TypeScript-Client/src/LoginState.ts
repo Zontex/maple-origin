@@ -24,9 +24,17 @@ const LOGIN_CAMERA_POSITIONS = {
   [LoginSubState.CREATE_CHARACTER]: { x: -375, y: -3325 },
 };
 
+// The v83 login artwork (book frame, mask, all section layouts) is native
+// 800x600 — the real client's resolution. The canvas switches to that
+// internal size for the login flow so the art fills it 1:1, and CSS scales
+// the whole canvas to the window in a single resample (4:3 either way).
+const LOGIN_NATIVE_WIDTH = 800;
+const LOGIN_NATIVE_HEIGHT = 600;
+
 interface LoginState extends UIState {
   currentSubState: LoginSubState;
   characterLoadPromise: Promise<void> | null;
+  _canvas: GameCanvas | null;
   switchToSubState: (subState: LoginSubState) => Promise<void>;
   enterGame: () => Promise<void>;
 }
@@ -37,7 +45,11 @@ const LoginState: LoginState = {
   // Promise that resolves when character model is ready (for char select screen)
   characterLoadPromise: null as Promise<void> | null,
 
+  _canvas: null,
+
   async initialize(canvas?: GameCanvas): Promise<void> {
+    this._canvas = canvas ?? null;
+    canvas?.setInternalSize(LOGIN_NATIVE_WIDTH, LOGIN_NATIVE_HEIGHT);
     MyCharacter.deactivate();
     await MapleMap.load("MapLogin");
 
@@ -64,6 +76,16 @@ const LoginState: LoginState = {
     const previousState = this.currentSubState;
     this.currentSubState = subState;
 
+    // Screen-fixed login buttons (guest login, register, quit, ...) are only
+    // drawn on the login screen — without hiding them here they stay
+    // invisible-but-clickable on every other section
+    if (UILogin.loginScreenButtons) {
+      const onLoginScreen = subState === LoginSubState.LOGIN_SCREEN;
+      UILogin.loginScreenButtons.forEach((btn: any) => {
+        btn.isHidden = !onLoginScreen;
+      });
+    }
+
     // Ensure character model is loaded before showing character select/create
     if ((subState === LoginSubState.CHARACTER_SELECT || subState === LoginSubState.CREATE_CHARACTER)
         && this.characterLoadPromise) {
@@ -72,6 +94,10 @@ const LoginState: LoginState = {
 
     if (subState !== LoginSubState.LOGIN_SCREEN) {
       UILogin.removeInputs();
+    } else if (this._canvas) {
+      // Coming back to the login screen — the ID/password fields were
+      // removed on the way out and must be recreated
+      UILogin.createLoginInputs(this._canvas);
     }
 
     if (subState === LoginSubState.WORLD_SELECT) {
@@ -129,6 +155,9 @@ const LoginState: LoginState = {
 
   async enterGame(): Promise<void> {
     UILogin.removeInputs();
+
+    // In-game rendering uses the full 1024x768 resolution
+    this._canvas?.setInternalSize(config.width, config.height);
 
     // Set starting map from saved character data (MapState.initialize reads this)
     const startMapId = (MyCharacter as any)._startMapId;

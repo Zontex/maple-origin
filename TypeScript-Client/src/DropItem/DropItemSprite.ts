@@ -1,6 +1,7 @@
 import WZManager from "../wz-utils/WZManager";
 import WZFiles from "../Constants/enums/WZFiles";
 import MapleInventory from "../Constants/Inventory/MapleInventory";
+import { getEquipWzPath, EquipData } from "../Inventory/Item";
 import DropItemPhysics from "./DropItemPhysics";
 import PLAY_AUDIO from "../Audio/PlayAudio";
 import GameCanvas from "../GameCanvas";
@@ -41,7 +42,9 @@ class DropItemSprite {
   isFirstUpdateFinished: boolean = false;
   isSecondUpdateFinished: boolean = false;
   opts: any = null;
-  
+  // Scroll bonuses of a dropped equip — restored on pickup
+  equipData: EquipData | null = null;
+
   // Flag to prevent items from being destroyed immediately
   hasLanded: boolean = false;
   lifeTime: number = 120000; // 2 minutes item life
@@ -106,11 +109,27 @@ class DropItemSprite {
         this.destroyed = true;
         return;
       }
+    } else if (Math.floor(this.id / 1000000) === 1) {
+      // Equips live in Character.wz, not Item.wz — without this branch the
+      // load below throws, the sprite self-destroys and dropped gear vanishes
+      try {
+        const path = getEquipWzPath(this.id);
+        if (!path) throw new Error(`No Character.wz directory for equip ${this.id}`);
+        this.itemFile = await WZManager.get(path);
+        this.frame = this.itemFile.info.iconRaw;
+        this.icon = this.itemFile.info.iconRaw.nGetImage();
+        // Preserve scroll bonuses across the drop/pickup round-trip
+        this.equipData = opts.equipData ?? null;
+      } catch (e) {
+        console.error("Error loading equip drop:", e);
+        this.destroyed = true;
+        return;
+      }
     } else {
       const wzInventoryType = MapleInventory.getWzNameFromInventoryId(
         `${this.id}`.padStart(8, "0")
       );
-      
+
       try {
         if (wzInventoryType === MapleInventory.WzInventoryType.Pet) {
           this.itemFile = await WZManager.get(

@@ -45,6 +45,12 @@ class Projectile {
   dying: boolean = false;
   // Skill projectile fields
   fixedDamage: number = 0;
+  // When true, the ball keeps a single frame instead of animating (e.g., Three
+  // Snails, where the ball frames are the three different shell sprites)
+  lockedFrame: boolean = false;
+  // GMS thrown-skill behavior: fly straight and horizontal, hit the first mob
+  // whose hitbox the ball enters, disappear at max distance (no homing)
+  straightFlight: boolean = false;
   magicAttack: { spellAttack: number; mastery: number; element: string | null } | null = null;
   hitNode: any = null;
   isCritical: boolean = false;
@@ -71,6 +77,7 @@ class Projectile {
     right: boolean;
     ballNode: any;
     hitNode?: any;
+    ballFrame?: number | null;
     fixedDamage: number;
     magicAttack?: { spellAttack: number; mastery: number; element: string | null } | null;
     targetMonsters: Monster[];
@@ -98,12 +105,23 @@ class Projectile {
 
     // Use the skill's ball WZ node directly as the sprite source
     p.stance = opts.ballNode;
-    p.frame = 0;
+    if (opts.ballFrame != null && opts.ballNode.nChildren?.[opts.ballFrame]) {
+      p.frame = opts.ballFrame;
+      p.lockedFrame = true;
+    } else {
+      p.frame = 0;
+    }
     p.delay = 0;
-    const firstFrame = opts.ballNode.nChildren?.[0];
+    const firstFrame = opts.ballNode.nChildren?.[p.frame];
     p.nextDelay = firstFrame?.nGet?.('delay')?.nValue ?? 90;
 
-    p.findTargetForSkill();
+    if (p.magicAttack) {
+      // Magic balls (Energy Bolt, Magic Claw) are target-locked at cast time
+      p.findTargetForSkill();
+    } else {
+      // Thrown skill balls (Three Snails) fly straight — GMS behavior
+      p.straightFlight = true;
+    }
     return p;
   }
 
@@ -323,7 +341,33 @@ class Projectile {
     return this.destroyed && !this.hitEffectActive;
   }
 
+  // Straight-flight collision: hit the first living mob whose hitbox the ball
+  // enters (no pre-selected target, damage rolled at impact)
+  checkForStraightHit() {
+    for (const monster of this.targetMonsters) {
+      if (!monster || monster.dying) continue;
+      const rect = {
+        x: monster.x,
+        y: monster.y,
+        width: monster.width,
+        height: monster.height,
+      };
+      if (!isPositionInsideRect(this.pos!, rect)) continue;
+
+      const knockbackDir = this.pos!.vx > 0 ? 1 : -1;
+      monster.hit(this.fixedDamage, knockbackDir, this.charecter);
+      this.startHitEffect();
+      this.isMovementEnabled = false;
+      this.destroy();
+      return;
+    }
+  }
+
   checkForHittingTarget() {
+    if (this.straightFlight) {
+      this.checkForStraightHit();
+      return;
+    }
     if (!this.target) {
       return;
     }
@@ -372,7 +416,7 @@ class Projectile {
 
     this.delay += msPerTick;
 
-    if (this.delay > this.nextDelay) {
+    if (this.delay > this.nextDelay && !this.lockedFrame) {
       const hasNextFrame = !!this.stance.nChildren[this.frame + 1];
       if (!!this.dying && !hasNextFrame) {
         this.destroy();

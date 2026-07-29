@@ -34,6 +34,7 @@ interface UILoginInterface {
     tdelta: number
   ) => void;
   removeInputs: () => void;
+  createLoginInputs: (canvas: GameCanvas) => void;
   drawMask: (canvas: GameCanvas) => void;
   worlds: any[];
   selectedWorldId: number | null;
@@ -229,21 +230,7 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     }
   });
 
-  this.inputUsn = new MapleInput(canvas, {
-    x: 442,
-    y: 236,
-    width: 142,
-    height: 20,
-    color: "#ffffff",
-  });
-  this.inputPwd = new MapleInput(canvas, {
-    x: 442,
-    y: 265,
-    width: 142,
-    height: 20,
-    color: "#ffffff",
-    type: "password",
-  });
+  this.createLoginInputs(canvas);
 
   const uiLoginRef = this;
   const startButton = new MapleStanceButton(canvas, {
@@ -265,6 +252,9 @@ UILogin.initialize = async function (canvas: GameCanvas) {
 
       const charData = result.character;
       const MyChar = (await import('../MyCharacter')).default;
+      // Block saves until the full restore below succeeds — a save with a
+      // half-restored character would wipe DB inventory/equips
+      (MyChar as any)._restoreComplete = false;
 
       // Apply appearance
       MyChar.name = charData.name || 'Player';
@@ -372,6 +362,9 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       (MyChar as any)._startMapId = charData.mapId;
       (MyChar as any)._startPosX = charData.posX;
       (MyChar as any)._startPosY = charData.posY;
+
+      // Restore finished — saves are safe from here on
+      (MyChar as any)._restoreComplete = true;
 
       // Save dev session for auto-login on HMR reload
       try {
@@ -902,6 +895,14 @@ UILogin.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
     });
   }
 
+  // Track the sign with the camera each frame — the camera eases and settles
+  // a few px off its target, so static coords would drift. World anchors
+  // measured against the live camera: ID recess (68,-67), PW recess (68,-37)
+  if (LoginState.currentSubState === LoginSubState.LOGIN_SCREEN) {
+    this.inputUsn?.setCanvasPos(68 - Camera.x, -67 - Camera.y);
+    this.inputPwd?.setCanvasPos(68 - Camera.x, -37 - Camera.y);
+  }
+
   this.drawMask(canvas);
 
   // Fade in from black on initial load
@@ -941,6 +942,30 @@ UILogin.drawMask = function (canvas) {
   canvas.context.fillRect(frameX,0, frameWidth, frameY); // Top mask
   canvas.context.fillRect(frameX, frameY + frameHeight, frameWidth, canvasHeight - (frameY + frameHeight)); // Bottom mask
   canvas.context.restore();
+};
+
+// Field positions measured from the live canvas (getImageData): the sign's
+// "Login ID" label text renders at canvas (401,206), putting the input
+// recesses at x=457.., ID row y=205-226, PW row y=235-256.
+// Called from initialize() and again when returning to the login screen —
+// leaving it calls removeInputs(), so the fields must be recreated.
+UILogin.createLoginInputs = function (canvas: GameCanvas) {
+  if (this.inputUsn || this.inputPwd) return;
+  this.inputUsn = new MapleInput(canvas, {
+    x: 459,
+    y: 207,
+    width: 170,
+    height: 18,
+    color: "#ffffff",
+  });
+  this.inputPwd = new MapleInput(canvas, {
+    x: 459,
+    y: 237,
+    width: 170,
+    height: 18,
+    color: "#ffffff",
+    type: "password",
+  });
 };
 
 UILogin.removeInputs = function () {
@@ -1222,20 +1247,19 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
         // Draw charInfo2 background on open scroll
         if (this.charSelectScrollState === 'open') {
           const charInfoImg = charSelectNode.nGet('charInfo2').nGetImage();
+          const ciX = Math.floor(scrollX + (scrollImg.width - (charInfoImg?.width || 183)) / 2);
+          const ciY = scrollY + 30;
           if (charInfoImg) {
-            canvas.drawImage({
-              img: charInfoImg,
-              dx: scrollX + (scrollImg.width - charInfoImg.width) / 2,
-              dy: scrollY + 30,
-            });
+            canvas.drawImage({ img: charInfoImg, dx: ciX, dy: ciY });
           }
 
-          // Draw stat values only (labels are baked into charInfo2 image)
+          // Draw stat values only (labels are baked into charInfo2 image).
+          // Card layout (183x115): row 0 JOB full-width; row 1 LV.+FAME;
+          // row 2 STR+INT; row 3 DEX+LUK. Rows ~14.5px apart, value areas
+          // at x+44 (left) and x+136 (right)
           const stats = char.stat;
-          const infoX = scrollX + 50;
-          const infoY = scrollY + 38;
-          const lineH = 17;
-          const col2X = scrollX + scrollImg.width / 2 + 43;
+          const leftX = ciX + 44;
+          const rightX = ciX + 136;
 
           // Left column values: Job, Level, STR, DEX
           const leftValues = [
@@ -1244,20 +1268,20 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
             `${stats?.str || 4}`,
             `${stats?.dex || 4}`,
           ];
-          // Right column values: Fame, (empty), INT, LUK
+          // Right column values: (JOB row has none), Fame, INT, LUK
           const rightValues = [
-            `${stats?.fame ?? 0}`,
             '',
+            `${stats?.fame ?? 0}`,
             `${stats?.int || 4}`,
             `${stats?.luk || 4}`,
           ];
 
           leftValues.forEach((val, i) => {
-            canvas.drawText({ text: val, x: infoX, y: infoY + i * lineH, color: '#000000', fontSize: 11, fontFamily: 'Arial' });
+            canvas.drawText({ text: val, x: leftX, y: ciY + 8 + Math.round(i * 14.5), color: '#000000', fontSize: 11, fontFamily: 'Arial' });
           });
           rightValues.forEach((val, i) => {
             if (!val) return;
-            canvas.drawText({ text: val, x: col2X, y: infoY + i * lineH, color: '#000000', fontSize: 11, fontFamily: 'Arial' });
+            canvas.drawText({ text: val, x: rightX, y: ciY + 8 + Math.round(i * 14.5), color: '#000000', fontSize: 11, fontFamily: 'Arial' });
           });
         }
       }

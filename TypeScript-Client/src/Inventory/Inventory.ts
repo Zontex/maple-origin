@@ -29,7 +29,7 @@ class Inventory {
     this.mesos = Math.max(0, Math.min(MESO_CAP, this.mesos + amount));
   }
 
-  async addToInventory(itemId: number | string, quantity: number) {
+  async addToInventory(itemId: number | string, quantity: number, equipData?: any) {
     itemId = typeof itemId === 'string' ? parseInt(itemId, 10) : itemId;
     console.log("Adding to inventory", itemId, quantity);
     if (MapleInventory.isMeso(itemId.toString())) {
@@ -72,7 +72,10 @@ class Inventory {
       }
 
       while (remaining > 0) {
-        const newItem = await Item.fromOpts({ itemId, quantity: 1 });
+        // equipData only applies to the first created item — equips never
+        // stack, so there is exactly one for a picked-up piece of gear
+        const newItem = await Item.fromOpts({ itemId, quantity: 1, equipData });
+        equipData = undefined;
         const slotMax = newItem.getSlotMax?.() ?? 100;
         newItem.quantity = Math.min(slotMax, remaining);
         remaining -= newItem.quantity;

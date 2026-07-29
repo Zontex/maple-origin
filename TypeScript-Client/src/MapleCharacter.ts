@@ -67,6 +67,9 @@ class MapleCharacter {
   equippedItemIcons: Record<number, HTMLImageElement | null> = {};
   // Per-slot instance data (scroll bonuses/tuc) for worn equips
   equippedItemData: Record<number, { bonus: Record<string, number>; tuc: number; level: number }> = {};
+  // Default underwear WZ nodes — v83 characters are never fully naked
+  underwearTop: any = null;
+  underwearBottom: any = null;
   flipped: boolean = false;
   id: number = 0;
   name: string = "";
@@ -98,6 +101,9 @@ class MapleCharacter {
   isRemote: boolean = false; // Network-controlled character — skip local stance logic
   isInClimbingRope: boolean = false;
   isClimbMoving: boolean = false;
+  // Whether the grabbed climbable is a ladder (true) or rope (false) —
+  // they use different stances (v83: 'ladder' vs 'rope')
+  climbingIsLadder: boolean = false;
   isDead: boolean = false;
   maxCloseToMobDistance: number = 0;
   mobHitMinOverlapPercentage: number = 0;
@@ -333,6 +339,17 @@ class MapleCharacter {
       console.error("Error loading chat balloon images:", e);
     }
 
+    // Default underwear — rendered whenever top/bottom slots are empty
+    // (male: White Undershirt 1040036 + boxers 1060026; female: 1041046 + 1061039)
+    try {
+      const uwTopId = this.gender === 1 ? 1041046 : 1040036;
+      const uwBottomId = this.gender === 1 ? 1061039 : 1060026;
+      this.underwearTop = await WZManager.get(`Character.wz/Coat/0${uwTopId}.img`);
+      this.underwearBottom = await WZManager.get(`Character.wz/Pants/0${uwBottomId}.img`);
+    } catch (e) {
+      console.error('Failed to load default underwear:', e);
+    }
+
     this.projectiles = [];
     this.DamageIndicator = new DamageIndicator();
     this.DamageIndicator.initialize();
@@ -364,6 +381,10 @@ class MapleCharacter {
       this.oscillateFactor = 1;
       this.onStanceFinish = onFinish;
       this.onLastFrame = onLastFrame;
+    } else if (stance === "ladder" || stance === "rope") {
+      // Climbing toggles between moving (animate) and hanging still (freeze
+      // frame) without a stance change — keep the flag in sync every call
+      this.isOscillateFrames = isOscillateFrames;
     }
   }
   setFrame(frame = 0, carryOverDelay = 0) {
@@ -919,45 +940,57 @@ async executeAttackDamage() {
   this.checkForItemDropPickup(true);
 }
 
-// Three Snails shell items — each skill level consumes a specific shell type
-static readonly SNAIL_SHELL_ITEMS: Record<number, number[]> = {
-  1000: [4000019, 4000000, 4000016],  // Snail Shell, Blue Snail Shell, Orange Mushroom Cap
-};
+// Three Snails (skill 1000): each skill level throws exactly its own shell
+// tier — L1 Snail Shell (green), L2 Blue Snail Shell, L3 Red Snail Shell.
+// Without that specific shell in inventory the skill cannot be cast.
+// Damage and ball sprite frame follow the tier.
+static readonly THREE_SNAILS_ID = 1000;
+static readonly THREE_SNAILS_SHELLS: { itemId: number; damage: number; frame: number }[] = [
+  { itemId: 4000019, damage: 10, frame: 0 },  // L1: Snail Shell
+  { itemId: 4000000, damage: 25, frame: 1 },  // L2: Blue Snail Shell
+  { itemId: 4000016, damage: 40, frame: 2 },  // L3: Red Snail Shell
+];
 
 /**
  * Execute a skill — handles attack skills with skill damage multiplier,
  * mob count, attack count, and skill-specific range.
+ * Returns true if the cast actually happened (caller consumes MP/cooldown).
  */
-async useSkill(skillId: number, effect: any) {
-  if (this.isInAttack) return;
+async useSkill(skillId: number, effect: any): Promise<boolean> {
+  if (this.isInAttack) return false;
 
   const info = (await import('./Skills/SkillData')).default.getSkillSync(skillId);
-  if (!info) return;
+  if (!info) return false;
 
   if (info.isAttack) {
     // Attack skills respect weapon attack speed like regular attacks
-    if (Date.now() - this.lastAttackTime < this.getAttackDelayMs()) return;
-    this.lastAttackTime = Date.now();
+    if (Date.now() - this.lastAttackTime < this.getAttackDelayMs()) return false;
 
     // Check if this is a projectile (ball) skill
     const hasBall = effect.ballNode && effect.ballNode.nChildren?.length > 0;
 
-    // Check for required consumable items (e.g., Three Snails needs snail shells)
-    const shellItems = MapleCharacter.SNAIL_SHELL_ITEMS[skillId];
-    if (shellItems) {
+    // Three Snails: the current skill level's own shell tier is thrown —
+    // nothing else substitutes. No matching shell in inventory → no cast.
+    let fixedDamageOverride = 0;
+    let ballFrame: number | null = null;
+    if (skillId === MapleCharacter.THREE_SNAILS_ID) {
+      const skillLevel = this.skillManager?.getSkillLevel?.(skillId) ?? 1;
+      const tier = Math.min(Math.max(1, skillLevel), MapleCharacter.THREE_SNAILS_SHELLS.length);
+      const shell = MapleCharacter.THREE_SNAILS_SHELLS[tier - 1];
       const inv = this.inventory;
-      const foundItem = shellItems.find((itemId: number) => {
-        const tabs = [inv.equip, inv.use, inv.setup, inv.etc, inv.cash];
-        return tabs.some(tab => tab.some((item: any) => item?.itemId === itemId && item.quantity > 0));
-      });
-      if (!foundItem) {
-        console.log(`[Skill] No shells for Three Snails`);
-        return;
+      const hasShell = inv.etc.some(
+        (item: any) => item?.itemId === shell.itemId && item.quantity > 0
+      );
+      if (!hasShell) {
+        console.log(`[Skill] Three Snails L${tier} needs item ${shell.itemId} — not in inventory`);
+        return false;
       }
-      // Consume one shell
-      inv.removeFromInventory(foundItem, 1);
+      inv.removeFromInventory(shell.itemId, 1);
+      fixedDamageOverride = shell.damage;
+      ballFrame = shell.frame;
     }
 
+    this.lastAttackTime = Date.now();
     this.isInAttack = true;
     this.rightClickRelease();
     this.leftClickRelease();
@@ -969,12 +1002,10 @@ async useSkill(skillId: number, effect: any) {
     const stancePool = config?.stances?.melee || ['swingO1'];
     let attackStance: string = stancePool[Math.floor(Math.random() * stancePool.length)];
 
-    // Prefer the skill's own action stance
+    // Prefer the skill's own action stance; otherwise the weapon's normal
+    // attack swing is used (GMS: Three Snails plays the regular attack animation)
     if (info.action && this.baseBody?.[info.action]) {
       attackStance = info.action;
-    } else if (hasBall && this.baseBody?.['shoot1']) {
-      // Ball skills without a specific action use the overhand throw stance
-      attackStance = 'shoot1';
     }
 
     if (hasBall) {
@@ -986,7 +1017,7 @@ async useSkill(skillId: number, effect: any) {
         false,
         () => { this.isInAttack = false; },
         () => {
-          this.fireSkillProjectile(effect, info.element);
+          this.fireSkillProjectile(effect, info.element, fixedDamageOverride, ballFrame);
         }
       );
     } else {
@@ -1002,6 +1033,7 @@ async useSkill(skillId: number, effect: any) {
         }
       );
     }
+    return true;
   } else if (info.isBuff) {
     // Buff — apply the buff effect
     if (this.buffManager) {
@@ -1019,13 +1051,15 @@ async useSkill(skillId: number, effect: any) {
         () => { this.isInAttack = false; }, // return to normal on finish
       );
     }
+    return true;
   }
+  return false;
 }
 
 /**
  * Fire a skill projectile using ball sprites from Skill.wz.
  */
-fireSkillProjectile(effect: any, element: string | null = null) {
+fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverride: number = 0, ballFrame: number | null = null) {
   const projectile = Projectile.fromSkill({
     charecter: this,
     x: this.pos.x,
@@ -1033,7 +1067,8 @@ fireSkillProjectile(effect: any, element: string | null = null) {
     right: this.flipped,
     ballNode: effect.ballNode,
     hitNode: effect.hitNode,
-    fixedDamage: effect.fixdamage || 0,
+    ballFrame,
+    fixedDamage: fixedDamageOverride || effect.fixdamage || 0,
     magicAttack: (effect.mad || 0) > 0
       ? { spellAttack: effect.mad, mastery: (effect.mastery || 10) / 100, element }
       : null,
@@ -1307,6 +1342,9 @@ isCloseToMob = (inAllDirections = true) => {
     );
     if (ladderRope) {
       console.log("ladderRope", ladderRope);
+      // Ladders and ropes use different climb stances (ladder: rungs grip,
+      // rope: hands on the rope) — remember which one was grabbed
+      this.climbingIsLadder = ladderRope.nGet("l").nValue === 1;
       this.pos.x = ladderRope.x.nValue;
       this.climbRope(direction);
       return true;
@@ -1877,8 +1915,16 @@ isCloseToMob = (inAllDirections = true) => {
       if (netDropId && (window as any).__mySocket) {
         (window as any).__mySocket.sendItemPickup(netDropId);
       }
-      // this is async
-      this.inventory.addToInventory(itemDrop.itemFile.nName, itemDrop.amount);
+      // this is async. Equips must use the numeric drop id — their
+      // itemFile.nName is a Character.wz filename, not an item id. Other
+      // drops (incl. mesos, id=0) keep resolving via itemFile.nName.
+      // equipData restores scroll bonuses on picked-up gear.
+      const isEquipDrop = Math.floor(itemDrop.id / 1000000) === 1;
+      this.inventory.addToInventory(
+        isEquipDrop ? itemDrop.id : itemDrop.itemFile.nName,
+        itemDrop.amount,
+        isEquipDrop ? (itemDrop as any).equipData ?? undefined : undefined,
+      );
 
       if (!AllowMultiPickupAtOnce) {
         break;
@@ -2024,6 +2070,14 @@ isCloseToMob = (inAllDirections = true) => {
       }
     }
 
+    // If the physics climb ended without a key event (dropped off the rope
+    // end, knockback), clear the character climb state too — otherwise the
+    // rope stance sticks while falling
+    if (this.isInClimbingRope && !this.pos.isClimbing) {
+      this.isInClimbingRope = false;
+      this.isClimbMoving = false;
+    }
+
     // Fall damage: check if we just landed after a long fall
     if (this.pos.fallDistance > 0 && this.pos.fh) {
       this.applyFallDamage(this.pos.fallDistance);
@@ -2054,10 +2108,14 @@ isCloseToMob = (inAllDirections = true) => {
 
     const isDrawable = (n: any) =>
       n.nTagName === "canvas" || n.nTagName === "uol";
+    const isClimbStance = realStance === 'ladder' || realStance === 'rope';
     const getParts = (img: any) => {
       const stanceNode = img.nGet(realStance);
-      // Fallback to stand1 if the part doesn't have this stance (e.g. hair has no 'dead')
       if (!stanceNode || !stanceNode.nChildren || stanceNode.nChildren.length === 0) {
+        // Climbing (back view): parts without ladder/rope frames are simply
+        // not drawn in GMS — weapons have none, so no sword across the face
+        if (isClimbStance) return [];
+        // Fallback to stand1 if the part doesn't have this stance (e.g. hair has no 'dead')
         return img.nGet('stand1').nGet(0).nChildren;
       }
       return stanceNode.nGet(realFrame).nChildren;
@@ -2066,7 +2124,18 @@ isCloseToMob = (inAllDirections = true) => {
       img.nGet(faceExpr).nGet(faceFrame).nChildren;
 
     const twoChars = /.{1,2}/g;
-    const [hat, faceAcc, ...equips] = this.equips;
+    // v83 characters are never fully naked — empty top/bottom slots render
+    // default underwear (a longcoat covers both, so no underpants under it)
+    const effectiveEquips = [...this.equips];
+    const topId = this.equippedItemIds?.[4];
+    const hasLongcoat = !!topId && Math.floor(topId / 10000) === 105;
+    if (!effectiveEquips[4] && this.underwearTop) {
+      effectiveEquips[4] = this.underwearTop;
+    }
+    if (!effectiveEquips[5] && !hasLongcoat && this.underwearBottom) {
+      effectiveEquips[5] = this.underwearBottom;
+    }
+    const [hat, faceAcc, ...equips] = effectiveEquips;
 
     const hatVslot = !hat ? "" : hat.info.vslot.nValue;
     const hatParts = !hat ? [] : getParts(hat).filter(isDrawable);
@@ -2227,6 +2296,8 @@ isCloseToMob = (inAllDirections = true) => {
         this.flipped = false;
       }
 
+      // Ladders and ropes have distinct v83 climb stances
+      const climbStance = this.climbingIsLadder ? Stance.ladder : Stance.rope;
       if (this.isDead) {
         this.setStance(Stance.dead);
       } else {
@@ -2236,7 +2307,7 @@ isCloseToMob = (inAllDirections = true) => {
           if (!this.isInAttack) {
             if (!this.pos.fh) {
               if (this.isInClimbingRope) {
-                this.setStance(Stance.ladder, 0, false, this.isClimbMoving);
+                this.setStance(climbStance, 0, false, this.isClimbMoving);
               } else {
                 this.setStance(Stance.jump);
               }
@@ -2245,7 +2316,7 @@ isCloseToMob = (inAllDirections = true) => {
                 this.setStance("walk1");
               } else {
                 if (this.isInClimbingRope) {
-                  this.setStance(Stance.ladder, 0, false, this.isClimbMoving);
+                  this.setStance(climbStance, 0, false, this.isClimbMoving);
                 } else if (this.stance) {
                   this.setStance(Stance.alert, 0, false, true);
                 }
@@ -2254,7 +2325,7 @@ isCloseToMob = (inAllDirections = true) => {
           } else {
           }
         } else if (this.isInClimbingRope) {
-          this.setStance(Stance.ladder, 0, false, this.isClimbMoving);
+          this.setStance(climbStance, 0, false, this.isClimbMoving);
         } else {
           if (!this.pos.fh) {
             this.setStance(Stance.jump);

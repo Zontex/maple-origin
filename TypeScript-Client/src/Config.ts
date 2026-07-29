@@ -7,8 +7,11 @@ interface Config {
   websocketUrl?: string;
 }
 
-const originalHeight: number = 768;
-const originalWidth: number = 1024;
+// Authentic pre-Big Bang v83 client resolution. The whole HUD (UIMap.ts)
+// is natively laid out for 800x600 and the WZ status bar art is 800 wide;
+// CSS scales the canvas up to the window (4:3, single resample).
+const originalHeight: number = 600;
+const originalWidth: number = 800;
 
 const config: Config = {
   height: originalHeight,

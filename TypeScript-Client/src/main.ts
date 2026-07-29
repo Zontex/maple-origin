@@ -34,7 +34,9 @@ const startGame = async () => {
   // Register snapshot saver for beforeunload (used by mysocket.ts)
   (window as any).__saveDevSnapshot = saveDevSnapshot;
 
-  // Dev auto-login: skip login screen on HMR reload
+  // Dev auto-login: skip login screen on HMR reload. All network steps
+  // inside reject on timeout, so a hung server connection can never leave
+  // the game on a black screen — worst case we fall back to normal login.
   let autoLoggedIn = false;
   if (hasDevSession()) {
     autoLoggedIn = await tryAutoLogin(canvas);

@@ -143,19 +143,40 @@ class MySocket {
     if (this.isConnected) return;
     this.resolveServerUrl();
     console.log(`Connecting to server for login at ${this.serverUrl}`);
-    return new Promise<void>((resolve) => {
-      this._onConnectedForLogin = resolve;
+    return new Promise<void>((resolve, reject) => {
+      // Must reject on failure — a forever-pending promise here hangs
+      // tryAutoLogin (black screen on boot) and the Log in button
+      const timeout = setTimeout(() => {
+        this._onConnectedForLogin = null;
+        reject(new Error(`Could not connect to ${this.serverUrl} within 8s`));
+      }, 8000);
+      this._onConnectedForLogin = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
       this.connectSocket();
     });
   }
   private _onConnectedForLogin: (() => void) | null = null;
 
+  // Reject request-style promises that never get a server response, so
+  // callers' try/catch runs instead of awaiting forever (black screen /
+  // dead login button when the server restarts mid-flight)
+  private _withTimeout<T>(p: Promise<T>, what: string, ms = 10000): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms)
+      ),
+    ]);
+  }
+
   // Send login credentials, returns result via promise
   sendLogin(username: string, password: string): Promise<{ success: boolean; error?: string; userId?: number }> {
-    return new Promise((resolve) => {
+    return this._withTimeout(new Promise((resolve) => {
       this._loginCallback = resolve;
       this.sendMessage({ type: 'login', data: { username, password } });
-    });
+    }), 'login');
   }
 
   // Request character list for a world
@@ -192,10 +213,10 @@ class MySocket {
 
   // Select a character (load full data)
   selectCharacter(characterId: number): Promise<any> {
-    return new Promise((resolve) => {
+    return this._withTimeout(new Promise((resolve) => {
       this._selectCharCallback = resolve;
       this.sendMessage({ type: 'select_character', data: { characterId } });
-    });
+    }), 'select_character');
   }
 
   // Save current character state to server
@@ -203,6 +224,20 @@ class MySocket {
     const charId = (MyCharacter as any)._serverCharId;
     if (!charId) { console.warn('[Save] No _serverCharId — character not saved'); return; }
     if (!this.isConnected) return;
+    // Don't save until the game map is loaded — MapleMap.id would be
+    // missing/login-map and the save would record mapId 10000 (start map),
+    // teleporting the character back on next login
+    if (!MapleMap.doneLoading || !Number(MapleMap.id)) {
+      console.warn('[Save] Skipped — map not loaded yet');
+      return;
+    }
+    // NEVER save before the login restore finished — a save fired mid-restore
+    // (or after a restore crash) carries empty inventory/equips and would
+    // delete-and-replace the DB rows with nothing
+    if (!(MyCharacter as any)._restoreComplete) {
+      console.warn('[Save] Skipped — character restore not complete');
+      return;
+    }
 
     const inv = MyCharacter.inventory;
     // Keep null holes so slot positions survive save/load (server inserts by index)

@@ -16,6 +16,8 @@ import { ensureItemNames, getItemNameSync, getItemDescSync } from "../../Quest/Q
 import DragManager from '../DragManager';
 import UIDevTools from "../UIDevTools";
 import mySocket from "../../mysocket";
+import UIHotkeyBar from "../UIHotkeyBar";
+import UIEquipTooltip from "../UIEquipTooltip";
 import { getEquipSlotForItem } from "./EquipMenuSprite";
 
 class InventoryMenuSprite extends DragableMenu {
@@ -227,6 +229,28 @@ class InventoryMenuSprite extends DragableMenu {
     }
     
     try {
+      // Create the ground drop FIRST — the item only leaves the inventory
+      // once the drop actually exists, otherwise a failed sprite load would
+      // silently destroy the item (this vanished dropped equips before)
+      const itemDrop = await DropItemSprite.fromOpts({
+        id: item.itemId,
+        amount: quantity,
+        equipData: actualItem.equipData ?? undefined,
+        monster: {
+          pos: {
+            x: this.charecter.pos.x,
+            y: this.charecter.pos.y - 20, // Drop slightly above character
+            vx: 0,
+            vy: 0
+          }
+        }
+      });
+
+      if (!this.charecter.map || itemDrop.destroyed) {
+        console.error(`Drop failed for item ${item.itemId} — keeping it in inventory`);
+        return;
+      }
+
       // Handle quantity for stackable items
       const originalQuantity = actualItem.quantity || 1;
       if (quantity >= originalQuantity) {
@@ -239,29 +263,13 @@ class InventoryMenuSprite extends DragableMenu {
         // Reduce the quantity
         actualItem.quantity -= quantity;
       }
-      
-      // Create a DropItemSprite for the item
-      const itemDrop = await DropItemSprite.fromOpts({
-        id: item.itemId,
-        amount: quantity,
-        monster: {
-          pos: {
-            x: this.charecter.pos.x,
-            y: this.charecter.pos.y - 20, // Drop slightly above character
-            vx: 0,
-            vy: 0
-          }
-        }
-      });
-      
+
       // Add the drop to the map
-      if (this.charecter.map && !itemDrop.destroyed) {
-        const dropId = Date.now() + Math.floor(Math.random() * 10000);
-        (itemDrop as any)._netDropId = dropId;
-        this.charecter.map.addItemDrop(itemDrop);
-        mySocket.sendItemDrop(item.itemId, quantity, this.charecter.pos.x, this.charecter.pos.y - 20, 0, 0, dropId);
-        console.log(`Dropped ${quantity} of item ${item.itemId}`);
-      }
+      const dropId = Date.now() + Math.floor(Math.random() * 10000);
+      (itemDrop as any)._netDropId = dropId;
+      this.charecter.map.addItemDrop(itemDrop);
+      mySocket.sendItemDrop(item.itemId, quantity, this.charecter.pos.x, this.charecter.pos.y - 20, 0, 0, dropId);
+      console.log(`Dropped ${quantity} of item ${item.itemId}`);
     } catch (err) {
       console.error("Error dropping item:", err);
     }
@@ -731,11 +739,13 @@ class InventoryMenuSprite extends DragableMenu {
     this.dragStartX = startX;
     this.dragStartY = startY;
 
-    // Get item icon for canvas rendering
+    // Get item icon for canvas rendering — icons live at info/iconRaw for
+    // both Item.wz items and Character.wz equips
     let iconImg: HTMLImageElement | null = null;
     try {
-      if (item.node?.iconRaw) {
-        iconImg = item.node.iconRaw.nGetImage();
+      const iconNode = item.node?.info?.iconRaw ?? item.node?.iconRaw;
+      if (iconNode?.nGetImage) {
+        iconImg = iconNode.nGetImage();
         this.draggingIcon = iconImg;
       }
     } catch (e) {
@@ -769,13 +779,18 @@ class InventoryMenuSprite extends DragableMenu {
         return;
       }
 
-      // If DragManager is active, let it handle the drop (e.g., onto hotkey bar)
-      // Don't show the item drop dialog in that case
+      // The DragManager path (hotkey bar assignment) only owns the drop when
+      // it actually lands on the bar — otherwise reclaim it so scroll
+      // application and ground drops below still work
       if (DragManager.isDragging) {
-        this.draggingItem = null;
-        this.draggingIcon = null;
-        this.draggingSlotIndex = -1;
-        return;
+        const barSlot = UIHotkeyBar.getSlotAtMouse?.(mouseX, mouseY) ?? -1;
+        if (barSlot >= 0) {
+          this.draggingItem = null;
+          this.draggingIcon = null;
+          this.draggingSlotIndex = -1;
+          return;
+        }
+        DragManager.cancel();
       }
 
       // Check if mouse is outside inventory window (in canvas coords)
@@ -1140,6 +1155,13 @@ class InventoryMenuSprite extends DragableMenu {
 
     const item = this.hoveredItem;
     const itemId = item.itemId;
+
+    // Equips get the GMS-style detailed tooltip (REQ stats, job bar, ...)
+    if (Math.floor(itemId / 1000000) === 1) {
+      if (UIEquipTooltip.draw(canvas, itemId, item.equipData, this.hoveredSlotX, this.hoveredSlotY + 30)) {
+        return;
+      }
+    }
     const name = getItemNameSync(itemId);
     const rawDesc = getItemDescSync(itemId).replace(/\\n/g, '\n');
 

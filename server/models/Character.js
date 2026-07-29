@@ -238,6 +238,57 @@ class Character {
       return { success: false, error: 'Character not found' };
     }
 
+    // Characters can never level down in v83 — a save carrying a lower level
+    // than the DB is a half-restored client state. Keep the stored progression
+    // fields and log loudly so the sending code path can be found and fixed.
+    if (typeof data.level === 'number' && data.level < current.level) {
+      console.warn(
+        `[DB] REJECTED level regression for character ${characterId}: ` +
+        `save says lv${data.level}, DB has lv${current.level}. ` +
+        `Payload: hp=${data.hp}/${data.maxHp} map=${data.mapId} pos=(${data.posX},${data.posY}) ` +
+        `str=${data.str} exp=${data.exp}`
+      );
+      delete data.level;
+      delete data.exp;
+      delete data.hp;
+      delete data.maxHp;
+      delete data.mp;
+      delete data.maxMp;
+      delete data.ap;
+      delete data.sp;
+    }
+
+    // A payload without inventory is a partial save (full client saves always
+    // carry both) — never let it replace equipped rows: partial sources like
+    // the disconnect fallback have no authoritative item data
+    if (data.equipped && !data.inventory) {
+      console.warn(`[DB] Ignoring equipped list on partial save for character ${characterId}`);
+      delete data.equipped;
+    }
+
+    // Backstop against broken clients: a payload that would wipe equipped,
+    // inventory AND skills at once (all empty) on a character that has rows
+    // is almost certainly a half-restored client state, not a real save
+    const invEmpty = !data.inventory ||
+      Object.values(data.inventory).every((tab) => !tab || tab.filter(Boolean).length === 0);
+    const wipesEverything =
+      Array.isArray(data.equipped) && data.equipped.length === 0 &&
+      data.inventory && invEmpty &&
+      Array.isArray(data.skills) && data.skills.length === 0;
+    if (wipesEverything) {
+      const hasRows = db.prepare(
+        'SELECT (SELECT COUNT(*) FROM equipped_items WHERE character_id = ?) + (SELECT COUNT(*) FROM inventory_items WHERE character_id = ?) AS c'
+      ).get(characterId, characterId);
+      if (hasRows.c > 0) {
+        console.warn(`[DB] Rejected suspicious empty-state save for character ${characterId} — keeping existing items`);
+        delete data.equipped;
+        delete data.inventory;
+        delete data.skills;
+        delete data.quests;
+        delete data.keymap;
+      }
+    }
+
     const saveTransaction = db.transaction(() => {
       // Update character stats
       updateChar.run(

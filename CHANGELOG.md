@@ -5,6 +5,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased] - 2026-07-29
+
+### Added
+- **Authentic 800×600 resolution** — the whole game (login + in-game) now runs at the original pre-Big Bang client resolution. Login art (natively 800×600) fills the canvas exactly; the HUD lands at its designed v83 positions; CSS scales the canvas to the window in a single resample (4:3)
+- **GMS-style equip tooltips** (`UI/UIEquipTooltip.ts`) — enlarged icon, REQ LEV/STR/DEX/INT/LUK/FAM block, job class bar from the `reqJob` bitmask, CATEGORY, combined base+scroll stats, and NUMBER OF UPGRADES AVAILABLE; shown in both the equipment window and the inventory
+- **Equip ground drops** — dropped equips (from inventory, equipment window, mobs, or other players) now render on the ground and can be picked up; scroll bonuses (`equipData`) survive the drop/pickup round-trip
+- **Drag-and-drop from the equipment window** — drag a worn item onto the inventory to unequip it, or anywhere else to drop it on the ground, with a cursor ghost icon (inventory item drags now show the ghost too)
+- **Three Snails tier shells** — skill level 1/2/3 consumes exactly Snail Shell / Blue Snail Shell / Red Snail Shell with v83 fixed damage 10/25/40 and the matching ball sprite; no shell of the level's tier → no cast (and no MP consumed on failed casts)
+- **Default underwear rendering** — characters with empty top/bottom slots render v83 default underwear instead of appearing naked
+- **Rope vs ladder stances** — climbing uses the correct v83 stance (`rope` = hands on rope, `ladder` = hands on rungs) based on the map's ladderRope `l` flag
+
+### Fixed
+- **Character save wipe ("naked player") bug** — root-caused and fixed in layers: the server's disconnect auto-save fallback no longer persists item data from render-sync state; partial saves can never clear equipment; saves are blocked client-side until login restore completes (`_restoreComplete`); the dev-session snapshot is rejected when it has no equips but the DB does
+- **Level/stat regression corruption** — the server rejects saves carrying a lower level than stored (levels never decrease in v83) and logs the offending payload; client saves are skipped until the game map is loaded (early saves recorded mapId 10000, teleporting characters back to the start map)
+- **Black screen on boot** — `connectForLogin`/`sendLogin`/`selectCharacter` promises could hang forever when the server was briefly unreachable, stalling `tryAutoLogin` before the game loop started; all login network calls now time out and fall back to the login screen
+- **Climbing animation** — key releases were firing every frame instead of on the actual key-up transition, zeroing climb velocity and freezing the climb animation ("sliding" up ropes); animation now plays while moving and freezes when hanging still, including after dropping off and re-grabbing
+- **Weapon drawn across the face while climbing** — equips without ladder/rope stance frames (weapons have none) are now skipped during climb stances instead of falling back to their standing pose
+- **Login screen fidelity** — login flow renders its native 800×600 art 1:1 (was top-left anchored in a larger canvas with black bars, then blurred by double resampling); sign text is crisp again
+- **Ghost login buttons** — Guest Login/Register/Quit etc. were invisible but still clickable on world/character select; ID and password fields are recreated when returning to the login screen via Back
+- **Player name in dialogs** — `#h0#` format code now resolves to the actual character name in quest dialogs, quest scripts, and NPC scripts (was showing the literal "Player")
+- **Login input fields** — track the sign with the camera and scale with the canvas (were misaligned after window resizes)
+
+---
+
 ## [Unreleased] - 2026-04-04
 
 ### Added

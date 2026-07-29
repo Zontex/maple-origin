@@ -9,6 +9,30 @@ export interface EquipData {
   level: number;                 // scrolls passed
 }
 
+/**
+ * WZ path for an equip item (category 1) — equips live in Character.wz,
+ * organized by directory per item-id prefix, unlike all other item types.
+ * Returns null for non-equips or unknown prefixes.
+ */
+export function getEquipWzPath(itemId: number): string | null {
+  if (Math.floor(itemId / 1000000) !== 1) return null;
+  const firstThreeDigits = Math.floor(itemId / 10000);
+  const equipDirMap: Record<number, string> = {
+    100: 'Cap', 101: 'Accessory', 102: 'Accessory', 103: 'Accessory',
+    104: 'Coat', 105: 'Longcoat', 106: 'Pants', 107: 'Shoes',
+    108: 'Glove', 109: 'Shield', 110: 'Cape', 111: 'Ring', 112: 'Accessory',
+    113: 'Accessory', 114: 'Accessory',
+    180: 'PetEquip', 181: 'PetEquip', 182: 'PetEquip', 183: 'PetEquip',
+    190: 'TamingMob', 191: 'TamingMob', 193: 'TamingMob',
+  };
+  // Weapons: 130-170
+  let dir = equipDirMap[firstThreeDigits];
+  if (!dir && firstThreeDigits >= 130 && firstThreeDigits <= 170) {
+    dir = 'Weapon';
+  }
+  return dir ? `Character.wz/${dir}/0${itemId}.img` : null;
+}
+
 interface ItemOpts {
   itemId: number;
   quantity: number;
@@ -63,25 +87,12 @@ class Item {
 
       // Equipment items (category 1) live in Character.wz, not Item.wz
       if (category === 1) {
-        const firstThreeDigits = Math.floor(this.itemId / 10000);
-        const equipDirMap: Record<number, string> = {
-          100: 'Cap', 101: 'Accessory', 102: 'Accessory', 103: 'Accessory',
-          104: 'Coat', 105: 'Longcoat', 106: 'Pants', 107: 'Shoes',
-          108: 'Glove', 109: 'Shield', 110: 'Cape', 111: 'Ring', 112: 'Accessory',
-          113: 'Accessory', 114: 'Accessory',
-          180: 'PetEquip', 181: 'PetEquip', 182: 'PetEquip', 183: 'PetEquip',
-          190: 'TamingMob', 191: 'TamingMob', 193: 'TamingMob',
-        };
-        // Weapons: 130-170
-        let dir = equipDirMap[firstThreeDigits];
-        if (!dir && firstThreeDigits >= 130 && firstThreeDigits <= 170) {
-          dir = 'Weapon';
-        }
-        if (dir) {
+        const path = getEquipWzPath(this.itemId);
+        if (path) {
           try {
-            this.node = await WZManager.get(`Character.wz/${dir}/0${this.itemId}.img`);
+            this.node = await WZManager.get(path);
           } catch (e) {
-            console.warn(`Failed to load equip item ${this.itemId} from Character.wz/${dir}`);
+            console.warn(`Failed to load equip item ${this.itemId} from ${path}`);
           }
         }
         // Equip instance data: restore saved bonuses/tuc or init from WZ

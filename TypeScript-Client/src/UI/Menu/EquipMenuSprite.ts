@@ -4,6 +4,10 @@ import DragableMenu from './DragableMenu';
 import { CameraInterface } from '../../Camera';
 import GameCanvas from '../../GameCanvas';
 import Item from '../../Inventory/Item';
+import DragManager from '../DragManager';
+import DropItemSprite from '../../DropItem/DropItemSprite';
+import mySocket from '../../mysocket';
+import UIEquipTooltip from '../UIEquipTooltip';
 import getEquipTypeById from '../../Constants/EquipType';
 import { ensureItemNames, getItemNameSync } from '../../Quest/QuestData';
 import DebugDrag from '../DebugDrag';
@@ -191,11 +195,100 @@ class EquipMenuSprite extends DragableMenu {
 
         this.lastClickSlot = slot.slot;
         this.lastClickTime = now;
+
+        // Begin a drag — once the cursor moves past the threshold the item
+        // can be dragged out: onto the inventory window to unequip, anywhere
+        // else to drop it on the ground. A plain click never reaches the
+        // threshold, so double-click unequip keeps working.
+        this.beginEquipDrag(slot.slot, itemId, mouseX, mouseY);
         return true;
       }
     }
 
     return false;
+  }
+
+  // Slot currently being dragged out of the window (-1 = none)
+  _dragSlot: number = -1;
+
+  /** Start dragging a worn item — DragManager renders the cursor ghost */
+  beginEquipDrag(slotIdx: number, itemId: number, mouseX: number, mouseY: number) {
+    const icon = this.charecter.equippedItemIcons?.[slotIdx] ?? null;
+    DragManager.beginPending('item', itemId, icon, mouseX, mouseY);
+    this._dragSlot = slotIdx;
+
+    const onMouseUp = () => {
+      window.removeEventListener('mouseup', onMouseUp);
+      const slot = this._dragSlot;
+      this._dragSlot = -1;
+      if (slot < 0) return;
+      // Threshold never reached — plain click, double-click handling owns it
+      if (!DragManager.isDragging) return;
+      DragManager.cancel();
+
+      const mx = this.GameCanvas.mouseX;
+      const my = this.GameCanvas.mouseY;
+
+      // Released back over the equip window → no action
+      const rect = this.getRect({} as CameraInterface);
+      if (mx >= rect.x && mx < rect.x + rect.width && my >= rect.y && my < rect.y + rect.height) {
+        return;
+      }
+
+      // Over the open inventory window → unequip into the bag
+      const invMenu = (window as any).MapStateInstance?.inventoryMenu;
+      if (invMenu && !invMenu.isHidden) {
+        const invRect = invMenu.getRect?.({} as CameraInterface);
+        if (invRect && mx >= invRect.x && mx < invRect.x + invRect.width &&
+            my >= invRect.y && my < invRect.y + invRect.height) {
+          this.unequipItem(slot);
+          return;
+        }
+      }
+
+      // Anywhere else → drop on the ground
+      this.dropEquippedItem(slot);
+    };
+    window.addEventListener('mouseup', onMouseUp);
+  }
+
+  /** Detach a worn item and drop it on the ground (keeps scroll data) */
+  async dropEquippedItem(slot: number) {
+    const itemId = this.charecter.equippedItemIds[slot];
+    if (!itemId) return;
+    const equipData = this.charecter.equippedItemData?.[slot];
+
+    try {
+      // Create the ground drop first — only detach once the drop exists,
+      // so a failed sprite load can't destroy the item
+      const itemDrop = await DropItemSprite.fromOpts({
+        id: itemId,
+        amount: 1,
+        equipData: equipData ?? undefined,
+        monster: {
+          pos: {
+            x: this.charecter.pos.x,
+            y: this.charecter.pos.y - 20,
+            vx: 0,
+            vy: 0,
+          },
+        },
+      });
+      if (!this.charecter.map || itemDrop.destroyed) {
+        console.error(`[EquipMenu] Drop failed for equipped item ${itemId} — keeping it worn`);
+        return;
+      }
+
+      this.charecter.detachEquip(slot);
+
+      const dropId = Date.now() + Math.floor(Math.random() * 10000);
+      (itemDrop as any)._netDropId = dropId;
+      this.charecter.map.addItemDrop(itemDrop);
+      mySocket.sendItemDrop(itemId, 1, this.charecter.pos.x, this.charecter.pos.y - 20, 0, 0, dropId);
+      console.log(`[EquipMenu] Dropped equipped item ${itemId} from slot ${slot}`);
+    } catch (e) {
+      console.error('[EquipMenu] Error dropping equipped item:', e);
+    }
   }
 
   async unequipItem(slot: number) {
@@ -299,6 +392,15 @@ class EquipMenuSprite extends DragableMenu {
     if (!this.hoveredSlot || !this.hoveredItemId) return;
 
     const itemId = this.hoveredItemId;
+
+    // GMS-style detailed equip tooltip (REQ stats, job bar, category, stats)
+    const anchorX = this.x + this.hoveredSlot.x + SLOT_SIZE + 4;
+    const anchorY = this.y + this.hoveredSlot.y;
+    if (UIEquipTooltip.draw(canvas, itemId, this.charecter.equippedItemData?.[this.hoveredSlot.slot], anchorX, anchorY)) {
+      return;
+    }
+
+    // Fallback: simple name tooltip (equip info failed to load)
     const itemName = this.itemNamesReady ? (getItemNameSync(itemId) || `Item ${itemId}`) : `Item ${itemId}`;
 
     const icon = this.charecter.equippedItemIcons[this.hoveredSlot.slot];

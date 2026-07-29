@@ -128,6 +128,23 @@ class GameCanvas {
     this.listenKeyboard();
   }
 
+  /**
+   * Switch the canvas's internal resolution. The login flow renders its
+   * native 800x600 v83 artwork 1:1 and lets CSS scale the canvas to the
+   * window in a single resample (like the original client's fullscreen
+   * stretch) — upscaling in-canvas first would soften sprites and text.
+   * The CSS #game rule keeps the 4:3 aspect either way.
+   */
+  setInternalSize(width: number, height: number) {
+    if (this.game.width === width && this.game.height === height) return;
+    this.game.width = width;
+    this.game.height = height;
+    // Resizing a canvas resets its context state
+    this.context.imageSmoothingEnabled = false;
+    // Reposition DOM overlays (MapleInput) that scale off canvas size
+    window.dispatchEvent(new Event("resize"));
+  }
+
   listenMouse() {
     // Listen on window so cursor tracks even over overlaid DOM elements (e.g. <input>)
     window.addEventListener("mousemove", (e) => {

@@ -150,7 +150,7 @@ const UIHotkeyBar = {
     }
   },
 
-  activateSkill(skillId: number) {
+  async activateSkill(skillId: number) {
     const sm = MyCharacter.skillManager;
     if (!sm || !sm.hasSkill(skillId)) return;
 
@@ -172,22 +172,16 @@ const UIHotkeyBar = {
       return;
     }
 
-    // Consume resources
-    if (effect.mpCon > 0) MyCharacter.mp -= effect.mpCon;
-    if (effect.hpCon > 0) MyCharacter.hp -= effect.hpCon;
-
-    // Start cooldown
-    if (effect.cooltime > 0) {
-      sm.startCooldown(skillId, effect.cooltime);
-    }
-
     // Get skill info for type
     const info = SkillData.getSkillSync(skillId);
     if (!info) return;
 
     if (info.isAttack) {
-      // Attack skill — use the skill attack system
-      MyCharacter.useSkill?.(skillId, effect);
+      // Attack skill — cast may fail (attack delay, missing snail shells);
+      // only consume MP/HP/cooldown when it actually fires
+      const casted = await MyCharacter.useSkill?.(skillId, effect);
+      if (!casted) return;
+      this.playSkillSound(skillId);
     } else if (info.isBuff) {
       // Buff skill — apply buff
       if (MyCharacter.buffManager) {
@@ -196,6 +190,18 @@ const UIHotkeyBar = {
       // Play skill-specific sound and effect animation
       this.playSkillSound(skillId);
       this.playSkillEffect(skillId);
+    } else {
+      // Passive skills can't be activated
+      return;
+    }
+
+    // Consume resources
+    if (effect.mpCon > 0) MyCharacter.mp -= effect.mpCon;
+    if (effect.hpCon > 0) MyCharacter.hp -= effect.hpCon;
+
+    // Start cooldown
+    if (effect.cooltime > 0) {
+      sm.startCooldown(skillId, effect.cooltime);
     }
   },
 
@@ -375,7 +381,7 @@ const UIHotkeyBar = {
       const skillNode = await WZManager.get(`Skill.wz/${paddedJobId}.img`);
       if (!skillNode) return;
 
-      const effectNode = (skillNode as any).nGet?.('skill')?.nGet?.(String(skillId))?.nGet?.('effect');
+      const effectNode = (skillNode as any).nGet?.('skill')?.nGet?.(String(skillId).padStart(7, '0'))?.nGet?.('effect');
       if (!effectNode?.nChildren || effectNode.nChildren.length === 0) return;
 
       // Set up animation frames on the character

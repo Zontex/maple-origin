@@ -50,7 +50,7 @@ function stripScriptCodes(text: string): string {
   return text
     .replace(/#b/g, '').replace(/#r/g, '').replace(/#k/g, '')
     .replace(/#n/g, '').replace(/#e/g, '').replace(/#d/g, '').replace(/#g/g, '')
-    .replace(/#h0#/g, 'Player')
+    .replace(/#h\s*0?\s*#/g, () => (window as any).charecter?.name || 'Player')
     .replace(/#p(\d+)#/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
     .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
     .replace(/#a\d+#/g, '')

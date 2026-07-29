@@ -213,8 +213,10 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     }
   }
 
-  // Determine skill type
-  const isAttack = hasHit || hasBall;
+  // Determine skill type. Some skills (e.g., Three Snails) keep their ball/hit
+  // nodes per-level instead of at the skill root, so check both.
+  const levelHasBallOrHit = effects.some(e => e.ballNode || e.hitNode);
+  const isAttack = hasHit || hasBall || levelHasBallOrHit;
   const isBuff = !isAttack && (hasAction || hasEffect);
   const isPassive = !isAttack && !isBuff && effects.length > 0;
 

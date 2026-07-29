@@ -56,7 +56,7 @@ python3 tools/wz_explorer.py  # WZ asset explorer at http://localhost:5555
 - Example gotcha: `pageR/0` is an imgdir containing canvas `0`, so need `nGet('pageR').nGet('0').nGet('0').nGetImage()`
 
 ### Canvas Coordinate System
-- Canvas internal resolution = `window.innerWidth x window.innerHeight` (set by Config.ts goFullScreen)
+- Canvas internal resolution = 800x600 (authentic v83, from Config.ts); CSS scales the canvas to the window keeping 4:3 — canvas coords and CSS pixels differ by that scale factor
 - Canvas drawing coordinates and CSS pixel coordinates may NOT match if canvas is scaled
 - For UI elements that need text input, prefer canvas-rendered keyboard capture over HTML `<input>` elements — HTML inputs don't align with canvas coordinates
 - `GameCanvas.drawImage` uses `sw`/`sh` (not `sWidth`/`sHeight`) for source crop
@@ -80,7 +80,7 @@ Core Engine
 ├── GameLoop.ts          → 60 FPS update/render loop
 ├── GameCanvas.ts        → Canvas rendering, mouse/keyboard input
 ├── Camera.ts            → Viewport with easing transitions
-├── Config.ts            → Resolution (1280x720 default)
+├── Config.ts            → Resolution (800x600 — authentic v83; CSS scales canvas to window at 4:3)
 ├── StateManager.ts      → Game state machine (login → map)
 ├── Timer.ts             → Frame timing
 
