@@ -72,9 +72,7 @@ function action(mode, type, selection) {
             if (selection == 0) {
                 cm.sendStyle("Pick one?", skin);
             } else if (selection == 1 || selection == 5) {
-                for each(var i
-            in
-                selection == 1 ? hair : fhair
+                for (var i of selection == 1 ? hair : fhair
             )
                 pushIfItemExists(hairnew, i);
                 cm.sendStyle("Pick one?", hairnew);
@@ -85,9 +83,7 @@ function action(mode, type, selection) {
                 }
                 cm.sendStyle("Pick one?", haircolor);
             } else if (selection == 3 || selection == 6) {
-                for each(var j
-            in
-                selection == 3 ? face : fface
+                for (var j of selection == 3 ? face : fface
             )
                 pushIfItemExists(facenew, j);
                 cm.sendStyle("Pick one?", facenew);

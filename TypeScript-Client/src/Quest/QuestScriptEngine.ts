@@ -2,7 +2,7 @@ import QuestData, { npcNames, mobNames } from './QuestData';
 import { QuestState } from './QuestData';
 import WZManager from '../wz-utils/WZManager';
 import { fadeToBlack } from '../MapState';
-import { makeSafeScriptApi } from '../NpcScriptEngine';
+import { makeSafeScriptApi, createScriptJavaShim } from '../NpcScriptEngine';
 
 export type ScriptDialogType =
   | 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple'
@@ -142,7 +142,8 @@ export default class QuestScriptEngine {
         `var status = ${this.status};`
       );
 
-      const fn = new Function('qm', `
+      const shim = createScriptJavaShim(qm);
+      const fn = new Function('qm', 'Java', 'java', 'Packages', `
         ${modifiedScript}
         if (typeof ${this.currentPhase} === 'function') {
           ${this.currentPhase}(${mode}, ${type}, ${selection});
@@ -150,7 +151,7 @@ export default class QuestScriptEngine {
         return status;
       `);
 
-      const newStatus = fn(qm);
+      const newStatus = fn(qm, shim.Java, shim.java, shim.Packages);
       if (typeof newStatus === 'number') {
         this.status = newStatus;
       }
@@ -177,7 +178,7 @@ export default class QuestScriptEngine {
     const character = this.character;
     const questManager = character?.questManager;
 
-    const playerObj = {
+    const playerObjBase = {
       getGender() { return character?.gender || 0; },
       getHp() { return character?.hp ?? 100; },
       getMp() { return character?.mp ?? 100; },
@@ -189,13 +190,22 @@ export default class QuestScriptEngine {
       setHp(amount: number) { if (character) character.hp = amount; },
       getJob() {
         const jobId = character?.stats?.jobId ?? 0;
-        return { getId() { return jobId; } };
+        return { getId() { return jobId; }, id: jobId };
       },
       getJobStyle() { return 0; },
       getInventory(type: any) {
         return { getNumFreeSlot() { return 10; } };
       },
+      getParty() { return null; },
+      getGuild() { return null; },
+      getEventInstance() { return null; },
+      getSkillLevel(skillId: any) {
+        const id = typeof skillId === 'number' ? skillId : skillId?.getId?.() ?? 0;
+        return character?.skillManager?.getSkillLevel?.(id) ?? 0;
+      },
     };
+    // Unimplemented player methods degrade to chainable no-ops
+    const playerObj = makeSafeScriptApi(playerObjBase, 'QuestScript player');
 
     const qm: any = {
       // Dialog methods — capture text and type
@@ -253,7 +263,7 @@ export default class QuestScriptEngine {
 
       // Player access
       getPlayer() { return playerObj; },
-      c: { getPlayer() { return playerObj; } },
+      c: makeSafeScriptApi({ getPlayer() { return playerObj; } }, 'QuestScript c'),
 
       // Misc (stubs)
       dropMessage(type: number, text: string) { console.log(`[QuestScript] ${text}`); },

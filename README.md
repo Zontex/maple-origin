@@ -170,7 +170,7 @@ See [CHANGELOG.md](CHANGELOG.md) for recent fixes. Major remaining work:
 - **Job trial system**: Maple Island job instructors (Dances with Balrog, Athena Pierce, Grendel, etc.) offer job trial quests (1048-1053) that temporarily change job, teach trial skills, and warp to trial maps — requires temporary job change + trial map instances
 - **Skill coverage**: skill window, hotkey bar, and beginner/attack/buff skills work; full per-job skill coverage (mob skills, summons, party buffs) still in progress
 - **Quest system**: Fame reward bug (104 quests), item start requirements (488 quests)
-- **Scripts**: 214 broken NPC scripts and 65 broken quest scripts (Java.type calls, missing API methods)
+- **Scripts**: ~23 PQ/event NPC scripts remain non-functional pending the party/event-instance system (they run inside event maps that are unreachable without it); all other NPC, quest, and portal scripts execute crash-free via Java shims and chainable API stubs
 - **Missing features**: Party system, facial expressions, passive HP/MP regen, world map
 
 ---

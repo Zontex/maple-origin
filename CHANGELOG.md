@@ -7,6 +7,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased] - 2026-07-29
 
+### Script engine overhaul (NPC / quest / portal)
+Audited all 971 backend scripts by driving them through a recording sandbox; fixed the engine-level crash causes rather than patching scripts:
+- **Chainable no-op stubs** — unimplemented API methods (and any chain hanging off them, e.g. `cm.getX().getY().getZ()`) degrade to warn-once no-ops instead of TypeErrors that close the dialog; predicates (`is*`/`has*`/`can*`) return false and `size`/`count` return 0 so `while (iter.hasNext())` loops terminate
+- **Java/Nashorn shim** — `Java.type()` provides real semantics for `client.inventory.InventoryType` (tab ids), `client.Job` (v83 job ids), `config.YamlConfig` (feature flags off, rates 1), `ShopFactory`, `java.awt.Point`/`Rectangle`; unknown classes get chainable stubs; `java` and `Packages` globals added; shared across NPC, quest, and portal engines
+- **Nested API objects wrapped** — `getPlayer()`, `getClient()`, `getMap()`, `cm.c`, the portal `pi`, and storage/event-manager objects are safety-wrapped; event *managers* exist with a null running instance (Cosmic semantics), party/guild/event-instance return null so scripts take their authentic "you need a party" branches
+- **Result**: quest scripts 261/261 crash-free, NPC scripts 708/710 (remaining: 2 GM info panels using a Nashorn scope quirk), portal scripts shimmed; ~23 PQ/event-map NPCs still close their dialog early because they genuinely require the event-instance system
+- Fixed Nashorn `for each` syntax in the beauty-salon GM NPC (9900000.js)
+
 ### Added
 - **Authentic 800×600 resolution** — the whole game (login + in-game) now runs at the original pre-Big Bang client resolution. Login art (natively 800×600) fills the canvas exactly; the HUD lands at its designed v83 positions; CSS scales the canvas to the window in a single resample (4:3)
 - **GMS-style equip tooltips** (`UI/UIEquipTooltip.ts`) — enlarged icon, REQ LEV/STR/DEX/INT/LUK/FAM block, job class bar from the `reqJob` bitmask, CATEGORY, combined base+scroll stats, and NUMBER OF UPGRADES AVAILABLE; shown in both the equipment window and the inventory

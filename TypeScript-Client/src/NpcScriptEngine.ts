@@ -22,22 +22,122 @@ export interface PendingDialog {
   onInput?: (value: string) => void;
 }
 
+// Warn once per missing method, not once per call
+const stubWarned = new Set<string>();
+
+/**
+ * Infinitely chainable no-op stub: any method call returns another stub, so
+ * backend script chains like `cm.getX().getY().getZ()` degrade to no-ops
+ * instead of TypeErrors that close the dialog. Predicates (`is*`/`has*`/
+ * `can*`) return false and `size`/`count` return 0 so `while (iter.hasNext())`
+ * style loops terminate. Coerces to 0 / '' in arithmetic and string contexts.
+ */
+export function makeChainableStub(label: string): any {
+  const fn: any = function () {};
+  return new Proxy(fn, {
+    get(_t, prop) {
+      if (typeof prop === 'symbol') {
+        if (prop === Symbol.toPrimitive) return () => 0;
+        return undefined;
+      }
+      if (prop === 'toString') return () => '';
+      if (prop === 'valueOf') return () => 0;
+      if (prop === 'then') return undefined;
+      // Property reads chain too (`ExpeditionType.CWKPQ.getMinLevel()`)
+      return makeChainableStub(`${label}.${String(prop)}`);
+    },
+    apply(_t, _thisArg, _args) {
+      if (!stubWarned.has(label)) {
+        stubWarned.add(label);
+        console.warn(`[Script] stub ${label}() — no-op`);
+      }
+      const seg = label.split(/[.()]/).filter(Boolean).pop() || '';
+      if (/^(is|has|can|contains)[A-Z_]?/.test(seg)) return false;
+      if (/^(size|count|getSize|getCount|length)$/.test(seg)) return 0;
+      return makeChainableStub(`${label}()`);
+    },
+  });
+}
+
 /**
  * Wrap a script API object so any method the engine hasn't implemented
- * becomes a warning no-op instead of a TypeError that closes the dialog.
+ * becomes a warning chainable no-op instead of a TypeError that closes
+ * the dialog.
  */
 export function makeSafeScriptApi(target: any, label: string) {
   return new Proxy(target, {
     get(t, prop, recv) {
       if (prop in t || typeof prop === 'symbol') return Reflect.get(t, prop, recv);
-      return (...args: any[]) => {
-        console.warn(
-          `[${label}] missing method ${String(prop)}(${args.map(a => JSON.stringify(a)).join(', ')}) — no-op`
-        );
-        return undefined;
-      };
+      return makeChainableStub(`${label}.${String(prop)}`);
     },
   });
+}
+
+/**
+ * Shim for the Nashorn/Java globals Cosmic backend scripts rely on.
+ * Semantically meaningful classes get real values (InventoryType tab ids,
+ * v83 Job ids, YamlConfig feature flags off / rates 1); everything else
+ * degrades to a chainable no-op stub.
+ */
+export function createScriptJavaShim(cm?: any) {
+  const InventoryType: any = {};
+  for (const [n, v] of [['UNDEFINED', -1], ['EQUIP', 1], ['USE', 2], ['SETUP', 3], ['ETC', 4], ['CASH', 5]] as [string, number][]) {
+    InventoryType[n] = { getType: () => v, name: () => n };
+  }
+
+  const jobIds: Record<string, number> = {
+    BEGINNER: 0, WARRIOR: 100, FIGHTER: 110, CRUSADER: 111, HERO: 112,
+    PAGE: 120, WHITEKNIGHT: 121, PALADIN: 122, SPEARMAN: 130,
+    DRAGONKNIGHT: 131, DARKKNIGHT: 132, MAGICIAN: 200, FP_WIZARD: 210,
+    FP_MAGE: 211, FP_ARCHMAGE: 212, IL_WIZARD: 220, IL_MAGE: 221,
+    IL_ARCHMAGE: 222, CLERIC: 230, PRIEST: 231, BISHOP: 232, BOWMAN: 300,
+    HUNTER: 310, RANGER: 311, BOWMASTER: 312, CROSSBOWMAN: 320, SNIPER: 321,
+    MARKSMAN: 322, THIEF: 400, ASSASSIN: 410, HERMIT: 411, NIGHTLORD: 412,
+    BANDIT: 420, CHIEFBANDIT: 421, SHADOWER: 422, PIRATE: 500, BRAWLER: 510,
+    MARAUDER: 511, BUCCANEER: 512, GUNSLINGER: 520, OUTLAW: 521, CORSAIR: 522,
+    GM: 900, SUPERGM: 910,
+  };
+  const Job: any = {};
+  for (const [n, id] of Object.entries(jobIds)) {
+    Job[n] = { getId: () => id, id, name: () => n };
+  }
+  Job.getById = (id: number) => ({ getId: () => id, id });
+
+  // Feature flags off, rates 1, any other number 0
+  const yamlServer = new Proxy({}, {
+    get(_t, p) {
+      if (typeof p !== 'string') return 0;
+      if (p.startsWith('USE_')) return false;
+      if (p.endsWith('_RATE')) return 1;
+      return 0;
+    },
+  });
+
+  const type = (cls: string) => {
+    switch (cls) {
+      case 'client.inventory.InventoryType': return InventoryType;
+      case 'client.Job': return Job;
+      case 'config.YamlConfig': return { config: { server: yamlServer } };
+      case 'server.ShopFactory':
+        return {
+          getInstance: () => ({
+            getShop: (id: number) => ({ sendShop: () => cm?.openShopNPC?.(id) }),
+          }),
+        };
+      case 'java.awt.Point':
+        return function (x: number, y: number) { return { x, y, getX: () => x, getY: () => y }; };
+      case 'java.awt.Rectangle':
+        return function (x: number, y: number, w: number, h: number) { return { x, y, width: w, height: h }; };
+      default:
+        return makeChainableStub(`Java(${cls})`);
+    }
+  };
+
+  return {
+    Java: { type },
+    java: makeChainableStub('java'),
+    Packages: makeChainableStub('Packages'),
+  };
 }
 
 // Parse #L<index>#<text>#l selection options from script text.
@@ -199,16 +299,8 @@ export default class NpcScriptEngine {
         `var status = ${this.status};`
       );
 
-      const fn = new Function('cm', `
-        // Stub Java.type() and ShopFactory for backend scripts that use them
-        var Java = { type: function(cls) {
-          if (cls === 'server.ShopFactory') {
-            return { getInstance: function() { return { getShop: function(id) {
-              return { sendShop: function() { cm.openShopNPC(id); } };
-            }}; }};
-          }
-          return {};
-        }};
+      const shim = createScriptJavaShim(cm);
+      const fn = new Function('cm', 'Java', 'java', 'Packages', `
         ${modifiedScript}
         if (typeof ${funcName} === 'function') {
           ${funcName}(${mode}, ${type}, ${selection});
@@ -216,7 +308,7 @@ export default class NpcScriptEngine {
         return status;
       `);
 
-      const newStatus = fn(cm);
+      const newStatus = fn(cm, shim.Java, shim.java, shim.Packages);
       if (typeof newStatus === 'number') {
         this.status = newStatus;
       }
@@ -242,7 +334,7 @@ export default class NpcScriptEngine {
     const questManager = character?.questManager;
     const mapNameResolver = (id: number) => engine.mapNameCache.get(id) || `Map ${id}`;
 
-    const playerObj = {
+    const playerObjBase = {
       getGender() { return character?.gender || 0; },
       getHp() { return character?.hp ?? 100; },
       getMp() { return character?.mp ?? 100; },
@@ -267,7 +359,25 @@ export default class NpcScriptEngine {
       },
       isQuestStarted(questId: number) { return questManager?.getQuestState(questId) === QuestState.STARTED; },
       isQuestCompleted(questId: number) { return questManager?.getQuestState(questId) === QuestState.COMPLETED; },
+      // Systems that don't exist yet return null so scripts take their
+      // authentic "you don't have X" branches instead of chaining into stubs
+      getParty() { return null; },
+      getGuild() { return null; },
+      getGuildId() { return 0; },
+      getEventInstance() { return null; },
+      getSkillLevel(skillId: any) {
+        const id = typeof skillId === 'number' ? skillId : skillId?.getId?.() ?? 0;
+        return character?.skillManager?.getSkillLevel?.(id) ?? 0;
+      },
+      getStorage() {
+        return makeSafeScriptApi({
+          sendStorage() { console.warn('[NpcScript] storage not implemented'); },
+        }, 'Storage');
+      },
     };
+    // Any player method the engine doesn't implement degrades to a chainable
+    // no-op — backend scripts call dozens of Cosmic player methods
+    const playerObj = makeSafeScriptApi(playerObjBase, `NpcScript player`);
 
     const cm: any = {
       // Dialog methods
@@ -323,14 +433,24 @@ export default class NpcScriptEngine {
       // Player info shortcuts
       getPlayer() { return playerObj; },
       getChar() { return playerObj; },
-      getClient() { return { getPlayer() { return playerObj; } }; },
-      c: { getPlayer() { return playerObj; } },
+      getClient() {
+        return makeSafeScriptApi({
+          getPlayer() { return playerObj; },
+          getChannel() { return 1; },
+          getWorld() { return 0; },
+        }, 'NpcScript client');
+      },
+      c: makeSafeScriptApi({ getPlayer() { return playerObj; } }, 'NpcScript c'),
       getJobId() { return character?.stats?.jobId ?? 0; },
       getLevel() { return character?.stats?.level ?? 1; },
       getMeso() { return character?.inventory?.mesos ?? 0; },
       getMapId() { return character?.map?.mapId ?? 0; },
       getNpc() { return engine.npcId; },
-      getMap() { return { getId() { return character?.map?.mapId ?? 0; } }; },
+      getMap() {
+        return makeSafeScriptApi({
+          getId() { return character?.map?.mapId ?? 0; },
+        }, 'NpcScript map');
+      },
 
       // Items
       gainItem(itemId: number, count?: number) {
@@ -422,12 +542,22 @@ export default class NpcScriptEngine {
       changeJob(job: any) { character?.changeJob(typeof job === 'number' ? job : job?.getId?.() ?? 0); },
       changeJobById(jobId: number) { character?.changeJob(jobId); },
 
-      // Party/events (stubs)
+      // Party/events (stubs). Event MANAGERS always exist in Cosmic (it's
+      // the running INSTANCE that can be null), so scripts chain manager
+      // calls unconditionally — give them a safe manager with no instance.
       getParty() { return null; },
       isLeader() { return true; },
       isEventLeader() { return false; },
       getEventInstance() { return null; },
-      getEventManager(name: string) { return null; },
+      getEventManager(_name: string) {
+        return makeSafeScriptApi({
+          getEventInstance() { return null; },
+          getProperty(_k: string) { return null; },
+          getIntProperty(_k: string) { return 0; },
+          setProperty(_k: string, _v: any) { /* stub */ },
+          getTransportationTime() { return 60000; },
+        }, 'EventManager');
+      },
       getExpedition() { return null; },
 
       // Misc

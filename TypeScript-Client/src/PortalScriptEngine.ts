@@ -1,4 +1,5 @@
 import { QuestState } from './Quest/QuestData';
+import { createScriptJavaShim, makeSafeScriptApi } from './NpcScriptEngine';
 import { fadeToBlack } from './MapState';
 import WZManager from './wz-utils/WZManager';
 import PLAY_AUDIO from './Audio/PlayAudio';
@@ -43,13 +44,13 @@ export default class PortalScriptEngine {
 
     let result: any;
     try {
-      const fn = new Function('pi', `
-        var Java = { type: function() { return {}; } };
+      const shim = createScriptJavaShim();
+      const fn = new Function('pi', 'Java', 'java', 'Packages', `
         ${scriptCode}
         if (typeof enter === 'function') return enter(pi);
         return true;
       `);
-      result = fn(pi);
+      result = fn(pi, shim.Java, shim.java, shim.Packages);
     } catch (e) {
       console.error(`[PortalScript] Error in ${scriptName}:`, e);
       return false;
@@ -78,7 +79,7 @@ export default class PortalScriptEngine {
   ): any {
     const questManager = character?.questManager;
 
-    const playerObj: any = {
+    const playerObjBase: any = {
       getGender() { return character?.gender || 0; },
       getHp() { return character?.hp ?? 100; },
       getMp() { return character?.mp ?? 100; },
@@ -104,8 +105,10 @@ export default class PortalScriptEngine {
       isQuestStarted(questId: number) { return questManager?.getQuestState(questId) === QuestState.STARTED; },
       isQuestCompleted(questId: number) { return questManager?.getQuestState(questId) === QuestState.COMPLETED; },
     };
+    // Unimplemented player methods degrade to chainable no-ops
+    const playerObj = makeSafeScriptApi(playerObjBase, 'PortalScript player');
 
-    return {
+    return makeSafeScriptApi({
       playPortalSound() {
         WZManager.get('Sound.wz/Game.img/Portal').then((node: any) => {
           PLAY_AUDIO(node.nGetAudio());
@@ -163,6 +166,6 @@ export default class PortalScriptEngine {
       openNpc(npcId: number) { /* stub */ },
       showInfo(path: string) { /* stub */ },
       guideHint(hint: number) { /* stub */ },
-    };
+    }, 'PortalScript pi');
   }
 }
