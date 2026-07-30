@@ -1,7 +1,8 @@
-import { npcNames, mobNames, QuestState } from './Quest/QuestData';
+import { npcNames, mobNames, QuestState, ensureItemNames } from './Quest/QuestData';
 import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
 import ShopUI from './UI/ShopUI';
+import TransportationManager from './Transport/TransportationManager';
 
 export type ScriptDialogType =
   | 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple'
@@ -168,9 +169,9 @@ function stripFormatCodes(text: string, mapNameResolver?: (id: number) => string
     .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
     .replace(/#m(\d+)#/g, (_, id) => mapNameResolver?.(parseInt(id)) || `Map ${id}`)
     .replace(/#a\d+#/g, '')
-    .replace(/#t(\d+)#/g, (_, id) => getItemName(parseInt(id)))
-    .replace(/#i\d+#/g, '').replace(/#c\d+#/g, '')
-    .replace(/#v(\d+)#/g, '\x01ITEM:$1\x02')
+    .replace(/#t(\d+):?#/g, (_, id) => getItemName(parseInt(id)).trim())
+    .replace(/#i\d+:?#/g, '').replace(/#c\d+:?#/g, '')
+    .replace(/#v(\d+):?#/g, '\x01ITEM:$1\x02')
     .replace(/#fUI\/UIWindow\.img\/QuestIcon\/(\d+)\/\d+#/g, '\x01QICON:$1\x02')
     .replace(/#f[^#]*#/g, '')
     .replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n')
@@ -178,7 +179,7 @@ function stripFormatCodes(text: string, mapNameResolver?: (id: number) => string
 }
 
 // Strip all format codes including selections
-function stripScriptCodes(text: string, mapNameResolver?: (id: number) => string): string {
+export function stripScriptCodes(text: string, mapNameResolver?: (id: number) => string): string {
   if (!text) return '';
   let result = stripFormatCodes(text, mapNameResolver);
   result = result.replace(/#L\d+#/g, '').replace(/#l/g, '');
@@ -187,7 +188,6 @@ function stripScriptCodes(text: string, mapNameResolver?: (id: number) => string
 
 export default class NpcScriptEngine {
   private scriptCache: Map<number, string> = new Map();
-  private status: number = -1;
   private npcId: number = 0;
   pendingDialog: PendingDialog | null = null;
   private disposed: boolean = false;
@@ -196,11 +196,18 @@ export default class NpcScriptEngine {
   // Values captured by sendGetText/sendGetNumber input dialogs (Cosmic pattern)
   private lastGetText: string = '';
   private lastGetNumber: number = 0;
+  // The script's start/action closures, created ONCE per conversation so ALL
+  // top-level vars persist between interactions — not just `status`. Scripts
+  // like Phil's cab set `selectedMap` on one click and read it on the next;
+  // re-running the source each time reset it to -1 and warp(maps[-1]) sent
+  // players to the default map (Amherst) instead of their destination.
+  private scriptFuncs: { start: Function | null; action: Function | null } | null = null;
+  private scriptCm: any = null;
 
   // Callbacks set by caller
   private onShowDialog: ((dialog: PendingDialog) => void) | null = null;
   private onDispose: (() => void) | null = null;
-  private changeMapFn: ((mapId: number, portalName?: string) => Promise<void>) | null = null;
+  private changeMapFn: ((mapId: number, portalName?: string | number) => Promise<void>) | null = null;
 
   async loadScript(npcId: number): Promise<string | null> {
     if (this.scriptCache.has(npcId)) return this.scriptCache.get(npcId)!;
@@ -224,18 +231,21 @@ export default class NpcScriptEngine {
     character: any;
     onShowDialog: (dialog: PendingDialog) => void;
     onDispose: () => void;
-    changeMap?: (mapId: number, portalName?: string) => Promise<void>;
+    changeMap?: (mapId: number, portalName?: string | number) => Promise<void>;
   }) {
     this.npcId = opts.npcId;
     this.character = opts.character;
     this.onShowDialog = opts.onShowDialog;
     this.onDispose = opts.onDispose;
     this.changeMapFn = opts.changeMap || null;
-    this.status = -1;
     this.disposed = false;
+    // Fresh conversation — new script closure with fresh top-level vars
+    this.scriptFuncs = null;
+    this.scriptCm = null;
 
-    // Preload map names used by this NPC's script
+    // Preload map names used by this NPC's script + item names for #t codes
     await this.preloadMapNames();
+    await ensureItemNames();
 
     // NPC scripts call start() first, then action() on subsequent interactions
     await this.runScript('start', 0, 0, -1);
@@ -291,26 +301,28 @@ export default class NpcScriptEngine {
     this.pendingDialog = null;
     this.disposed = false;
 
-    const cm = this.createCM();
-
     try {
-      const modifiedScript = scriptCode.replace(
-        /var\s+status\s*=\s*-?\d+\s*;?/,
-        `var status = ${this.status};`
-      );
+      // Build the script closure once per conversation — its start/action
+      // functions capture the script's own top-level vars (status,
+      // selectedMap, town, ...) which then persist across interactions,
+      // matching the original server's one-script-instance-per-conversation
+      // behavior
+      if (!this.scriptFuncs) {
+        this.scriptCm = this.createCM();
+        const shim = createScriptJavaShim(this.scriptCm);
+        const factory = new Function('cm', 'Java', 'java', 'Packages', `
+          ${scriptCode}
+          return {
+            start: typeof start === 'function' ? start : null,
+            action: typeof action === 'function' ? action : null,
+          };
+        `);
+        this.scriptFuncs = factory(this.scriptCm, shim.Java, shim.java, shim.Packages);
+      }
 
-      const shim = createScriptJavaShim(cm);
-      const fn = new Function('cm', 'Java', 'java', 'Packages', `
-        ${modifiedScript}
-        if (typeof ${funcName} === 'function') {
-          ${funcName}(${mode}, ${type}, ${selection});
-        }
-        return status;
-      `);
-
-      const newStatus = fn(cm, shim.Java, shim.java, shim.Packages);
-      if (typeof newStatus === 'number') {
-        this.status = newStatus;
+      const fn = (this.scriptFuncs as any)?.[funcName];
+      if (typeof fn === 'function') {
+        fn(mode, type, selection);
       }
     } catch (e) {
       console.error(`[NpcScript] Error in NPC ${this.npcId} (${funcName}):`, e);
@@ -318,13 +330,14 @@ export default class NpcScriptEngine {
       return;
     }
 
-    if (this.pendingDialog && this.disposed) {
-      this.pendingDialog.type = 'ok';
-      this.onShowDialog?.(this.pendingDialog);
+    const dialog = this.pendingDialog as PendingDialog | null;
+    if (dialog && this.disposed) {
+      dialog.type = 'ok';
+      this.onShowDialog?.(dialog);
     } else if (this.disposed) {
       this.onDispose?.();
-    } else if (this.pendingDialog) {
-      this.onShowDialog?.(this.pendingDialog);
+    } else if (dialog) {
+      this.onShowDialog?.(dialog);
     }
   }
 
@@ -460,6 +473,7 @@ export default class NpcScriptEngine {
         } else if (qty < 0) {
           questManager?.removeItems(itemId, -qty);
         }
+        import('./UI/UIChatLog').then(({ default: UIChatLog }) => UIChatLog.logItemChange(itemId, qty)).catch(() => {});
       },
       haveItem(itemId: number, count?: number) {
         const has = questManager?.getItemCount(itemId) ?? 0;
@@ -497,11 +511,17 @@ export default class NpcScriptEngine {
       },
 
       // Map
-      warp(mapId: number, portalId?: number) {
+      warp(mapId: number, portalId?: number | string) {
         engine.disposed = true;
+        const id = Number(mapId);
+        // A broken script must never warp via changeMap's defaultMap fallback
+        if (!Number.isFinite(id) || id <= 0) {
+          console.error(`[NpcScript] NPC ${engine.npcId} warp with invalid mapId:`, mapId);
+          return;
+        }
         if (engine.changeMapFn) {
           fadeToBlack();
-          engine.changeMapFn(mapId);
+          engine.changeMapFn(id, portalId);
         }
       },
 
@@ -549,7 +569,11 @@ export default class NpcScriptEngine {
       isLeader() { return true; },
       isEventLeader() { return false; },
       getEventInstance() { return null; },
-      getEventManager(_name: string) {
+      getEventManager(name: string) {
+        // Transportation events (Boats/Trains/.../KerningTrain/Hak) are real —
+        // backed by the wall-clock scheduler; everything else keeps the safe stub
+        const transport = TransportationManager.getEventManagerApi(name);
+        if (transport) return makeSafeScriptApi(transport, `EventManager:${name}`);
         return makeSafeScriptApi({
           getEventInstance() { return null; },
           getProperty(_k: string) { return null; },

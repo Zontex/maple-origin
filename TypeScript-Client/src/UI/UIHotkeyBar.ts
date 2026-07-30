@@ -16,19 +16,20 @@ interface HotkeySlot {
   icon: HTMLImageElement | null;
 }
 
-// Default quickslot layout — matches common v83 setup
-// 8 slots in a 4×2 grid inside the quickSlot background (151×80)
+// v83 quickslot layout — 8 slots in a 4×2 grid inside the quickSlot
+// background (151×80). Slot order matches StatusBar.img/key/<index> label
+// sprites: Shift, Ins, Hm, Pup / Ctrl, Del, End, Pdn
 const DEFAULT_SLOTS: { key: string; label: string }[] = [
   // Top row (left to right)
   { key: 'shift', label: 'Shift' },
   { key: 'insert', label: 'Ins' },
-  { key: 'delete', label: 'Del' },
   { key: 'home', label: 'Home' },
-  // Bottom row (left to right)
-  { key: 'end', label: 'End' },
   { key: 'pageup', label: 'PgUp' },
+  // Bottom row (left to right)
+  { key: 'ctrl', label: 'Ctrl' },
+  { key: 'delete', label: 'Del' },
+  { key: 'end', label: 'End' },
   { key: 'pagedown', label: 'PgDn' },
-  { key: 'f1', label: 'F1' },
 ];
 
 // QuickSlot background layout constants (151×80 WZ image, measured from the
@@ -54,11 +55,16 @@ const UIHotkeyBar = {
   // WZ assets
   _bgImage: null as HTMLImageElement | null,
   _coolTimeFrames: [] as HTMLImageElement[],
+  _keyLabels: [] as (HTMLImageElement | null)[],
+  _itemNoDigits: [] as (HTMLImageElement | null)[],
   _assetsLoaded: false,
   // Track which slot a drag originated from (for removing on drop-outside)
   _dragSourceSlot: -1,
 
   initialize() {
+    // Idempotent — a second call (MapState entry after the login flow already
+    // restored saved bindings via deserialize) must not wipe the slots
+    if (this._initialized) return;
     // Create empty slots with default key bindings
     this.slots = DEFAULT_SLOTS.map(s => ({
       type: 'none' as const,
@@ -88,6 +94,18 @@ const UIHotkeyBar = {
         if (qsNode?.nGetImage) {
           this._bgImage = qsNode.nGetImage() as HTMLImageElement;
         }
+        // Embossed key label sprites (Shift, Ins, Hm, Pup, Ctrl, Del, End, Pdn)
+        const keyNode = statusBar.nGet('key');
+        for (let i = 0; i < 8; i++) {
+          this._keyLabels.push(keyNode?.nGet?.(String(i))?.nGetImage?.() || null);
+        }
+      }
+
+      // Quantity digit sprites (same font the inventory grid uses)
+      const basic: any = await WZManager.get('UI.wz/Basic.img');
+      const itemNo = basic?.nGet?.('ItemNo');
+      for (let i = 0; i <= 9; i++) {
+        this._itemNoDigits.push(itemNo?.nGet?.(String(i))?.nGetImage?.() || null);
       }
 
       // CoolTime overlay frames from UIWindow.img/Skill/CoolTime
@@ -143,11 +161,33 @@ const UIHotkeyBar = {
       if (isDown && !wasDown) {
         if (slot.type === 'skill') {
           this.activateSkill(slot.actionId);
+        } else if (slot.type === 'item') {
+          this.activateItem(slot.actionId);
         }
       }
 
       this.previousKeyState[slot.key] = isDown;
     }
+  },
+
+  // Consume a bound Use item — same flow as double-clicking it in the
+  // inventory (InventoryMenuSprite owns the spec parsing / sound / removal)
+  activateItem(itemId: number) {
+    const inventoryMenu = (window as any).MapStateInstance?.inventoryMenu;
+    if (!inventoryMenu?.consumeItem) return;
+    const useTab = MyCharacter.inventory?.use || [];
+    const item = useTab.find((i: any) => i && i.itemId === itemId && (i.quantity ?? 1) > 0);
+    if (!item) return; // ran out — key does nothing, like GMS
+    inventoryMenu.consumeItem(item, -1);
+  },
+
+  // Total remaining quantity across all Use-tab stacks of an item
+  getItemCount(itemId: number): number {
+    const useTab = MyCharacter.inventory?.use || [];
+    return useTab.reduce(
+      (acc: number, i: any) => acc + (i && i.itemId === itemId ? (i.quantity ?? 1) : 0),
+      0
+    );
   },
 
   async activateSkill(skillId: number) {
@@ -228,12 +268,31 @@ const UIHotkeyBar = {
       const sx = this.barX + SLOT_X[col];
       const sy = this.barY + SLOT_Y[row];
 
-      // Skill icon — fills the keycap below the key label
+      // Skill/item icon — fills the keycap below the key label
       if (slot.icon && slot.icon.complete && slot.icon.width > 0) {
         const iconSize = 22;
         const ix = sx + Math.floor((SLOT_W - iconSize) / 2);
         const iy = sy + SLOT_H - iconSize - 1;
+        const depleted = slot.type === 'item' && this.getItemCount(slot.actionId) === 0;
+        if (depleted) ctx.save(), (ctx.globalAlpha = 0.35);
         ctx.drawImage(slot.icon, ix, iy, iconSize, iconSize);
+        if (depleted) ctx.restore();
+      }
+
+      // Remaining quantity for bound items — WZ digit sprites at the
+      // bottom-left of the keycap, like GMS
+      if (slot.type === 'item') {
+        const count = this.getItemCount(slot.actionId);
+        let dx = sx;
+        const digitH = this._itemNoDigits[0]?.height || 11;
+        const dy = sy + SLOT_H - digitH + 2;
+        for (const d of String(count)) {
+          const digitImg = this._itemNoDigits[parseInt(d)];
+          if (digitImg) {
+            ctx.drawImage(digitImg, dx, dy);
+            dx += digitImg.width;
+          }
+        }
       }
 
       // Cooldown overlay using CoolTime frames
@@ -262,14 +321,11 @@ const UIHotkeyBar = {
         ctx.restore();
       }
 
-      // Key label — small dark text at the top of the white keycap (like GMS)
-      ctx.save();
-      ctx.fillStyle = '#555555';
-      ctx.font = '8px Arial';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillText(slot.label, sx + 2, sy + 1);
-      ctx.restore();
+      // Key label — embossed WZ sprite at the top-left of the keycap
+      const labelImg = this._keyLabels[i];
+      if (labelImg && labelImg.complete && labelImg.width > 0) {
+        ctx.drawImage(labelImg, sx, sy);
+      }
     }
 
     // Initiate drag FROM a hotkey bar slot (to remove it)
@@ -412,8 +468,25 @@ const UIHotkeyBar = {
       if (slotIdx >= 0) {
         if (entry.bindType === 1) {
           await this.assignSkill(slotIdx, entry.actionId);
+        } else if (entry.bindType === 2) {
+          this.assignItem(slotIdx, entry.actionId, await this.loadItemIcon(entry.actionId));
         }
       }
+    }
+  },
+
+  // Icon for a Use item from Item.wz (bound items restored from a save don't
+  // carry an icon like drag-drop assignments do)
+  async loadItemIcon(itemId: number): Promise<HTMLImageElement | null> {
+    try {
+      const padded = String(itemId).padStart(8, '0');
+      const infoNode: any = await WZManager.get(
+        `Item.wz/Consume/${padded.slice(0, 4)}.img/${padded}/info`
+      );
+      const iconNode = infoNode?.nGet?.('iconRaw') ?? infoNode?.nGet?.('icon');
+      return iconNode?.nGetImage?.() || null;
+    } catch {
+      return null;
     }
   },
 };

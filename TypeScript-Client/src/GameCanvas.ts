@@ -192,6 +192,14 @@ class GameCanvas {
       this.scrolledUp = e.wheelDelta > 0;
       this.scrolledDown = e.wheelDelta < 0;
     });
+    this.game.addEventListener("wheel", (e: WheelEvent) => {
+      // standard event — the two above are deprecated and not fired by all browsers
+      e.preventDefault();
+      if (e.deltaY !== 0) {
+        this.scrolledUp = e.deltaY < 0;
+        this.scrolledDown = e.deltaY > 0;
+      }
+    }, { passive: false });
   }
   listenKeyboard() {
     window.onkeydown = (e) => {

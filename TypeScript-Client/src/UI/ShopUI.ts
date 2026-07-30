@@ -25,13 +25,21 @@ interface LoadedPlayerItem {
   icon: HTMLImageElement | null;
 }
 
-// Layout — the 463x339 background has two panels side by side
+// Layout — the 463x339 background has two panels side by side.
+// Measured from the WZ backgrnd: rows start y=126 with a 40px stride; each
+// row has an icon square at x+10..40 (item shadow baked at its bottom), the
+// content strip at x+44..206 (exactly the 162px select highlight), and a
+// scrollbar column at x+213. Right panel is the same layout offset +228.
 const BG_W = 463;
 const BG_H = 339;
-const ROW_H = 41;
+const ROW_H = 40;
+const LIST_Y = 126;
 const VISIBLE_ROWS = 5;
-const ICON_OFFSET_X = 10;  // icon centered in the icon square
-const TEXT_OFFSET_X = 48;  // text starts after icon square
+const PANEL_RIGHT_OFF = 228; // right panel x offset from window origin
+const ICON_CENTER_X = 25;   // icon square center within a panel
+const ICON_BOTTOM_Y = 30;   // icon bottom sits on the baked shadow
+const STRIP_X = 44;         // content strip left edge within a panel
+const SCROLL_X = 213;       // scrollbar column within a panel
 const ICON_SIZE = 32;       // cap icon to 32x32
 
 const ShopUI: any = {
@@ -57,6 +65,7 @@ const ShopUI: any = {
 
   // NPC sprite
   npcSprite: null as HTMLImageElement | null,
+  npcOrigin: { x: 0, y: 0 },
 
   // Buttons
   buttons: [] as MapleStanceButton[],
@@ -119,11 +128,28 @@ const ShopUI: any = {
       this.backgrndImg = this.shopNode?.backgrnd?.nGetImage?.() || null;
       this.selectImg = this.shopNode?.select?.nGetImage?.() || null;
       this.mesoImg = this.shopNode?.meso?.nGetImage?.() || null;
+
+      // Scrollbar pieces (Basic.img/VScr4) for the per-panel list scrollbars
+      const basic: any = await WZManager.get('UI.wz/Basic.img');
+      const vscr = basic?.nGet?.('VScr4');
+      const en = vscr?.nGet?.('enabled');
+      const dis = vscr?.nGet?.('disabled');
+      this._scroll = {
+        prev: en?.nGet?.('prev0')?.nGetImage?.() || null,
+        next: en?.nGet?.('next0')?.nGetImage?.() || null,
+        base: en?.nGet?.('base')?.nGetImage?.() || null,
+        thumb: en?.nGet?.('thumb0')?.nGetImage?.() || null,
+        prevDis: dis?.nGet?.('prev')?.nGetImage?.() || null,
+        nextDis: dis?.nGet?.('next')?.nGetImage?.() || null,
+        baseDis: dis?.nGet?.('base')?.nGetImage?.() || null,
+      };
       this.loaded = true;
     } catch (e) {
       console.error('Failed to load shop UI assets:', e);
     }
   },
+
+  _scroll: null as any,
 
   async loadNpcSprite(npcId: number) {
     try {
@@ -133,7 +159,13 @@ const ShopUI: any = {
         const linkId = npcFile.info.link.nValue;
         npcFile = await WZManager.get(`Npc.wz/${`${linkId}`.padStart(7, '0')}.img`);
       }
-      this.npcSprite = npcFile?.stand?.[0]?.nGetImage?.() || null;
+      const standFrame = npcFile?.stand?.[0];
+      this.npcSprite = standFrame?.nGetImage?.() || null;
+      // Origin marks the feet anchor so the NPC can stand on the shadow
+      this.npcOrigin = {
+        x: standFrame?.origin?.nX ?? 0,
+        y: standFrame?.origin?.nY ?? 0,
+      };
     } catch { /* ignore */ }
   },
 
@@ -188,10 +220,23 @@ const ShopUI: any = {
     if (!this.shopNode || !this.canvas) return;
     const canvas = this.canvas;
 
-    // BUY ITEM button — left header area
+    // Buttons are 80x18. Left header button area spans x+105..x+225.
+    // EXIT / LEAVE STORE button — left header, top
+    if (this.shopNode.BtExit) {
+      const btn = new MapleStanceButton(canvas, {
+        x: this.x + 125, y: this.y + 26,
+        img: this.shopNode.BtExit.nChildren,
+        isRelativeToCamera: true, isPartOfUI: true,
+        onClick: () => this.hide(),
+      });
+      this.buttons.push(btn);
+      ClickManager.addButton(btn);
+    }
+
+    // BUY ITEM button — left header, below EXIT
     if (this.shopNode.BtBuy) {
       const btn = new MapleStanceButton(canvas, {
-        x: this.x + 120, y: this.y + 52,
+        x: this.x + 125, y: this.y + 50,
         img: this.shopNode.BtBuy.nChildren,
         isRelativeToCamera: true, isPartOfUI: true,
         onClick: () => this.onBuy(),
@@ -200,25 +245,13 @@ const ShopUI: any = {
       ClickManager.addButton(btn);
     }
 
-    // SELL ITEM button — right header area
+    // SELL ITEM button — right header, above the meso box (box is y+64..y+82)
     if (this.shopNode.BtSell) {
       const btn = new MapleStanceButton(canvas, {
-        x: this.x + 352, y: this.y + 52,
+        x: this.x + 367, y: this.y + 30,
         img: this.shopNode.BtSell.nChildren,
         isRelativeToCamera: true, isPartOfUI: true,
         onClick: () => this.onSell(),
-      });
-      this.buttons.push(btn);
-      ClickManager.addButton(btn);
-    }
-
-    // EXIT / LEAVE STORE button — left header area, above BUY ITEM
-    if (this.shopNode.BtExit) {
-      const btn = new MapleStanceButton(canvas, {
-        x: this.x + 120, y: this.y + 30,
-        img: this.shopNode.BtExit.nChildren,
-        isRelativeToCamera: true, isPartOfUI: true,
-        onClick: () => this.hide(),
       });
       this.buttons.push(btn);
       ClickManager.addButton(btn);
@@ -276,7 +309,7 @@ const ShopUI: any = {
       const ok = await character.inventory.addToInventory(item.itemId, amount);
       if (ok === false) character.inventory.gainMesos(cost); // refund on full inventory
       this.populateSellItems();
-    }, 'item', item.name);
+    }, 'item', item.name, 'buy');
   },
 
   async onSell() {
@@ -304,7 +337,7 @@ const ShopUI: any = {
         character.inventory.gainMesos(item.sellPrice * amount);
         character.inventory.removeFromInventory(item.itemId, amount);
         this.afterSell();
-      }, 'item', item.name);
+      }, 'item', item.name, 'sell');
       return;
     }
 
@@ -376,24 +409,20 @@ const ShopUI: any = {
     }
 
     // Positions from WZ bg pixel analysis (463x339)
-    // Red line=y116, vert divider=x230, row1=y127, rowH=40, icon box=x6..x40
-    const npcX = this.x + 50;
-    const npcY = this.y + 8;
-    const playerX = this.x + 280;
-    const playerY = this.y + 8;
-    const mesoX = this.x + 350;
-    const mesoY = this.y + 70;
-    const leftListX = this.x + 4;
-    const leftListY = this.y + 125;
-    const rightListX = this.x + 234;
-    const rightListY = this.y + 125;
+    // Shadow ellipses (sprite feet anchors): left center (57,73), right center (290,73)
+    const npcX = this.x + 57;
+    const playerX = this.x + 290;
+    const baselineY = this.y + 76;
 
-    // NPC sprite (top-left area)
+    // NPC sprite — feet on the left shadow, anchored by its WZ origin
     if (this.npcSprite && this.npcSprite.complete && this.npcSprite.naturalWidth > 0) {
-      canvas.drawImage({ img: this.npcSprite, dx: npcX - this.npcSprite.width / 2, dy: npcY });
+      const ox = this.npcOrigin.x || Math.floor(this.npcSprite.width / 2);
+      const oy = this.npcOrigin.y || this.npcSprite.height;
+      canvas.drawImage({ img: this.npcSprite, dx: npcX - ox, dy: baselineY - oy });
     }
 
-    // Player character sprite (top-right area)
+    // Player character sprite — feet on the right shadow (frame offsets are
+    // relative to the character's ground position)
     const character = (window as any).charecter;
     if (character) {
       const frames = character.getDrawableFrames?.('stand1', 0, false);
@@ -403,29 +432,30 @@ const ShopUI: any = {
             canvas.drawImage({
               img: frame.img,
               dx: playerX + (frame.x || 0),
-              dy: playerY + 65 + (frame.y || 0),
+              dy: baselineY + (frame.y || 0),
             });
           }
         }
       }
     }
 
-    // Meso balance
-    if (character?.inventory && this.mesoImg && this.mesoImg.complete) {
-      canvas.drawImage({ img: this.mesoImg, dx: mesoX, dy: mesoY });
+    // Meso balance — the coin is baked into the bg's white box (x336..456,
+    // y60..80); draw only the amount, right-aligned inside the box
+    if (character?.inventory) {
       canvas.drawText({
         text: character.inventory.mesos.toLocaleString(),
-        color: '#000000', x: mesoX + 16, y: mesoY - 2, fontSize: 11,
+        color: '#000000', x: this.x + 452, y: this.y + 66, fontSize: 11,
+        align: 'right',
       });
     }
 
     // Left panel — shop items (buy)
     this.drawItemPanel(canvas, this.shopItems, this.buySelectedIndex,
-      this.buyScrollOffset, leftListX, leftListY, true);
+      this.buyScrollOffset, this.x, true);
 
     // Right panel — player items (sell)
     this.drawItemPanel(canvas, this.playerItems, this.sellSelectedIndex,
-      this.sellScrollOffset, rightListX, rightListY, false);
+      this.sellScrollOffset, this.x + PANEL_RIGHT_OFF, false);
 
     // Buttons
     for (const btn of this.buttons) {
@@ -437,8 +467,9 @@ const ShopUI: any = {
       this._quantityDialog.draw(canvas, camera, 0, 0, 0);
     }
 
-    // Click handling
-    if ((canvas as any).clicked) {
+    // Click handling — wasClicked is a one-shot flag, so holding the button
+    // down doesn't refire and break double-click detection
+    if ((canvas as any).wasClicked) {
       this.handleClick((canvas as any).mouseX || 0, (canvas as any).mouseY || 0);
     }
 
@@ -460,35 +491,32 @@ const ShopUI: any = {
   },
 
   drawItemPanel(canvas: GameCanvas, items: any[], selectedIdx: number,
-    scrollOffset: number, panelX: number, panelY: number, showBuyPrice: boolean) {
+    scrollOffset: number, panelX: number, showBuyPrice: boolean) {
+    const listY = this.y + LIST_Y;
     const end = Math.min(scrollOffset + VISIBLE_ROWS, items.length);
 
     for (let i = scrollOffset; i < end; i++) {
       const item = items[i];
-      const rowY = panelY + (i - scrollOffset) * ROW_H;
+      const rowY = listY + (i - scrollOffset) * ROW_H;
 
-      // Selection highlight
+      // Selection highlight — covers the content strip exactly (162x35)
       if (i === selectedIdx && this.selectImg && this.selectImg.complete && this.selectImg.naturalWidth > 0) {
-        canvas.drawImage({ img: this.selectImg, dx: panelX + 2, dy: rowY });
+        canvas.drawImage({ img: this.selectImg, dx: panelX + STRIP_X, dy: rowY + 2 });
       }
 
-      // Item icon (fit within the icon square)
+      // Item icon — centered in the icon square, bottom resting on the
+      // baked-in item shadow (like GMS)
       if (item.icon && item.icon.complete && item.icon.naturalWidth > 0) {
-        const iw = item.icon.width;
-        const ih = item.icon.height;
-        // Scale down if icon is larger than slot
+        let iw = item.icon.width;
+        let ih = item.icon.height;
         if (iw > ICON_SIZE || ih > ICON_SIZE) {
           const scale = Math.min(ICON_SIZE / iw, ICON_SIZE / ih);
-          const dw = Math.floor(iw * scale);
-          const dh = Math.floor(ih * scale);
-          const ix = panelX + ICON_OFFSET_X + Math.floor((ICON_SIZE - dw) / 2);
-          const iy = rowY + Math.floor((ROW_H - dh) / 2);
-          canvas.context.drawImage(item.icon, ix, iy, dw, dh);
-        } else {
-          const ix = panelX + ICON_OFFSET_X + Math.floor((ICON_SIZE - iw) / 2);
-          const iy = rowY + Math.floor((ROW_H - ih) / 2);
-          canvas.drawImage({ img: item.icon, dx: ix, dy: iy });
+          iw = Math.floor(iw * scale);
+          ih = Math.floor(ih * scale);
         }
+        const ix = panelX + ICON_CENTER_X - Math.floor(iw / 2);
+        const iy = rowY + ICON_BOTTOM_Y - ih;
+        canvas.context.drawImage(item.icon, ix, iy, iw, ih);
       }
 
       // Item name
@@ -500,65 +528,139 @@ const ShopUI: any = {
       canvas.drawText({
         text: displayName,
         color: '#000000',
-        x: panelX + TEXT_OFFSET_X, y: rowY + 8, fontSize: 11,
+        x: panelX + STRIP_X + 8, y: rowY + 6, fontSize: 11,
       });
 
       // Price
       const price = showBuyPrice ? item.price : item.sellPrice;
       if (this.mesoImg && this.mesoImg.complete && this.mesoImg.naturalWidth > 0) {
-        canvas.drawImage({ img: this.mesoImg, dx: panelX + TEXT_OFFSET_X, dy: rowY + 24 });
+        canvas.drawImage({ img: this.mesoImg, dx: panelX + STRIP_X + 8, dy: rowY + 23 });
       }
       canvas.drawText({
         text: `${price.toLocaleString()}meso`,
         color: '#000000',
-        x: panelX + TEXT_OFFSET_X + 16, y: rowY + 23, fontSize: 10,
+        x: panelX + STRIP_X + 24, y: rowY + 23, fontSize: 10,
       });
+    }
+
+    this.drawScrollbar(canvas, panelX, items.length, scrollOffset);
+  },
+
+  // Per-panel scrollbar from Basic.img/VScr4 in the bg's scrollbar column
+  drawScrollbar(canvas: GameCanvas, panelX: number, itemCount: number, scrollOffset: number) {
+    const s = this._scroll;
+    if (!s) return;
+    const sx = panelX + SCROLL_X;
+    const top = this.y + LIST_Y;
+    const trackH = VISIBLE_ROWS * ROW_H;
+    const arrowH = 13;
+    const bottom = top + trackH - arrowH;
+    const scrollable = itemCount > VISIBLE_ROWS;
+
+    const prev = scrollable ? s.prev : s.prevDis;
+    const next = scrollable ? s.next : s.nextDis;
+    const base = scrollable ? s.base : s.baseDis;
+
+    // Track fill between the arrows
+    if (base?.complete) {
+      const ctx = canvas.context;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(sx, top + arrowH, base.width, bottom - (top + arrowH));
+      ctx.clip();
+      for (let ty = top + arrowH; ty < bottom; ty += base.height) {
+        canvas.drawImage({ img: base, dx: sx, dy: ty });
+      }
+      ctx.restore();
+    }
+    if (prev?.complete) canvas.drawImage({ img: prev, dx: sx, dy: top });
+    if (next?.complete) canvas.drawImage({ img: next, dx: sx, dy: bottom });
+
+    // Thumb at the proportional position
+    if (scrollable && s.thumb?.complete) {
+      const travel = bottom - (top + arrowH) - s.thumb.height;
+      const maxOffset = itemCount - VISIBLE_ROWS;
+      const ty = top + arrowH + Math.round(travel * (scrollOffset / maxOffset));
+      canvas.drawImage({ img: s.thumb, dx: sx, dy: ty });
     }
   },
 
   handleClick(mx: number, my: number) {
     if (!this.isVisible) return;
 
-    const leftListX = this.x + 4;
-    const leftListY = this.y + 125;
-    const rightListX = this.x + 234;
-    const rightListY = this.y + 125;
+    const listY = this.y + LIST_Y;
     const listH = VISIBLE_ROWS * ROW_H;
+    const arrowH = 13;
 
-    // Left panel (buy) item click
-    if (mx >= leftListX && mx < leftListX + 220 && my >= leftListY && my < leftListY + listH) {
-      const rowIdx = Math.floor((my - leftListY) / ROW_H) + this.buyScrollOffset;
+    // Scrollbar arrows (both panels)
+    for (const [panelX, isBuy] of [[this.x, true], [this.x + PANEL_RIGHT_OFF, false]] as [number, boolean][]) {
+      const sx = panelX + SCROLL_X;
+      if (mx >= sx && mx < sx + 15) {
+        const items = isBuy ? this.shopItems : this.playerItems;
+        const max = Math.max(0, items.length - VISIBLE_ROWS);
+        if (my >= listY && my < listY + arrowH) {
+          if (isBuy) this.buyScrollOffset = Math.max(0, this.buyScrollOffset - 1);
+          else this.sellScrollOffset = Math.max(0, this.sellScrollOffset - 1);
+          return;
+        }
+        if (my >= listY + listH - arrowH && my < listY + listH) {
+          if (isBuy) this.buyScrollOffset = Math.min(max, this.buyScrollOffset + 1);
+          else this.sellScrollOffset = Math.min(max, this.sellScrollOffset + 1);
+          return;
+        }
+      }
+    }
+
+    // Left panel (buy) item click — double-click buys
+    const leftX = this.x + 4;
+    if (mx >= leftX && mx < this.x + SCROLL_X && my >= listY && my < listY + listH) {
+      const rowIdx = Math.floor((my - listY) / ROW_H) + this.buyScrollOffset;
       if (rowIdx >= 0 && rowIdx < this.shopItems.length) {
+        const now = Date.now();
         this.buySelectedIndex = rowIdx;
+        if (rowIdx === this._lastBuyClickIdx && now - this._lastBuyClickTime < 400) {
+          this._lastBuyClickIdx = -1;
+          this._lastBuyClickTime = 0;
+          this.onBuy();
+        } else {
+          this._lastBuyClickIdx = rowIdx;
+          this._lastBuyClickTime = now;
+        }
       }
       return;
     }
 
-    // Right panel (sell) item click — double-click a rechargeable to refill it
-    if (mx >= rightListX && mx < rightListX + 220 && my >= rightListY && my < rightListY + listH) {
-      const rowIdx = Math.floor((my - rightListY) / ROW_H) + this.sellScrollOffset;
+    // Right panel (sell) item click — double-click sells (rechargeables refill instead)
+    const rightX = this.x + PANEL_RIGHT_OFF + 4;
+    if (mx >= rightX && mx < this.x + PANEL_RIGHT_OFF + SCROLL_X && my >= listY && my < listY + listH) {
+      const rowIdx = Math.floor((my - listY) / ROW_H) + this.sellScrollOffset;
       if (rowIdx >= 0 && rowIdx < this.playerItems.length) {
         const now = Date.now();
-        if (
-          rowIdx === this._lastSellClickIdx &&
-          now - this._lastSellClickTime < 400 &&
-          ItemConstants.isRechargeable(this.playerItems[rowIdx].itemId)
-        ) {
-          this.rechargeItem(this.playerItems[rowIdx]);
+        this.sellSelectedIndex = rowIdx;
+        if (rowIdx === this._lastSellClickIdx && now - this._lastSellClickTime < 400) {
           this._lastSellClickIdx = -1;
           this._lastSellClickTime = 0;
+          if (ItemConstants.isRechargeable(this.playerItems[rowIdx].itemId)) {
+            this.rechargeItem(this.playerItems[rowIdx]);
+          } else {
+            this.onSell();
+          }
         } else {
           this._lastSellClickIdx = rowIdx;
           this._lastSellClickTime = now;
         }
-        this.sellSelectedIndex = rowIdx;
       }
       return;
     }
   },
 
+  _lastBuyClickIdx: -1,
+  _lastBuyClickTime: 0,
   _lastSellClickIdx: -1,
   _lastSellClickTime: 0,
 };
+
+// Dev-console access to the live instance (HMR re-imports create copies)
+(window as any).__ShopUI = ShopUI;
 
 export default ShopUI;

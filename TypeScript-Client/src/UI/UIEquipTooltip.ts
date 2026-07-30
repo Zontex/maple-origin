@@ -1,8 +1,8 @@
 /**
- * GMS v83-style equip tooltip: item name with scroll count, enlarged icon,
- * REQ stat block, job-class bar, category and stat lines with remaining
- * upgrade slots. Drawn on canvas in the same dark-navy style as the other
- * item tooltips (UIToolTip.img is not among the converted WZ assets).
+ * v83 equip tooltip rendered from UI.wz/UIToolTip.img/Item sprites:
+ * Frame top/line/bottom/cover/dotline, ItemIcon/base backplate, Equip
+ * requirement labels + pixel digit glyphs (Can = met/yellow, Cannot =
+ * unmet/grey) and the job-class bar (Job/normal + Job/enable overlays).
  *
  * Equip WZ info (reqLevel, incPAD, tuc, ...) is loaded lazily per item and
  * cached — draw() renders nothing on the first hover frames until ready.
@@ -11,6 +11,7 @@ import GameCanvas from '../GameCanvas';
 import WZManager from '../wz-utils/WZManager';
 import { getEquipWzPath, EquipData } from '../Inventory/Item';
 import { getItemNameSync } from '../Quest/QuestData';
+import MyCharacter from '../MyCharacter';
 
 interface EquipInfo {
   reqLevel: number;
@@ -23,6 +24,23 @@ interface EquipInfo {
   tuc: number;
   stats: Record<string, number>;
   icon: HTMLImageElement | null;
+}
+
+interface GlyphSet {
+  [char: string]: HTMLImageElement; // '0'-'9', '-', '+', '%' and reqLEV/reqSTR/... labels
+}
+
+interface TooltipAssets {
+  top: HTMLImageElement;
+  line: HTMLImageElement;
+  bottom: HTMLImageElement;
+  cover: HTMLImageElement;
+  dotline: HTMLImageElement;
+  iconBase: HTMLImageElement;
+  can: GlyphSet;
+  cannot: GlyphSet;
+  jobNormal: HTMLImageElement;
+  jobEnable: { img: HTMLImageElement; ox: number; oy: number }[];
 }
 
 // Display order and labels for equip stats (GMS wording)
@@ -57,18 +75,71 @@ const CATEGORY_NAMES: Record<number, string> = {
   190: 'TAMING MOB', 191: 'SADDLE',
 };
 
-// v83 reqJob bitmask → job bar entries. reqJob 0 = usable by every class.
-const JOB_BAR: { label: string; bit: number }[] = [
-  { label: 'BEGINNER', bit: 0 },
-  { label: 'WARRIOR', bit: 1 },
-  { label: 'MAGICIAN', bit: 2 },
-  { label: 'BOWMAN', bit: 4 },
-  { label: 'THIEF', bit: 8 },
-  { label: 'PIRATE', bit: 16 },
-];
+// v83 reqJob bitmask, indices match Job/enable|disable 0..5
+const JOB_BITS = [0, 1, 2, 4, 8, 16]; // beginner, warrior, magician, bowman, thief, pirate
+
+const W = 261;            // Frame piece width
+const FRAME_CAP = 13;     // top/bottom piece heights
+const ICON_X = 10;
+const BLOCK_Y = 26;       // icon base + REQ block top
+const REQ_ROW_H = 12;
+const VALUE_COL = 56;     // digits column offset within the REQ block
 
 const infoCache = new Map<number, EquipInfo | null>();
 const loading = new Set<number>();
+
+let assets: TooltipAssets | null = null;
+let assetsLoading = false;
+
+// Cannot/Disabled glyph dirs use word names where Can uses symbols
+const GLYPH_ALIASES: Record<string, string> = { minus: '-', plus: '+', percent: '%' };
+
+async function loadAssets() {
+  assetsLoading = true;
+  try {
+    const tt: any = await WZManager.get('UI.wz/UIToolTip.img');
+    const item = tt.nGet('Item');
+    const frame = item.nGet('Frame');
+    const equip = item.nGet('Equip');
+
+    const loadGlyphs = (dir: any): GlyphSet => {
+      const set: GlyphSet = {};
+      for (const child of dir.nChildren) {
+        if (child.nName === 'none') continue;
+        set[GLYPH_ALIASES[child.nName] ?? child.nName] = child.nGetImage();
+      }
+      return set;
+    };
+
+    const jobEnable: TooltipAssets['jobEnable'] = [];
+    const enableDir = equip.nGet('Job').nGet('enable');
+    for (let i = 0; i < 6; i++) {
+      const n = enableDir.nGet(String(i));
+      jobEnable.push({
+        img: n.nGetImage(),
+        ox: n.origin?.nX ?? 0,
+        oy: n.origin?.nY ?? 0,
+      });
+    }
+
+    assets = {
+      top: frame.nGet('top').nGetImage(),
+      line: frame.nGet('line').nGetImage(),
+      bottom: frame.nGet('bottom').nGetImage(),
+      cover: frame.nGet('cover').nGetImage(),
+      dotline: frame.nGet('dotline').nGetImage(),
+      iconBase: item.nGet('ItemIcon').nGet('base').nGetImage(),
+      can: loadGlyphs(equip.nGet('Can')),
+      cannot: loadGlyphs(equip.nGet('Cannot')),
+      jobNormal: equip.nGet('Job').nGet('normal').nGetImage(),
+      jobEnable,
+    };
+  } catch (e) {
+    console.error('[UIEquipTooltip] Failed to load UIToolTip.img assets:', e);
+  } finally {
+    assetsLoading = false;
+  }
+}
 
 function wzNum(info: any, key: string): number {
   const v = info?.nGet?.(key)?.nValue;
@@ -117,6 +188,20 @@ async function loadInfo(itemId: number) {
   }
 }
 
+/** Draw a string using the pixel digit glyphs; returns the advanced width */
+function drawGlyphs(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, set: GlyphSet) {
+  let gx = x;
+  for (const ch of text) {
+    const img = set[ch];
+    if (!img || !img.width) { gx += 6; continue; }
+    // '-' is a 5x1 dash — center it on the digit row
+    const gy = ch === '-' ? y + 2 : y;
+    ctx.drawImage(img, gx, gy);
+    gx += img.width + 1;
+  }
+  return gx - x;
+}
+
 const UIEquipTooltip = {
   /**
    * Draw the tooltip anchored at (x, y), clamped to the canvas.
@@ -126,13 +211,18 @@ const UIEquipTooltip = {
   draw(canvas: GameCanvas, itemId: number, equipData: EquipData | null | undefined, x: number, y: number): boolean {
     if (Math.floor(itemId / 1000000) !== 1) return false;
 
+    if (!assets) {
+      if (!assetsLoading) loadAssets();
+      return true; // loading — draw nothing this frame, but claim the tooltip
+    }
     if (!infoCache.has(itemId)) {
       if (!loading.has(itemId)) loadInfo(itemId);
-      return true; // loading — draw nothing this frame, but claim the tooltip
+      return true;
     }
     const info = infoCache.get(itemId);
     if (!info) return false;
 
+    const A = assets;
     const scrolls = equipData?.level ?? 0;
     const name = (getItemNameSync(itemId) || `Item ${itemId}`) + (scrolls > 0 ? ` (+${scrolls})` : '');
 
@@ -148,105 +238,92 @@ const UIEquipTooltip = {
     const category = CATEGORY_NAMES[Math.floor(itemId / 10000)] ?? 'EQUIP';
 
     // ---- Layout ----
-    const W = 240;
-    const pad = 9;
+    const baseH = A.iconBase.height || 82;
+    const jobY = BLOCK_Y + baseH + 6;
+    const jobH = A.jobNormal.height || 24;
+    const divY = jobY + jobH + 5;
+    const textY = divY + 7;
     const lineH = 14;
-    const nameH = 20;
-    const iconArea = 68;                    // 64px icon + breathing room
-    const reqRows = 8;                      // REQ LEV..FAM + ITEM LEV/EXP
-    const reqBlockH = reqRows * lineH;
-    const topBlockH = Math.max(iconArea, reqBlockH) + 4;
-    const jobBarH = 16;
     const bottomLines = 1 + statLines.length + 1; // CATEGORY + stats + upgrades
-    const H = pad + nameH + topBlockH + jobBarH + 6 + bottomLines * lineH + pad;
+    const H = textY + bottomLines * lineH + 4 + FRAME_CAP;
 
-    const canvasW = canvas.game?.width || 1024;
-    const canvasH = canvas.game?.height || 768;
+    const canvasW = canvas.game?.width || 800;
+    const canvasH = canvas.game?.height || 600;
     let tx = x, ty = y;
     if (tx + W > canvasW) tx = Math.max(0, canvasW - W);
     if (ty + H > canvasH) ty = Math.max(0, canvasH - H);
 
-    // ---- Frame ----
-    canvas.drawRect({
-      x: tx, y: ty, width: W, height: H,
-      color: '#1a1230', alpha: 0.94,
-      stroke: '#6666AA', strokeWidth: 1,
-    });
+    const ctx = canvas.context;
+
+    // ---- Frame (top cap + stretched 1px line body + bottom cap + shine) ----
+    ctx.drawImage(A.top, tx, ty);
+    ctx.drawImage(A.line, tx, ty + FRAME_CAP, W, H - FRAME_CAP * 2);
+    ctx.drawImage(A.bottom, tx, ty + H - FRAME_CAP);
+    ctx.drawImage(A.cover, tx + 3, ty + 3);
 
     // ---- Name ----
     canvas.drawText({
       text: name,
-      x: tx + W / 2, y: ty + pad,
+      x: tx + W / 2, y: ty + 8,
       color: '#FFFFFF', fontSize: 13, fontWeight: 'bold',
       align: 'center',
     });
 
-    // ---- Icon (drawn 2x, pixel-scaled like the original client) ----
-    const blockY = ty + pad + nameH;
+    // ---- Icon on its backplate, drawn 2x pixel-scaled ----
+    const blockY = ty + BLOCK_Y;
+    ctx.drawImage(A.iconBase, tx + ICON_X, blockY);
     if (info.icon && info.icon.complete && info.icon.width > 0) {
-      const iw = Math.min(64, info.icon.width * 2);
-      const ih = Math.min(64, info.icon.height * 2);
-      canvas.context.drawImage(
+      const prev = ctx.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = false;
+      const iw = Math.min(72, info.icon.width * 2);
+      const ih = Math.min(72, info.icon.height * 2);
+      ctx.drawImage(
         info.icon,
-        tx + pad + (iconArea - 8 - iw) / 2,
-        blockY + (topBlockH - ih) / 2 - 4,
+        tx + ICON_X + ((A.iconBase.width || 82) - iw) / 2,
+        blockY + (baseH - ih) / 2,
         iw, ih,
       );
+      ctx.imageSmoothingEnabled = prev;
     }
 
-    // ---- REQ block ----
-    const reqX = tx + pad + iconArea + 6;
-    const reqs: { label: string; value: string; dim?: boolean }[] = [
-      { label: 'REQ LEV', value: `${info.reqLevel}` },
-      { label: 'REQ STR', value: `${info.reqSTR}` },
-      { label: 'REQ DEX', value: `${info.reqDEX}` },
-      { label: 'REQ INT', value: `${info.reqINT}` },
-      { label: 'REQ LUK', value: `${info.reqLUK}` },
-      { label: 'REQ FAM', value: info.reqPOP ? `${info.reqPOP}` : '-' },
-      { label: 'ITEM LEV', value: '-', dim: true },
-      { label: 'ITEM EXP', value: '-', dim: true },
+    // ---- REQ block (sprite labels + pixel digits, Can = met / Cannot = unmet) ----
+    const s: any = MyCharacter.stats || {};
+    const reqs: { key: string; value: number; met: boolean; dash?: boolean }[] = [
+      { key: 'reqLEV', value: info.reqLevel, met: (s.level ?? 1) >= info.reqLevel },
+      { key: 'reqSTR', value: info.reqSTR, met: (s.str ?? 0) >= info.reqSTR },
+      { key: 'reqDEX', value: info.reqDEX, met: (s.dex ?? 0) >= info.reqDEX },
+      { key: 'reqINT', value: info.reqINT, met: (s.int ?? 0) >= info.reqINT },
+      { key: 'reqLUK', value: info.reqLUK, met: (s.luk ?? 0) >= info.reqLUK },
+      { key: 'reqPOP', value: info.reqPOP, met: true, dash: info.reqPOP === 0 },
     ];
+    const reqX = tx + ICON_X + (A.iconBase.width || 82) + 9;
     reqs.forEach((req, i) => {
-      const ry = blockY + i * lineH;
-      canvas.drawText({
-        text: req.label, x: reqX, y: ry,
-        color: req.dim ? '#555577' : '#BBBBCC', fontSize: 11, fontWeight: 'bold',
-      });
-      canvas.drawText({
-        text: `: ${req.value}`, x: reqX + 66, y: ry,
-        color: req.dim ? '#555577' : '#FFFFFF', fontSize: 11, fontWeight: 'bold',
-      });
+      const set = req.met ? A.can : A.cannot;
+      const label = set[req.key];
+      const ry = blockY + 4 + i * REQ_ROW_H;
+      if (label && label.width) ctx.drawImage(label, reqX, ry);
+      drawGlyphs(ctx, req.dash ? '-' : String(req.value), reqX + VALUE_COL, ry, set);
     });
 
-    // ---- Job class bar ----
-    const jobY = blockY + topBlockH;
-    let jx = tx + pad;
-    for (const job of JOB_BAR) {
-      const usable = info.reqJob === 0 || (job.bit !== 0 && (info.reqJob & job.bit) !== 0);
-      canvas.drawText({
-        text: job.label, x: jx, y: jobY,
-        color: usable ? '#FFDD55' : '#555577', fontSize: 9, fontWeight: 'bold',
-      });
-      jx += (canvas.measureText({ text: job.label, fontSize: 9, fontWeight: 'bold' })?.width || 40) + 7;
-    }
-
-    // ---- Divider ----
-    const divY = jobY + jobBarH;
-    canvas.drawLine({
-      x1: tx + 4, y1: divY, x2: tx + W - 4, y2: divY,
-      color: '#44446A', width: 1,
+    // ---- Job class bar (grey bar + yellow overlays for usable classes) ----
+    const jx = tx + Math.floor((W - (A.jobNormal.width || 237)) / 2);
+    const jy = ty + jobY;
+    ctx.drawImage(A.jobNormal, jx, jy);
+    A.jobEnable.forEach((job, i) => {
+      const usable = info.reqJob === 0 || (i > 0 && (info.reqJob & JOB_BITS[i]) !== 0);
+      if (usable && job.img.width) {
+        ctx.drawImage(job.img, jx - job.ox, jy - job.oy);
+      }
     });
 
-    // ---- Category, stats, upgrades ----
-    let ly = divY + 6;
+    // ---- Dotted separator ----
+    ctx.drawImage(A.dotline, tx, ty + divY);
+
+    // ---- Category, stats, upgrades (game-font text like the original) ----
+    let ly = ty + textY;
     const drawStat = (label: string, value: string) => {
       canvas.drawText({
-        text: `${label} : `, x: tx + pad, y: ly,
-        color: '#BBBBCC', fontSize: 11, fontWeight: 'bold',
-      });
-      const lw = canvas.measureText({ text: `${label} : `, fontSize: 11, fontWeight: 'bold' })?.width || 0;
-      canvas.drawText({
-        text: value, x: tx + pad + lw, y: ly,
+        text: `${label} : ${value}`, x: tx + ICON_X, y: ly,
         color: '#FFFFFF', fontSize: 11, fontWeight: 'bold',
       });
       ly += lineH;

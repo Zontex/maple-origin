@@ -1,6 +1,7 @@
 import { QuestState } from './Quest/QuestData';
 import { createScriptJavaShim, makeSafeScriptApi } from './NpcScriptEngine';
 import { fadeToBlack } from './MapState';
+import TransportationManager from './Transport/TransportationManager';
 import WZManager from './wz-utils/WZManager';
 import PLAY_AUDIO from './Audio/PlayAudio';
 
@@ -157,7 +158,13 @@ export default class PortalScriptEngine {
       // Stubs for unimplemented systems
       getParty() { return null; },
       isLeader() { return true; },
-      getEventManager(name?: string) { return null; },
+      getEventManager(name?: string) {
+        // Real for transportation events (elevator gate checks, KerningTrain
+        // startInstance); null for anything else — elevator.js treats null as
+        // "under maintenance", which is the correct degraded behavior
+        const transport = name ? TransportationManager.getEventManagerApi(name) : null;
+        return transport ? makeSafeScriptApi(transport, `EventManager:${name}`) : null;
+      },
       getEventInstance() { return null; },
       startDungeonInstance(id: number) { return false; },
       warpParty(mapId: number, portalNameOrId?: any) { onWarp(mapId, portalNameOrId); },

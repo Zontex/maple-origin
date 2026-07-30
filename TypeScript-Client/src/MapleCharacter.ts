@@ -95,6 +95,13 @@ class MapleCharacter {
   pos: Physics;
   bodyRects: any = [];
   bodyStartPoistion: any = { x: 0, y: 0 };
+  spriteBottomY: number = 0; // lowest drawn pixel relative to pos.y (mounts extend below the feet)
+  // Taming mob riding — the mount animates on its own clock while the body
+  // holds the 'sit' stance attached at the mount's navel point
+  mountStance: string = "stand1";
+  mountFrame: number = 0;
+  mountDelay: number = 0;
+  defaultSaddle: any = null; // 01912000 saddle visuals, used when no saddle is equipped
   isInAttack: boolean = false;
   isInAlert: boolean = false;
   isInPortal: boolean = false;
@@ -113,6 +120,10 @@ class MapleCharacter {
   spawnDefaultHp: number = 0;
   weaponEquip: any = null;
   weaponEquipId: any = null;
+  // Stance family from the weapon's WZ info (stand/walk = 1|2) — two-handed
+  // weapons like spears only have stand2/walk2 sprite frames
+  weaponStandType: 1 | 2 = 1;
+  weaponWalkType: 1 | 2 = 1;
   alertStanceTimeout: any = null;
   deathTimeout: any = null;
   // Death/tombstone animation state
@@ -514,6 +525,17 @@ class MapleCharacter {
       if (targetSlot === 10) {
         this.weaponEquip = equip;
         this.weaponEquipId = id;
+        this.weaponStandType = (equip as any)?.info?.stand?.nValue === 2 ? 2 : 1;
+        this.weaponWalkType = (equip as any)?.info?.walk?.nValue === 2 ? 2 : 1;
+      }
+      if (targetSlot === 19 && !this.defaultSaddle) {
+        // Saddle visuals live in 01912000.img keyed by mount id — preload so
+        // the mount renders saddled even without a saddle item equipped
+        try {
+          this.defaultSaddle = await WZManager.get(`Character.wz/TamingMob/01912000.img`);
+        } catch (e) {
+          console.error("Failed to load default saddle:", e);
+        }
       }
       // Load item icon for equip window display
       this._loadEquipIcon(realSlot, id);
@@ -557,6 +579,8 @@ class MapleCharacter {
     if (realSlot === 10) {
       this.weaponEquip = undefined;
       this.weaponEquipId = undefined;
+      this.weaponStandType = 1;
+      this.weaponWalkType = 1;
     }
     this.recalcLocalStats();
   }
@@ -649,6 +673,11 @@ class MapleCharacter {
   addExp(exp: number, showEffect: boolean = false) {
     if (exp > 0 && showEffect) this.playIncExp();
     this.exp += exp;
+    if (exp > 0 && !this.isRemote) {
+      import('./UI/UIChatLog').then(({ default: UIChatLog }) => {
+        UIChatLog.system(`You have gained experience (+${exp})`);
+      }).catch(() => {});
+    }
     // Level up as many times as needed (handles multi-level gains)
     while (this.exp >= this.maxExp && this.maxExp > 0) {
       this.exp -= this.maxExp;
@@ -702,6 +731,15 @@ class MapleCharacter {
     }
   }
 
+  /**
+   * GMS notification when an in-progress quest's requirements become
+   * fulfilled — the QuestAlert light-burst over the character + jingle
+   * (same effect the original client plays at that moment).
+   */
+  playQuestFulfilled() {
+    this.playQuestStart();
+  }
+
   async playIncExp() {
     try {
       const sfxNode: any = await WZManager.get("Sound.wz/Game.img/IncEXP");
@@ -716,6 +754,35 @@ class MapleCharacter {
     } catch (e) {
       console.error('playIncExp error:', e);
     }
+  }
+
+  /** Riding a taming mob (slot 19). Mount + saddle render, attacks are blocked. */
+  get isRiding(): boolean {
+    return !!this.equips[19];
+  }
+
+  /**
+   * v83 equip requirement gate (Cosmic canWearEquipment parity): level, total
+   * stats (base + equip bonuses) and fame must meet the item's req values.
+   * reqJob is display-only in GMS — any class may wear any equip whose stat
+   * requirements are met.
+   */
+  canEquip(infoNode: any): boolean {
+    if (!infoNode) return true;
+    const req = (key: string) => {
+      const v = infoNode.nGet?.(key)?.nGet?.("nValue", 0) ?? 0;
+      const n = typeof v === "number" ? v : parseInt(v, 10);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const s: any = this.stats;
+    return (
+      s.level >= req("reqLevel") &&
+      (s.localStr ?? s.str) >= req("reqSTR") &&
+      (s.localDex ?? s.dex) >= req("reqDEX") &&
+      (s.localInt ?? s.int) >= req("reqINT") &&
+      (s.localLuk ?? s.luk) >= req("reqLUK") &&
+      this.fame >= req("reqPOP")
+    );
   }
 
   async jump() {
@@ -790,6 +857,7 @@ getAttackDelayMs(): number {
 
 async attack() {
   if (this.isInAttack) return;
+  if (this.isRiding) return; // cannot attack while mounted (v83)
   if (Date.now() - this.lastAttackTime < this.getAttackDelayMs()) return;
 
   const weaponType = getEquipTypeById(this.weaponEquipId);
@@ -800,8 +868,11 @@ async attack() {
     return;
   }
 
+  // Attacking while crouched = prone stab, always melee (v83)
+  const isProne = !!this.pos.fh && this.pos.down && !this.isInClimbingRope;
+
   // Ranged weapons fire projectiles unless the player is right next to a mob
-  const useRanged = config.isRanged && !this.isCloseToMob(false);
+  const useRanged = !isProne && config.isRanged && !this.isCloseToMob(false);
 
   // No ammo, no shot (authentic v83: the attack simply doesn't happen)
   if (useRanged && !this.findAmmo(weaponType)) return;
@@ -811,7 +882,9 @@ async attack() {
   this.rightClickRelease();
   this.leftClickRelease();
   this.isInAlert = false;
-  const stancePool = useRanged ? config.stances.ranged : config.stances.melee;
+  const stancePool = isProne
+    ? [Stance.proneStab]
+    : useRanged ? config.stances.ranged : config.stances.melee;
 
   if (stancePool.length === 0) {
     this.isInAttack = false;
@@ -958,6 +1031,7 @@ static readonly THREE_SNAILS_SHELLS: { itemId: number; damage: number; frame: nu
  */
 async useSkill(skillId: number, effect: any): Promise<boolean> {
   if (this.isInAttack) return false;
+  if (this.isRiding) return false; // cannot use skills while mounted (v83)
 
   const info = (await import('./Skills/SkillData')).default.getSkillSync(skillId);
   if (!info) return false;
@@ -1925,12 +1999,32 @@ isCloseToMob = (inAllDirections = true) => {
         itemDrop.amount,
         isEquipDrop ? (itemDrop as any).equipData ?? undefined : undefined,
       );
+      this.logPickupMessage(
+        isEquipDrop ? itemDrop.id : parseInt(String(itemDrop.itemFile.nName), 10),
+        itemDrop.amount,
+      );
 
       if (!AllowMultiPickupAtOnce) {
         break;
       }
     }
   };
+
+  // GMS-style chat log line for a picked-up drop
+  async logPickupMessage(itemId: number, amount: number) {
+    if (this.isRemote || !Number.isFinite(itemId)) return;
+    try {
+      const { default: UIChatLog } = await import('./UI/UIChatLog');
+      if (itemId >= 9000000 && itemId <= 9000003) {
+        UIChatLog.system(`You have gained mesos (+${amount})`);
+        return;
+      }
+      const { ensureItemNames, getItemNameSync } = await import('./Quest/QuestData');
+      await ensureItemNames();
+      const name = getItemNameSync(itemId) || `Item #${itemId}`;
+      UIChatLog.system(`You have gained an item (${name})`);
+    } catch { /* chat message is cosmetic */ }
+  }
 
   update(msPerTick: number) {
     if (!this.active) {
@@ -2039,6 +2133,28 @@ isCloseToMob = (inAllDirections = true) => {
       this.advanceFrame();
     }
 
+    // Mount animation runs on its own clock (the body holds the 'sit' frame),
+    // and riding grants v83 hog speed (+50%)
+    if (this.isRiding) {
+      const mountImg: any = this.equips[19];
+      const stanceNode = mountImg?.[this.mountStance] || mountImg?.stand1;
+      const frameNode = stanceNode?.[this.mountFrame];
+      if (!frameNode) {
+        this.mountFrame = 0;
+        this.mountDelay = 0;
+      } else {
+        this.mountDelay += msPerTick;
+        const frameDelay = Math.abs(frameNode.nGet("delay").nGet("nValue", 180));
+        if (this.mountDelay > frameDelay) {
+          this.mountDelay -= frameDelay;
+          this.mountFrame = stanceNode?.[this.mountFrame + 1] ? this.mountFrame + 1 : 0;
+        }
+      }
+      this.pos.walk_speed = 187.5;
+    } else if (this.pos.walk_speed !== 125) {
+      this.pos.walk_speed = 125;
+    }
+
     // check if hit by mob
     this.checkForMobsHit();
 
@@ -2135,6 +2251,15 @@ isCloseToMob = (inAllDirections = true) => {
     if (!effectiveEquips[5] && !hasLongcoat && this.underwearBottom) {
       effectiveEquips[5] = this.underwearBottom;
     }
+    // Taming mob + saddle never render as regular equip layers — they are
+    // composed as the riding mount (seeded first) when the stance is 'sit'
+    const riding = stance === "sit" && !!effectiveEquips[19];
+    effectiveEquips[19] = undefined;
+    effectiveEquips[20] = undefined;
+    if (riding) {
+      // v83 hides the weapon while riding (weapons have no 'sit' frames)
+      effectiveEquips[10] = undefined;
+    }
     const [hat, faceAcc, ...equips] = effectiveEquips;
 
     const hatVslot = !hat ? "" : hat.info.vslot.nValue;
@@ -2166,6 +2291,11 @@ isCloseToMob = (inAllDirections = true) => {
       }
 
       const part = p.nTagName === "uol" ? p.nResolveUOL() : p;
+      // A UOL can resolve to nothing (e.g. a part with no frames for this
+      // stance) — skip it instead of crashing the whole render frame
+      if (!part || !part.map?.nChildren) {
+        return;
+      }
       const pointInMap = (vector: any) => !!map[vector.nName];
       const pointNotInMap = (vector: any) => !map[vector.nName];
 
@@ -2224,6 +2354,35 @@ isCloseToMob = (inAllDirections = true) => {
         y,
       });
     };
+
+    // Riding: the mount goes in first with no prior map points, so its origin
+    // (its own feet) lands exactly at pos — standing on the foothold. Its
+    // 'navel' map point is registered, and the sitting body attaches there,
+    // raising the rider onto the mount's back. The saddle aligns the same way.
+    if (riding) {
+      const mountImg: any = this.equips[19];
+      const mountVslot = mountImg.info?.vslot?.nValue || "";
+      const mStanceNode = mountImg[this.mountStance] || mountImg["stand1"];
+      const mFrameNode = mStanceNode?.[this.mountFrame] || mStanceNode?.[0];
+      if (mFrameNode) {
+        [...mFrameNode.nChildren]
+          .filter(isDrawable)
+          .forEach((p: any) => addFrame(p, mountVslot));
+      }
+      if (includeEquips) {
+        const saddleImg: any = this.equips[20] || this.defaultSaddle;
+        const mountId = this.equippedItemIds[19];
+        const sMountNode = saddleImg?.[String(mountId)];
+        const sStanceNode = sMountNode?.[this.mountStance] || sMountNode?.["stand1"];
+        const sFrameNode = sStanceNode?.[this.mountFrame] || sStanceNode?.[0];
+        if (sFrameNode) {
+          const saddleVslot = saddleImg.info?.vslot?.nValue || "";
+          [...sFrameNode.nChildren]
+            .filter(isDrawable)
+            .forEach((p: any) => addFrame(p, saddleVslot));
+        }
+      }
+    }
 
     const imgs = [
       this.body,
@@ -2298,8 +2457,22 @@ isCloseToMob = (inAllDirections = true) => {
 
       // Ladders and ropes have distinct v83 climb stances
       const climbStance = this.climbingIsLadder ? Stance.ladder : Stance.rope;
+      // Two-handed weapons use the stand2/walk2 stance family
+      const standStance = this.weaponStandType === 2 ? Stance.stand2 : Stance.stand1;
+      const walkStance = this.weaponWalkType === 2 ? Stance.walk2 : Stance.walk1;
+      // Airborne in a swim map = swimming (fly stance), otherwise jumping
+      const airStance = this.map?.isSwimMap ? Stance.fly : Stance.jump;
       if (this.isDead) {
         this.setStance(Stance.dead);
+      } else if (this.isRiding && !this.isInClimbingRope) {
+        // v83 riding: the body holds 'sit' while the mount supplies the
+        // movement animation (stand1/walk1/jump)
+        this.setStance("sit");
+        this.mountStance = !this.pos.fh
+          ? "jump"
+          : this.pos.left !== this.pos.right
+            ? "walk1"
+            : "stand1";
       } else {
         // set the stance
         if (this.isInAttack || this.isInAlert) {
@@ -2309,11 +2482,11 @@ isCloseToMob = (inAllDirections = true) => {
               if (this.isInClimbingRope) {
                 this.setStance(climbStance, 0, false, this.isClimbMoving);
               } else {
-                this.setStance(Stance.jump);
+                this.setStance(airStance);
               }
             } else {
               if (this.isInAlert && this.pos.left !== this.pos.right) {
-                this.setStance("walk1");
+                this.setStance(walkStance);
               } else {
                 if (this.isInClimbingRope) {
                   this.setStance(climbStance, 0, false, this.isClimbMoving);
@@ -2328,11 +2501,14 @@ isCloseToMob = (inAllDirections = true) => {
           this.setStance(climbStance, 0, false, this.isClimbMoving);
         } else {
           if (!this.pos.fh) {
-            this.setStance(Stance.jump);
+            this.setStance(airStance);
+          } else if (this.pos.down) {
+            // Holding down on the ground crouches (v83 prone)
+            this.setStance(Stance.prone);
           } else if (this.pos.left !== this.pos.right) {
-            this.setStance(Stance.walk1);
+            this.setStance(walkStance);
           } else {
-            this.setStance(Stance.stand1);
+            this.setStance(standStance);
           }
         }
       }
@@ -2372,10 +2548,13 @@ isCloseToMob = (inAllDirections = true) => {
     let minDy = 0;
   
     // draws all parts of the character: head, body, etc..
+    let spriteBottomY = 0;
     drawableFrames.forEach((frame: any) => {
       const dx = Math.floor(this.pos.x + frame.x - camera.x + moveX);
       const dy = Math.floor(this.pos.y + frame.y - camera.y + moveY);
-  
+
+      spriteBottomY = Math.max(spriteBottomY, frame.y + frame.img.height + moveY);
+
       canvas.drawImage({
         img: frame.img,
         dx: dx,
@@ -2386,6 +2565,7 @@ isCloseToMob = (inAllDirections = true) => {
         angle,
       });
     });
+    this.spriteBottomY = spriteBottomY;
   
     this.bodyRects = [];
     let minX: number | null = null;
@@ -2448,8 +2628,11 @@ isCloseToMob = (inAllDirections = true) => {
     const maxTextW = 140;
     const padX = 8, padY = 4;
 
+    // GMS player balloons show "Name : message"
+    const fullText = this.name ? `${this.name} : ${this.chatMessage}` : this.chatMessage;
+
     // Word-wrap
-    const words = this.chatMessage.split(' ');
+    const words = fullText.split(' ');
     const lines: string[] = [];
     let cur = '';
     for (const w of words) {
@@ -2477,9 +2660,17 @@ isCloseToMob = (inAllDirections = true) => {
     const totalH = nwH + innerH + swH;
 
     const playerScreenX = this.pos.x - camera.x;
-    const playerScreenY = this.pos.y - camera.y;
     const bx = Math.round(playerScreenX - totalW / 2);
-    const by = Math.round(playerScreenY - totalH - 75);
+
+    // Anchor the tail tip right at the top of the sprite, like GMS.
+    // bodyRects (world coords) come from the last draw; fall back to a fixed
+    // offset above the feet before the first frame fills them.
+    const arrowH = arrow.height || 7;
+    let headTopScreenY = this.pos.y - camera.y - 62;
+    if (this.bodyRects?.length) {
+      headTopScreenY = findMinXY(this.bodyRects).minY - camera.y;
+    }
+    const by = Math.round(headTopScreenY - totalH - arrowH + 2);
 
     const ctx = canvas.context;
     ctx.save();
@@ -2540,7 +2731,10 @@ isCloseToMob = (inAllDirections = true) => {
     const tagPadding = 4;
     const tagColor = "#000000";
     const tagAlpha = 0.7;
-    const offsetFromY = 2;
+    // Mounts (slot 19) are drawn below the feet — anchor the tag under the
+    // mount's lowest pixel instead of across it
+    const mountOffset = this.equips[19] ? Math.max(0, this.spriteBottomY) : 0;
+    const offsetFromY = 2 + mountOffset;
     const nameOpts = {
       text: this.name,
       x: Math.floor(this.pos.x - camera.x),

@@ -29,6 +29,16 @@ const ENTRY_H = 18;
 const MAX_VISIBLE = 18;
 const DETAIL_PAD = 14;
 
+// VScr4 scrollbar piece sizes
+const SB_ARROW_H = 13;
+const SB_THUMB_H = 25;
+const SB_W = 15;
+
+// Detail panel text area
+const BLUE_AREA_H = 120;
+const DETAIL_LINE_H = 14;
+const DETAIL_MAX_LINES = 14;
+
 // Area ID to region name mapping (from WZ data)
 const AREA_NAMES: Record<number, string> = {
   0: 'Maple Island',
@@ -85,8 +95,8 @@ class QuestLogMenuSprite extends DragableMenu {
   private questUINode: any = null;
   private bgLeft: any = null;
   private bgRight: any = null;
-  private tabBtnEnabled: any[] = [];
-  private tabBtnDisabled: any[] = [];
+  private rowIcons: any[] = [];
+  private summaryLbl: any = null;
   private tabLblEnabled: any[] = [];
   private tabLblDisabled: any[] = [];
   private buttons: MapleStanceButton[] = [];
@@ -95,10 +105,25 @@ class QuestLogMenuSprite extends DragableMenu {
   private gaugeFrame: any = null;  // Gauge/frame 163x14
   private gaugeBar: any = null;    // Gauge/gauge 1x11 (tile to fill)
 
-  // Scrollbar
+  // Scrollbar (VScr4 enabled + disabled pieces)
   private scrollPrev: any = null;
   private scrollNext: any = null;
   private scrollThumb: any = null;
+  private scrollBase: any = null;
+  private scrollPrevDis: any = null;
+  private scrollNextDis: any = null;
+
+  // Scrollbar runtime geometry + thumb dragging
+  private scrollbars: Record<string, {
+    x: number; topY: number; bottomY: number; max: number;
+    thumbRect: { x: number; y: number; w: number; h: number } | null;
+  }> = {};
+  private draggingThumb: string | null = null;
+  private dragStartY: number = 0;
+  private dragStartOffset: number = 0;
+
+  // Detail (right panel) text scrolling
+  private detailScrollOffset: number = 0;
 
   // NPC sprite cache for detail panel
   private cachedNpcId: number = -1;
@@ -140,17 +165,19 @@ class QuestLogMenuSprite extends DragableMenu {
       this.bgLeft = this.questUINode?.backgrnd?.nGetImage?.() || null;
       this.bgRight = this.questUINode?.backgrnd2?.nGetImage?.() || null;
 
-      // Tab button backgrounds from Item/New
-      const itemNode: any = await WZManager.get('UI.wz/UIWindow.img/Item');
-      for (let i = 0; i < 3; i++) {
-        this.tabBtnEnabled[i] = itemNode?.New?.Tab1?.[i]?.nGetImage?.() || null;
-        this.tabBtnDisabled[i] = itemNode?.New?.Tab0?.[i]?.nGetImage?.() || null;
-      }
-      // Tab text labels from Quest/Tab
+      // Tab text labels from Quest/Tab — v83 tabs are label sprites only,
+      // drawn straight on the backgrnd header strip (no pill backgrounds)
       for (let i = 0; i < 3; i++) {
         this.tabLblEnabled[i] = this.questUINode?.Tab?.enabled?.[i]?.nGetImage?.() || null;
         this.tabLblDisabled[i] = this.questUINode?.Tab?.disabled?.[i]?.nGetImage?.() || null;
       }
+      // Quest row icons (available / in progress / completed)
+      this.rowIcons = [
+        this.questUINode?.icon0?.nGetImage?.() || null,
+        this.questUINode?.icon1?.nGetImage?.() || null,
+        this.questUINode?.icon4?.nGetImage?.() || null,
+      ];
+      this.summaryLbl = this.questUINode?.summary?.nGetImage?.() || null;
 
       // Progress gauge
       const gauge = this.questUINode?.Gauge;
@@ -166,6 +193,11 @@ class QuestLogMenuSprite extends DragableMenu {
         this.scrollPrev = vscr.enabled.prev0?.nGetImage?.() || null;
         this.scrollNext = vscr.enabled.next0?.nGetImage?.() || null;
         this.scrollThumb = vscr.enabled.thumb0?.nGetImage?.() || null;
+        this.scrollBase = vscr.enabled.base?.nGetImage?.() || null;
+      }
+      if (vscr?.disabled) {
+        this.scrollPrevDis = vscr.disabled.prev?.nGetImage?.() || null;
+        this.scrollNextDis = vscr.disabled.next?.nGetImage?.() || null;
       }
     } catch (e) {
       console.error('Error loading quest UI:', e);
@@ -182,6 +214,10 @@ class QuestLogMenuSprite extends DragableMenu {
   setIsHidden(isHidden: boolean) {
     this.isHidden = isHidden;
     this.buttons.forEach(btn => btn.isHidden = isHidden);
+    if (isHidden && this.draggingThumb) {
+      this.draggingThumb = null;
+      ClickManager.isDraggingItem = false;
+    }
     if (!isHidden) this.refreshQuestList();
   }
 
@@ -269,6 +305,7 @@ class QuestLogMenuSprite extends DragableMenu {
       }
     }
     this.scrollOffset = 0;
+    this.detailScrollOffset = 0;
     this.cachedNpcId = -1;
     this.cachedNpcSprite = null;
   }
@@ -328,7 +365,14 @@ class QuestLogMenuSprite extends DragableMenu {
         isRelativeToCamera: true,
         isPartOfUI: true,
         onClick: () => {
-          // Quest helper - not yet implemented
+          // Toggle tracking of the selected quest in the QuestAlarm widget
+          const qm = this.charecter?.questManager;
+          if (!qm || this.selectedQuestId < 0) return;
+          if (qm.isTracked(this.selectedQuestId)) {
+            qm.untrackQuest(this.selectedQuestId);
+          } else {
+            qm.trackQuest(this.selectedQuestId);
+          }
         },
       });
       this.buttons.push(btn);
@@ -374,7 +418,7 @@ class QuestLogMenuSprite extends DragableMenu {
     this.drawQuestList(canvas);
 
     // Left panel scrollbar
-    this.drawScrollbar(canvas, this.x + LEFT_W - 18, this.y + LIST_Y, this.y + TOTAL_H - 10,
+    this.drawScrollbar(canvas, 'list', this.x + LEFT_W - 18, this.y + LIST_Y, this.y + TOTAL_H - 10,
       this.scrollOffset, this.displayList.length, MAX_VISIBLE);
 
     // Right panel + detail only when a quest is selected
@@ -382,43 +426,95 @@ class QuestLogMenuSprite extends DragableMenu {
       if (this.bgRight) {
         canvas.drawImage({ img: this.bgRight, dx: this.x + LEFT_W, dy: this.y });
       }
-      this.drawQuestDetail(canvas);
+      const detailLines = this.drawQuestDetail(canvas);
 
-      // Right panel scrollbar
-      this.drawScrollbar(canvas, this.x + LEFT_W + RIGHT_W - 18, this.y + 10, this.y + TOTAL_H - 35,
-        0, 1, 1); // Static for now
+      // Right panel scrollbar (scrolls the description text)
+      this.drawScrollbar(canvas, 'detail', this.x + LEFT_W + RIGHT_W - 18, this.y + 10, this.y + TOTAL_H - 35,
+        this.detailScrollOffset, detailLines, DETAIL_MAX_LINES);
+    } else {
+      delete this.scrollbars['detail'];
     }
 
     // Buttons
     this.buttons.forEach(btn => btn.draw(canvas, camera, lag, msPerTick, tdelta));
 
+    // Mouse wheel + scrollbar thumb dragging
+    this.handleScrollInput(canvas);
+
     // Click handling
-    if ((canvas as any).clicked) {
+    if ((canvas as any).clicked && !this.draggingThumb) {
       this.handleClick((canvas as any).mouseX || 0, (canvas as any).mouseY || 0, canvas);
     }
   }
 
-  private drawTabs(canvas: GameCanvas) {
-    const tabW = Math.floor((LEFT_W - 14) / 3);
-    for (let i = 0; i < 3; i++) {
-      const tx = this.x + TAB_X + i * tabW;
-      const active = i === this.currentTab;
+  private listMaxOffset() {
+    return Math.max(0, this.displayList.length - MAX_VISIBLE);
+  }
 
-      // Layer 1: Button background (stretched to fill)
-      const btnImg = active ? this.tabBtnEnabled[i] : this.tabBtnDisabled[i];
-      if (btnImg) {
-        canvas.context.drawImage(btnImg, tx, this.y + TAB_Y, tabW - 2, btnImg.height);
+  private handleScrollInput(canvas: GameCanvas) {
+    const c = canvas as any;
+    const mx = c.mouseX || 0;
+    const my = c.mouseY || 0;
+
+    // Mouse wheel — scroll whichever panel the cursor is over
+    if (c.scrolledUp || c.scrolledDown) {
+      const dir = c.scrolledDown ? 1 : -1;
+      const inLeft = mx >= this.x && mx < this.x + LEFT_W && my >= this.y && my <= this.y + TOTAL_H;
+      const inRight = this.selectedQuestId >= 0 &&
+        mx >= this.x + LEFT_W && mx <= this.x + TOTAL_W && my >= this.y && my <= this.y + TOTAL_H;
+      if (inLeft) {
+        this.scrollOffset = Math.max(0, Math.min(this.listMaxOffset(), this.scrollOffset + dir));
+      } else if (inRight) {
+        const max = this.scrollbars['detail']?.max ?? 0;
+        this.detailScrollOffset = Math.max(0, Math.min(max, this.detailScrollOffset + dir));
       }
+    }
 
-      // Layer 2: Text label sprite centered on button
-      const lblImg = active ? this.tabLblEnabled[i] : this.tabLblDisabled[i];
-      if (lblImg) {
-        const lx = tx + Math.floor((tabW - 2 - lblImg.width) / 2);
-        const ly = this.y + TAB_Y + Math.floor(((btnImg?.height || 16) - lblImg.height) / 2);
-        canvas.drawImage({ img: lblImg, dx: lx, dy: ly });
+    // Thumb dragging
+    if (this.draggingThumb) {
+      const sb = this.scrollbars[this.draggingThumb];
+      if (!c.clicked || !sb) {
+        this.draggingThumb = null;
+        ClickManager.isDraggingItem = false;
+      } else {
+        const usable = (sb.bottomY - sb.topY) - SB_ARROW_H * 2 - SB_THUMB_H;
+        if (usable > 0 && sb.max > 0) {
+          const delta = Math.round((my - this.dragStartY) / usable * sb.max);
+          const next = Math.max(0, Math.min(sb.max, this.dragStartOffset + delta));
+          if (this.draggingThumb === 'list') this.scrollOffset = next;
+          else this.detailScrollOffset = next;
+        }
+      }
+    } else if (c.clicked && !ClickManager.isDraggingItem) {
+      for (const [id, sb] of Object.entries(this.scrollbars)) {
+        const t = sb.thumbRect;
+        if (t && mx >= t.x && mx <= t.x + t.w && my >= t.y && my <= t.y + t.h) {
+          this.draggingThumb = id;
+          this.dragStartY = my;
+          this.dragStartOffset = id === 'list' ? this.scrollOffset : this.detailScrollOffset;
+          ClickManager.isDraggingItem = true; // suppress window dragging while on the thumb
+          break;
+        }
       }
     }
   }
+
+  private drawTabs(canvas: GameCanvas) {
+    // v83 ships byte-identical Tab/enabled and Tab/disabled label sprites,
+    // so the active tab is the full-strength label and inactive ones are dimmed
+    let tx = this.x + TAB_X + 6;
+    this._tabRects = [];
+    for (let i = 0; i < 3; i++) {
+      const active = i === this.currentTab;
+      const lblImg = this.tabLblEnabled[i] || this.tabLblDisabled[i];
+      if (!lblImg) continue;
+      const ly = this.y + TAB_Y + 3;
+      canvas.drawImage({ img: lblImg, dx: tx, dy: ly, alpha: active ? 1 : 0.4 });
+      this._tabRects.push({ x: tx, y: ly, w: lblImg.width, h: lblImg.height, tab: i });
+      tx += lblImg.width + 14;
+    }
+  }
+  private _tabRects: { x: number; y: number; w: number; h: number; tab: number }[] = [];
 
   private drawQuestList(canvas: GameCanvas) {
     const lx = this.x + LIST_X;
@@ -465,37 +561,21 @@ class QuestLogMenuSprite extends DragableMenu {
         const selected = entry.questId === this.selectedQuestId;
 
         if (selected) {
-          canvas.drawRect({
-            x: lx - 2, y: ly,
-            width: LIST_W, height: ENTRY_H,
-            color: '#4477BB', alpha: 0.3,
-          });
+          canvas.drawRect({ x: lx - 2, y: ly, width: LIST_W, height: ENTRY_H, color: '#4477BB', alpha: 0.3 });
         }
 
-        // Small quest status dot (like original game)
-        const ctx = canvas.context;
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(lx + 5, ly + 9, 3, 0, Math.PI * 2);
-        if (this.currentTab === QuestTab.IN_PROGRESS) {
-          ctx.fillStyle = '#8899BB'; // grey-blue for in-progress
-        } else if (this.currentTab === QuestTab.COMPLETED) {
-          ctx.fillStyle = '#88AA88'; // grey-green for complete
-        } else {
-          ctx.fillStyle = '#CCAA44'; // yellow for available
+        // Quest status icon (icon0 available / icon1 in progress / icon4 done)
+        const rowIcon = this.rowIcons[this.currentTab];
+        if (rowIcon) {
+          canvas.drawImage({ img: rowIcon, dx: lx, dy: ly + 1 });
         }
-        ctx.fill();
-        ctx.strokeStyle = '#666688';
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-        ctx.restore();
 
         let name = questInfo.name;
         if (name.length > 24) name = name.substring(0, 22) + '..';
         canvas.drawText({
           text: name,
           color: selected ? '#003388' : '#333333',
-          x: lx + 14, y: ly + 3, fontSize: 11,
+          x: lx + 16, y: ly + 3, fontSize: 11,
         });
       }
 
@@ -514,33 +594,50 @@ class QuestLogMenuSprite extends DragableMenu {
     }
   }
 
-  private drawScrollbar(canvas: GameCanvas, sbX: number, sbTopY: number, sbBottomY: number,
+  private drawScrollbar(canvas: GameCanvas, id: string, sbX: number, sbTopY: number, sbBottomY: number,
     offset: number, totalItems: number, visibleItems: number) {
-    const arrowH = 13;
+    const max = Math.max(0, totalItems - visibleItems);
+    const scrollable = max > 0;
 
-    if (this.scrollPrev) canvas.drawImage({ img: this.scrollPrev, dx: sbX, dy: sbTopY });
-    if (this.scrollNext) canvas.drawImage({ img: this.scrollNext, dx: sbX, dy: sbBottomY - arrowH });
-
-    if (this.scrollThumb && totalItems > visibleItems) {
-      const trackH = sbBottomY - sbTopY - arrowH * 2 - (this.scrollThumb.height || 25);
-      const ratio = offset / Math.max(1, totalItems - visibleItems);
-      const thumbY = sbTopY + arrowH + Math.round(ratio * trackH);
-      canvas.drawImage({ img: this.scrollThumb, dx: sbX, dy: thumbY });
-    } else if (this.scrollThumb) {
-      canvas.drawImage({ img: this.scrollThumb, dx: sbX, dy: sbTopY + arrowH });
+    // Track base tiled between the arrows
+    if (this.scrollBase) {
+      const baseH = this.scrollBase.height || 13;
+      const ctx = canvas.context;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(sbX, sbTopY + SB_ARROW_H, SB_W, sbBottomY - sbTopY - SB_ARROW_H * 2);
+      ctx.clip();
+      for (let by = sbTopY + SB_ARROW_H; by < sbBottomY - SB_ARROW_H; by += baseH) {
+        canvas.drawImage({ img: this.scrollBase, dx: sbX, dy: by });
+      }
+      ctx.restore();
     }
+
+    const prevImg = scrollable ? this.scrollPrev : (this.scrollPrevDis || this.scrollPrev);
+    const nextImg = scrollable ? this.scrollNext : (this.scrollNextDis || this.scrollNext);
+    if (prevImg) canvas.drawImage({ img: prevImg, dx: sbX, dy: sbTopY });
+    if (nextImg) canvas.drawImage({ img: nextImg, dx: sbX, dy: sbBottomY - SB_ARROW_H });
+
+    let thumbRect: { x: number; y: number; w: number; h: number } | null = null;
+    if (this.scrollThumb && scrollable) {
+      const trackH = sbBottomY - sbTopY - SB_ARROW_H * 2 - SB_THUMB_H;
+      const thumbY = sbTopY + SB_ARROW_H + Math.round((offset / max) * Math.max(0, trackH));
+      canvas.drawImage({ img: this.scrollThumb, dx: sbX, dy: thumbY });
+      thumbRect = { x: sbX, y: thumbY, w: SB_W, h: SB_THUMB_H };
+    }
+
+    this.scrollbars[id] = { x: sbX, topY: sbTopY, bottomY: sbBottomY, max, thumbRect };
   }
 
-  private drawQuestDetail(canvas: GameCanvas) {
-    if (this.selectedQuestId < 0) return;
+  private drawQuestDetail(canvas: GameCanvas): number {
+    if (this.selectedQuestId < 0) return 0;
 
     const questId = this.selectedQuestId;
     const questInfo = QuestData.quests.get(questId);
-    if (!questInfo) return;
+    if (!questInfo) return 0;
 
     const rx = this.x + LEFT_W;
     const reqs = QuestData.requirements.get(questId);
-    const BLUE_AREA_H = 120;
 
     // --- Blue header area (starts ~y+30 in bgRight) ---
     // The green dot is baked into bgRight — just draw the title next to it
@@ -614,7 +711,12 @@ class QuestLogMenuSprite extends DragableMenu {
     // --- Description text below blue area ---
     let dy = this.y + BLUE_AREA_H + 10;
     const maxW = RIGHT_W - DETAIL_PAD * 2 - 20;
-    const lineH = 14;
+
+    // "Quest Summary" section label (WZ sprite), like the original client
+    if (this.summaryLbl) {
+      canvas.drawImage({ img: this.summaryLbl, dx: rx + DETAIL_PAD, dy });
+      dy += this.summaryLbl.height + 6;
+    }
 
     let description = '';
     if (this.currentTab === QuestTab.AVAILABLE) {
@@ -624,50 +726,40 @@ class QuestLogMenuSprite extends DragableMenu {
     } else {
       description = questInfo.completionText || 'Quest completed.';
     }
-    const qm = (window as any).charecter?.questManager;
-    description = resolveItemCodes(description, qm);
+    const qmGlobal = (window as any).charecter?.questManager;
+    description = resolveItemCodes(description, qmGlobal);
     // Replace inline ITEM markers with item names (icons not supported in text-only renderer)
     description = description.replace(/\x01ITEM:(\d+)\x02/g, (_, id) => getItemNameSync(parseInt(id)) || `Item #${id}`);
 
-    // Word wrap and draw
-    const words = description.split(' ');
+    // Build the full line list (word-wrapped description + progress), then
+    // render the slice selected by the right-panel scrollbar
+    const lines: { text: string; color: string }[] = [];
     let line = '';
-    let count = 0;
-    const maxLines = 12;
-    for (const word of words) {
+    for (const word of description.split(' ')) {
       const test = line ? `${line} ${word}` : word;
       if (test.length * 6.2 > maxW && line) {
-        canvas.drawText({ text: line, color: '#000000', x: rx + DETAIL_PAD, y: dy, fontSize: 11 });
-        dy += lineH;
+        lines.push({ text: line, color: '#000000' });
         line = word;
-        count++;
-        if (count >= maxLines) break;
       } else {
         line = test;
       }
     }
-    if (line && count < maxLines) {
-      canvas.drawText({ text: line, color: '#000000', x: rx + DETAIL_PAD, y: dy, fontSize: 11 });
-      dy += lineH;
-    }
+    if (line) lines.push({ text: line, color: '#000000' });
 
     // Mob and item progress for in-progress tab
     if (this.currentTab === QuestTab.IN_PROGRESS) {
       const qm = this.charecter?.questManager;
       const progress = qm?.getMobProgress(questId);
-      const reqs = QuestData.requirements.get(questId);
       const hasProgress = (progress?.length) || (reqs?.complete.items?.length);
-      if (hasProgress) dy += 6;
+      if (hasProgress) lines.push({ text: '', color: '#000000' });
 
       if (progress?.length) {
         for (const p of progress) {
           const done = p.current >= p.required;
-          canvas.drawText({
+          lines.push({
             text: `${mobNames.get(p.mobId) || `Mob #${p.mobId}`}: ${p.current}/${p.required}`,
             color: done ? '#00AA00' : '#CC0000',
-            x: rx + DETAIL_PAD, y: dy, fontSize: 11,
           });
-          dy += lineH;
         }
       }
 
@@ -677,16 +769,24 @@ class QuestLogMenuSprite extends DragableMenu {
           const have = qm?.getItemCount(item.id) ?? 0;
           const done = have >= item.count;
           const name = getItemNameSync(item.id) || `Item #${item.id}`;
-          canvas.drawText({
+          lines.push({
             text: `${name}: ${have}/${item.count}`,
             color: done ? '#00AA00' : '#CC0000',
-            x: rx + DETAIL_PAD, y: dy, fontSize: 11,
           });
-          dy += lineH;
         }
       }
     }
 
+    this.detailScrollOffset = Math.max(0, Math.min(this.detailScrollOffset, lines.length - DETAIL_MAX_LINES));
+    const end = Math.min(this.detailScrollOffset + DETAIL_MAX_LINES, lines.length);
+    for (let i = this.detailScrollOffset; i < end; i++) {
+      if (lines[i].text) {
+        canvas.drawText({ text: lines[i].text, color: lines[i].color, x: rx + DETAIL_PAD, y: dy, fontSize: 11 });
+      }
+      dy += DETAIL_LINE_H;
+    }
+
+    return lines.length;
   }
 
   private handleClick(mx: number, my: number, canvas: GameCanvas) {
@@ -695,35 +795,29 @@ class QuestLogMenuSprite extends DragableMenu {
     if (now - this.lastClickTime < 100) return;
     this.lastClickTime = now;
 
-    // Tab clicks
-    const tabW = Math.floor((LEFT_W - 14) / 3);
-    for (let i = 0; i < 3; i++) {
-      const tx = this.x + TAB_X + i * tabW;
-      const btnImg = this.tabBtnEnabled[i] || this.tabBtnDisabled[i];
-      const th = btnImg?.height || 16;
-      if (mx >= tx && mx <= tx + tabW && my >= this.y + TAB_Y && my <= this.y + TAB_Y + th) {
-        this.currentTab = i as QuestTab;
+    // Tab clicks (label sprite rects, padded)
+    for (const r of this._tabRects) {
+      if (mx >= r.x - 4 && mx <= r.x + r.w + 4 && my >= r.y - 4 && my <= r.y + r.h + 4) {
+        this.currentTab = r.tab as QuestTab;
         this.refreshQuestList();
         this.rebuildButtons(canvas);
         return;
       }
     }
 
-    // Left panel scrollbar arrow clicks
-    const sbX = this.x + LEFT_W - 18;
-    const sbTopY = this.y + LIST_Y;
-    const sbBottomY = this.y + TOTAL_H - 10;
-    if (mx >= sbX && mx <= sbX + 15) {
-      // Up arrow
-      if (my >= sbTopY && my <= sbTopY + 13) {
-        if (this.scrollOffset > 0) this.scrollOffset--;
-        return;
+    // Scrollbar arrow clicks (left list + right detail)
+    for (const [id, sb] of Object.entries(this.scrollbars)) {
+      if (mx < sb.x || mx > sb.x + SB_W) continue;
+      let dir = 0;
+      if (my >= sb.topY && my <= sb.topY + SB_ARROW_H) dir = -1;
+      else if (my >= sb.bottomY - SB_ARROW_H && my <= sb.bottomY) dir = 1;
+      if (!dir) continue;
+      if (id === 'list') {
+        this.scrollOffset = Math.max(0, Math.min(this.listMaxOffset(), this.scrollOffset + dir));
+      } else {
+        this.detailScrollOffset = Math.max(0, Math.min(sb.max, this.detailScrollOffset + dir));
       }
-      // Down arrow
-      if (my >= sbBottomY - 13 && my <= sbBottomY) {
-        if (this.scrollOffset < this.displayList.length - MAX_VISIBLE) this.scrollOffset++;
-        return;
-      }
+      return;
     }
 
     // Quest list clicks
@@ -744,6 +838,7 @@ class QuestLogMenuSprite extends DragableMenu {
           this.buildDisplayList();
         } else {
           this.selectedQuestId = entry.questId;
+          this.detailScrollOffset = 0;
           this.cachedNpcId = -1;
           this.cachedNpcSprite = null;
           // Rebuild buttons since selection changed

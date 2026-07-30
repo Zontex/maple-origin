@@ -69,6 +69,9 @@ class MySocket {
   playerId: string = "";
   otherPlayers: Map<string, MapleCharacter> = new Map();
   isMobHost: boolean = false;
+  // player_info couldn't be sent yet (map still loading) — retried by the
+  // update loop; without it the server never assigns a mob host
+  _needsRegistration: boolean = false;
   isConnected: boolean = false;
   isLoggedIn: boolean = false;
   userId: number = 0;
@@ -301,7 +304,7 @@ class MySocket {
         mp: MyCharacter.mp,
         maxMp: MyCharacter.maxMp,
         jobId: MyCharacter.stats?.jobId ?? 0,
-        mapId: Number(MapleMap.id) || 10000,
+        mapId: Number(MapleMap.id),
         posX: (MapleMap.isPositionValid?.(MyCharacter.pos.x, MyCharacter.pos.y))
           ? Math.round(MyCharacter.pos.x) : 0,
         posY: (MapleMap.isPositionValid?.(MyCharacter.pos.x, MyCharacter.pos.y))
@@ -627,6 +630,17 @@ class MySocket {
     
     // Always convert mapId to number to ensure consistent behavior
     const mapId = Number(MapleMap.id);
+    // Never register with a bogus map — the server tracks this id and its
+    // disconnect auto-save would persist it (teleport-to-start-map bug).
+    // Mark registration as pending so the update loop retries once the map
+    // is loaded — without registration the server never assigns a mob host
+    // and every mob on the map stays frozen.
+    if (!Number.isFinite(mapId) || mapId <= 0) {
+      console.warn(`[Socket] Deferring player_info — invalid mapId (${MapleMap.id})`);
+      this._needsRegistration = true;
+      return;
+    }
+    this._needsRegistration = false;
     console.log(`Sending player info with mapId=${mapId} (${typeof mapId})`);
     
     // Collect equipped item IDs for other players to see
@@ -672,9 +686,17 @@ class MySocket {
     if (currentTime - this.lastUpdate < this.updateInterval) return;
     this.lastUpdate = currentTime;
     
-    // Always convert mapId to number
+    // Always convert mapId to number; skip updates while no real map is
+    // loaded so the server never tracks an invalid location
     const mapId = Number(MapleMap.id);
-    
+    if (!Number.isFinite(mapId) || mapId <= 0) return;
+
+    // Registration was deferred while the map was loading — do it now so the
+    // server has player.info and can assign the mob host for this map
+    if (this._needsRegistration) {
+      this.sendPlayerInfo();
+    }
+
     // Collect equipped item IDs
     const equippedItems: { slot: number; itemId: number }[] = [];
     if (MyCharacter.equippedItemIds) {
@@ -1115,6 +1137,12 @@ class MySocket {
         console.error("Error displaying chat message:", error);
       }
     }
+
+    // Chat log line for everyone in the map
+    import('./UI/UIChatLog').then(({ default: UIChatLog }) => {
+      const name = player?.name || chatMessage.playerName || 'Player';
+      UIChatLog.addMessage(`${name} : ${chatMessage.message}`, 'player');
+    }).catch(() => {});
   }
   
   // --- Item Drop Sync ---

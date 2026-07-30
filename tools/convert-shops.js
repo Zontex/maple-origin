@@ -10,8 +10,31 @@
 const fs = require('fs');
 const path = require('path');
 
-const BACKEND_DB = path.join(__dirname, '..', 'backend', 'src', 'main', 'resources', 'db', 'data');
+// Cosmic DB seed data preserved from the (now-deleted) Cosmic backend reference copy
+const BACKEND_DB = path.join(__dirname, 'cosmic-db-data');
 const OUTPUT = path.join(__dirname, '..', 'TypeScript-Client', 'public', 'data', 'shops.json');
+
+// Cosmic private-server extras that never existed in GMS v83 — excluded for 1:1 GMS accuracy.
+// Note: shop 11000 is Sid's legitimate beginner weapon shop; only 1337 (GM test shop,
+// also mapped to NPC 11000) is unofficial.
+const UNOFFICIAL_SHOPS = new Set([
+  1337, // GM test shop: Monster Sacks, Wizet/GM gear, White Scrolls, mounts at 1 meso
+  // Polar bear Poch (9001002) GM showcase shops: 373 items (hats, capes, rings,
+  // scrolls, mounts...) all at <=1 meso — Cosmic event-gifting tool, not a GMS shop
+  9999992, 9999993, 9999994, 9999995, 9999996, 9999997, 9999998, 9999999,
+]);
+
+// GM/unobtainable items that must never appear in any shop.
+function isUnofficialItem(itemId) {
+  if (itemId >= 2100000 && itemId <= 2100999) return true; // Monster Sacks
+  return [
+    1002140, // Wizet Invincible Hat
+    1002959, // Junior GM Cap
+    1042003, // Wizet Plain Suit
+    1062007, // Wizet Plain Suit Pants
+    1322013, // Wizet Secret Agent Suitcase
+  ].includes(itemId);
+}
 
 // Parse shops SQL — (shopid, npcid)
 function parseShops(sql) {
@@ -31,6 +54,10 @@ function parseShopItems(sql) {
   let m;
   while ((m = re.exec(sql)) !== null) {
     const shopId = parseInt(m[1]);
+    // pitch > 0 means the item is sold for event-token currency, not mesos
+    // (e.g. Inkwell in Henesys). Without token support, including them would
+    // sell event gear for ~0 mesos — skip until pitch currency is implemented.
+    if (parseInt(m[4]) > 0) continue;
     const item = {
       itemId: parseInt(m[2]),
       price: parseInt(m[3]),
@@ -55,15 +82,18 @@ const itemsMap = parseShopItems(itemsSql);
 
 const result = {};
 for (const [shopId, npcId] of shopsMap) {
-  const items = itemsMap.get(shopId) || [];
+  if (UNOFFICIAL_SHOPS.has(shopId) || UNOFFICIAL_SHOPS.has(npcId)) continue;
+  const items = (itemsMap.get(shopId) || []).filter((i) => !isUnofficialItem(i.itemId));
+  if (items.length === 0) continue;
   result[shopId] = { npcId, items };
 }
 
 // Also include shops that appear in shopitems but not in shops table (use shopId as npcId)
 for (const [shopId, items] of itemsMap) {
-  if (!result[shopId]) {
-    result[shopId] = { npcId: shopId, items };
-  }
+  if (result[shopId] || UNOFFICIAL_SHOPS.has(shopId)) continue;
+  const filtered = items.filter((i) => !isUnofficialItem(i.itemId));
+  if (filtered.length === 0) continue;
+  result[shopId] = { npcId: shopId, items: filtered };
 }
 
 fs.writeFileSync(OUTPUT, JSON.stringify(result));

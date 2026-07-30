@@ -55,6 +55,9 @@ class NPC {
   // Control rendering order, if needed
   layer: number = 0;
 
+  // Invisible trigger NPC (map life hide=1) — never rendered or clickable
+  hide: boolean = false;
+
   // Whether to display chat balloon
   showDialog: boolean = false;
   
@@ -93,6 +96,8 @@ class NPC {
     this.fh = opts.fh;
     this.rx0 = opts.rx0;
     this.rx1 = opts.rx1;
+    // Map life node hide=1 — invisible trigger NPCs (no render, no minimap, no click)
+    this.hide = !!opts.hide;
 
     // Load NPC sprite data
     let strId = `${this.id}`.padStart(7, "0");
@@ -116,31 +121,15 @@ class NPC {
     // Load NPC strings
     this.strings = await this.loadStrings(this.id);
 
-    // Check for various places where NPC dialogue might be stored
-    // 1. Check in the npcFile directly for "speak" property
-    if (npcFile.nGet("speak")) {
-      this.strings.speak = npcFile.nGet("speak").nGet("nValue", "Hello!");
-    } 
-    // 2. Check in the info section
-    else if (npcFile.info && npcFile.info.nGet("speak")) {
-      this.strings.speak = npcFile.info.nGet("speak").nGet("nValue", "Hello!");
-    }
-    // 3. Check if there's a chat or dialogue property
-    else if (npcFile.nGet("chat")) {
-      this.strings.speak = npcFile.nGet("chat").nGet("nValue", "Hello!");
-    }
-    else if (npcFile.info && npcFile.info.nGet("chat")) {
-      this.strings.speak = npcFile.info.nGet("chat").nGet("nValue", "Hello!");
-    }
-    
-    // If no speak property is found anywhere, try to generate a relevant dialogue
-    if (!this.strings.speak && this.strings.name) {
-      if (this.strings.func) {
-        this.strings.speak = `Hello! I'm ${this.strings.name}. I can help you with ${this.strings.func}.`;
-      } else {
-        this.strings.speak = `Hello! I'm ${this.strings.name}. Welcome to MapleStory!`;
-      }
-    }
+    // Authentic v83 chat balloons: Npc.wz info/speak lists String.wz/Npc.img
+    // line keys (usually n0/n1..., occasionally d0). NPCs without a speak
+    // node never show an overhead balloon in the original client.
+    const speakRefs = npcFile.info?.nGet("speak")?.nChildren || [];
+    const speakLines = speakRefs
+      .map((ref: any) => this.strings[ref.nValue])
+      .filter((line: any) => typeof line === "string" && line.length > 0);
+    this.strings.dialogues = speakLines;
+    this.strings.speak = speakLines.length > 0 ? speakLines[0] : undefined;
 
 
     // Some NPCs "float"
@@ -228,22 +217,14 @@ class NPC {
       }
       
       const result: any = {};
-      
-      // Process all string properties
+
+      // Store all string properties (name, func, and raw line keys n0/n1/d0/d1
+      // so Npc.wz info/speak references can be resolved by key)
       for (const child of npcStrings.nChildren) {
-        // Store basic properties like name and func
         result[child.nName] = child.nValue;
-        
-        // Look for dialogue patterns:
-        // 'n0', 'n1', 'n2' etc. are normal chat messages NPCs say periodically
-        if (child.nName.startsWith('n') && !isNaN(parseInt(child.nName.substring(1)))) {
-          if (!result.dialogues) {
-            result.dialogues = [];
-          }
-          result.dialogues.push(child.nValue);
-        }
-        
-        // 'd0', 'd1', etc. are often quest-related dialogues
+
+        // 'd0', 'd1' are the NPC's default click-dialogue pages, shown when
+        // talking to an NPC that has no script, shop, or quests
         if (child.nName.startsWith('d') && !isNaN(parseInt(child.nName.substring(1)))) {
           if (!result.questDialogues) {
             result.questDialogues = [];
@@ -251,12 +232,7 @@ class NPC {
           result.questDialogues.push(child.nValue);
         }
       }
-      
-      // If we found dialogue lines, use the first one as the speak text
-      if (result.dialogues && result.dialogues.length > 0) {
-        result.speak = result.dialogues[0];
-      }
-      
+
       return result;
     } catch (e) {
       console.error(`Error loading strings for NPC ${id}:`, e);
@@ -304,6 +280,7 @@ class NPC {
   }
 
   draw(canvas: GameCanvas, camera: CameraInterface, lag: number, msPerTick: number, tdelta: number) {
+    if (this.hide) return;
     // Draw the NPC's stance
     const currentFrame = this.stances[this.stance]?.frames[this.frame];
     if (!currentFrame) return;
@@ -504,18 +481,10 @@ class NPC {
     // Skip if NPC is off screen
     if (npcScreenX < -100 || npcScreenX > 900 || npcScreenY < -100 || npcScreenY > 700) return;
 
-    // Get dialogue text
-    let text = '';
-    if (this.strings.dialogues && this.strings.dialogues.length > 0) {
-      const idx = Math.floor(Date.now() / this.dialogDuration) % this.strings.dialogues.length;
-      text = this.strings.dialogues[idx];
-    } else if (this.strings.speak) {
-      text = this.strings.speak;
-    } else if (this.strings.name) {
-      text = this.strings.func ? `I am ${this.strings.name}, the ${this.strings.func}.` : `I am ${this.strings.name}.`;
-    } else {
-      text = 'Hello!';
-    }
+    // Only NPCs with authentic speak lines (Npc.wz info/speak) show balloons
+    if (!this.strings.dialogues || this.strings.dialogues.length === 0) return;
+    const idx = Math.floor(Date.now() / this.dialogDuration) % this.strings.dialogues.length;
+    const text = this.strings.dialogues[idx];
 
     // Word-wrap text
     const maxTextW = 140;

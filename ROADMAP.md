@@ -1,7 +1,9 @@
 # MapleOrigin — 1:1 Fidelity Roadmap
 
 Full-codebase audit (2026-07-20) comparing the current implementation against authentic
-pre-Big Bang v83 behavior, using the Cosmic Java source in `backend/` as reference.
+pre-Big Bang v83 behavior, using the Cosmic Java source as reference (the local `backend/`
+copy has since been deleted — consult https://github.com/P0nk/Cosmic instead; its DB seed
+SQL is preserved in `tools/cosmic-db-data/`).
 Severity: **broken** (doesn't work) / **missing** (absent) / **inaccurate** (works but wrong vs v83).
 
 > **Progress (2026-07-20):** Tiers 0-2 executed in commits `175ba2ad`..`20e09d1f` —
@@ -10,6 +12,14 @@ Severity: **broken** (doesn't work) / **missing** (absent) / **inaccurate** (wor
 > attacks, Cosmic respawn), quest/NPC unbreaking (#L selections, cm/qm hardening, styling,
 > quest req/reward gaps), and item systems (slotMax, return scrolls, authentic drops,
 > scroll upgrades, shop). Checked items below are done; *partial* notes mark remainders.
+
+> **Progress (2026-07-30):** swim physics on `info/swim` maps; transportation system
+> (`Transport/` — Cosmic boat/train/genie/subway/elevator schedules, dock `shipObj`
+> rendering, station clocks); Direction3 job-intro cutscenes; GMS Quest Helper panel +
+> quest-complete alarm; chat log window; mob HP gauge; quest log window overhaul (real
+> VScr4 scrollbars, detail scrolling, tab states); GMS status bar (key pill row, claim,
+> quickslot toggle, SHOP/TRADE/MENU/SHORTCUT); script engines now persist per-conversation
+> closures (fixes cab warps); save-path hardening against invalid map ids.
 
 
 ---
@@ -57,7 +67,7 @@ Severity: **broken** (doesn't work) / **missing** (absent) / **inaccurate** (wor
 
 ## Tier 3 — Movement / world fidelity
 
-- [ ] **Swimming missing entirely** — all swim constants dead, `flying` unreachable (`Physics.ts:26-41, 126-128`); water maps just have normal gravity. *(missing)*
+- [x] **Swimming missing entirely** — all swim constants dead, `flying` unreachable (`Physics.ts:26-41, 126-128`); water maps just have normal gravity. *(missing)* — *swim physics active on `info/swim=1` maps (`MapleMap.isSwimMap`)*
 - [ ] **Prone/crawl missing** — `prone` stances exist in enum but never used; down key doesn't prone (`MapleCharacter.ts:1276-1279, 2033-2069`). *(missing)*
 - [ ] **Ice/slippery maps** — `info.fs` per-map friction never read (`Physics.ts:36-37` only used on steep slopes). *(missing)*
 - [ ] **Climb-down 2× too fast** — `slide_down_speed=300` vs authentic ~150 (`Physics.ts:45-46`); ladder/rope differ only by x-snap tolerance. *(inaccurate)*
@@ -76,19 +86,19 @@ Severity: **broken** (doesn't work) / **missing** (absent) / **inaccurate** (wor
 - [ ] Inventory/skill tabs drawn as colored rounded rects (`InventoryMenuSprite.ts:515-548`, `SkillMenuSprite.ts:354-390`) — use WZ `Tab/enabled|disabled`.
 - [ ] Tooltips are custom fillRect boxes (`InventoryMenuSprite.ts:1151-1195`, `EquipMenuSprite.ts:314-318`, `SkillMenuSprite.ts:651-658`) — use `UIToolTip.img`; equip tooltip shows only name+icon, **no stats**.
 - [ ] Skill window white content fill/borders/scrollbar (`SkillMenuSprite.ts:294-315, 503-507`) — use WZ `VScr`.
-- [ ] Quest log highlights/bullets/checkboxes via fillRect/arc/strokeRect (`QuestLogMenuSprite.ts:436-485`).
+- [x] Quest log highlights/bullets/checkboxes via fillRect/arc/strokeRect (`QuestLogMenuSprite.ts:436-485`). — *partial: real VScr4 scrollbars (wheel/thumb/disabled arrows), scrolling detail panel, tab active state, removed "OBTAIN SELECTIVELY" sprite misuse; category collapse icons still drawn*
 - [ ] Minimap inner fill, border, Arial names (`UIMiniMap.ts:300, 313-319, 329`).
 - [ ] Hotkey bar key labels/cooldown via fillText (`UIHotkeyBar.ts:251-266`) — v83 uses sprite digits.
 - [ ] Pervasive: all text is Arial via `drawText` — evaluate a v83-style bitmap/webfont pass.
 
 **Missing windows/features vs v83 client:**
-- [ ] Chat log window (only single input line + balloons; `UIMap.ts:165`)
-- [ ] Keyboard config window (status-bar button is a `console.log` stub, `UIMap.ts:110`); quickslot toggle also stubbed (`:96`)
+- [x] Chat log window (only single input line + balloons; `UIMap.ts:165`) — *`UIChatLog`: collapsed fading overlay + expanded scrollable log from WZ pieces*
+- [ ] Keyboard config window (status-bar button is a `console.log` stub); quickslot show/hide toggle now works; SHOP/TRADE/MENU/SHORTCUT buttons present but visual-only
 - [ ] World map (W key; minimap WORLD button stubbed, `UIMiniMap.ts:465`)
-- [ ] Mob HP bar + boss HP gauge (no `MobGage` code at all)
+- [x] Mob HP bar + boss HP gauge (no `MobGage` code at all) — *`UIMobGage` top-center bar from `UIWindow.img/MobGage`; boss `DualMobGauge` still missing*
 - [ ] ESC system menu / options window
-- [ ] Minimap collapsed/normal states + min/max buttons (only MaxMap exists)
-- [ ] Quest side-notifier/tracker
+- [x] Minimap collapsed/normal states + min/max buttons (only MaxMap exists) — *`UIMiniMap.viewMode` max/min with collapsed title strip + header buttons; M toggles*
+- [x] Quest side-notifier/tracker — *GMS Quest Helper panel (per-requirement cur/req, strikethrough) + quest-complete alarm bubble; QuestAlert/QuestClear effects on fulfillment/turn-in*
 - [ ] Character info popup (double-click player), fame give UI
 - [ ] Party / buddy / guild / trade / storage windows (blocked on server work, Tier 5)
 - [ ] `UINpcTalk` renders only a close button; 8 open TODOs (`UINpcTalk.ts:13-20`) — mostly superseded by UIQuestDialog; consider deleting or finishing
@@ -103,7 +113,7 @@ Severity: **broken** (doesn't work) / **missing** (absent) / **inaccurate** (wor
 
 ## Tier 5 — Server / multiplayer architecture
 
-- [ ] **Save consistency** — three independent full-state replace paths (30s autosave, beforeunload, server on-close) with no version/sequence number; stale `lastSaveData` can roll back progress (`auth.js:95-105`, `mysocket.ts:300-303, 1391`). Add a monotonic save sequence + server-side merge.
+- [ ] **Save consistency** — three independent full-state replace paths (30s autosave, beforeunload, server on-close) with no version/sequence number; stale `lastSaveData` can roll back progress (`auth.js:95-105`, `mysocket.ts:300-303, 1391`). Add a monotonic save sequence + server-side merge. — *partial: all paths now reject invalid map ids (NaN/0 → keep stored map/pos), fixing the reload-teleports-to-start-map corruption; sequence numbers still missing*
 - [ ] **Drop ownership/duping** — no server drop registry; two clients can both pick up the same drop (`item.js:13-17`, `mysocket.ts:1086`). Original v83 owner-locks loot to killer/party. Drop IDs (`Date.now()+random`) can collide across clients.
 - [ ] **Mob host handoff gap** — between host leave and reassignment, damage requests are dropped and mob HP can resurrect/desync from stale batches (`hostManager.js:27-33`, `mob.js:47`, `mysocket.ts:1211-1250`). Server holds no mob HP truth (the `state.monsters` path is dead code).
 - [ ] **World/channel partitioning** — relay filters by mapId only (`network.js:16-36`); two worlds share the same room. Channels don't exist server-side.

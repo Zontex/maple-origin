@@ -1,19 +1,76 @@
 import QuestData, { QuestState, QuestRequirement } from './QuestData';
 import type MapleCharacter from '../MapleCharacter';
+import UIQuestAlarm from '../UI/UIQuestAlarm';
 
 export interface ActiveQuest {
   questId: number;
   mobProgress: Map<number, number>; // mobId -> current kill count
 }
 
+const MAX_TRACKED_QUESTS = 5;
+
 export default class QuestManager {
   activeQuests: Map<number, ActiveQuest> = new Map();
   // questId -> completion timestamp (ms) — needed for INTERVAL repeatables
   completedQuests: Map<number, number> = new Map();
+  // Quest Helper (QuestAlarm widget) tracking
+  trackedQuests: number[] = [];
+  autoTrack: boolean = true;
+  // questId -> whether completion requirements were already fulfilled (for
+  // firing the GMS "quest completed" notification exactly on the transition)
+  private fulfilledState: Map<number, boolean> = new Map();
   private character: MapleCharacter;
 
   constructor(character: MapleCharacter) {
     this.character = character;
+  }
+
+  // ─── Quest Helper tracking ───────────────────────────────────────
+
+  isTracked(questId: number): boolean {
+    return this.trackedQuests.includes(questId);
+  }
+
+  /** Track an in-progress quest in the Quest Helper (oldest drops when full). */
+  trackQuest(questId: number): boolean {
+    if (!this.activeQuests.has(questId)) return false;
+    UIQuestAlarm.visible = true; // re-open the helper panel if it was closed
+    if (this.isTracked(questId)) return true;
+    this.trackedQuests.push(questId);
+    while (this.trackedQuests.length > MAX_TRACKED_QUESTS) this.trackedQuests.shift();
+    return true;
+  }
+
+  untrackQuest(questId: number): void {
+    this.trackedQuests = this.trackedQuests.filter(id => id !== questId);
+    UIQuestAlarm.dismissQuestComplete(questId);
+  }
+
+  // ─── Fulfillment notification (GMS on-screen notice) ─────────────
+
+  /**
+   * Fire the authentic GMS notification when an active quest's completion
+   * requirements transition to fulfilled: QuestAlert light-burst effect over
+   * the character + QuestAlert jingle + bottom-center "Quest completed" notice.
+   */
+  private checkFulfilled(questId: number): void {
+    if (!this.activeQuests.has(questId)) return;
+    const fulfilled = this.canCompleteQuest(questId);
+    const wasFulfilled = this.fulfilledState.get(questId) || false;
+    this.fulfilledState.set(questId, fulfilled);
+
+    if (fulfilled && !wasFulfilled) {
+      const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
+      UIQuestAlarm.showQuestComplete(questId, questName);
+      this.character.playQuestFulfilled();
+    }
+  }
+
+  /** Re-check all active quests (called periodically — catches item-based quests). */
+  pollFulfillment(): void {
+    for (const questId of this.activeQuests.keys()) {
+      this.checkFulfilled(questId);
+    }
   }
 
   async initialize(): Promise<void> {
@@ -109,6 +166,10 @@ export default class QuestManager {
 
     this.activeQuests.set(questId, active);
     this.character.playQuestStart();
+    if (this.autoTrack) this.trackQuest(questId);
+    // Seed fulfillment state so quests that start already-completable don't
+    // instantly fire the completed notification
+    this.fulfilledState.set(questId, this.canCompleteQuest(questId));
 
     // Apply start rewards (e.g. quest items given to player on accept)
     const rewards = QuestData.rewards.get(questId);
@@ -202,6 +263,8 @@ export default class QuestManager {
     // Move from active to completed
     this.activeQuests.delete(questId);
     this.completedQuests.set(questId, Date.now());
+    this.untrackQuest(questId);
+    this.fulfilledState.delete(questId);
     this.character.playQuestClear();
 
     const questName = QuestData.quests.get(questId)?.name || questId;
@@ -234,7 +297,11 @@ export default class QuestManager {
     }
 
     this.activeQuests.set(questId, active);
-    if (!savedMobProgress) this.character.playQuestStart();
+    this.fulfilledState.set(questId, this.canCompleteQuest(questId));
+    if (!savedMobProgress) {
+      this.character.playQuestStart();
+      if (this.autoTrack) this.trackQuest(questId);
+    }
     console.log(`Quest force-started: ${QuestData.quests.get(questId)?.name} (#${questId})${savedMobProgress ? ' (restored)' : ''}`);
   }
 
@@ -242,6 +309,8 @@ export default class QuestManager {
   forceCompleteQuest(questId: number, completedAt?: number): void {
     this.activeQuests.delete(questId);
     this.completedQuests.set(questId, completedAt ?? Date.now());
+    this.untrackQuest(questId);
+    this.fulfilledState.delete(questId);
     if (completedAt === undefined) this.character.playQuestClear();
     console.log(`Quest force-completed: ${QuestData.quests.get(questId)?.name} (#${questId})`);
   }
@@ -259,6 +328,8 @@ export default class QuestManager {
 
   forfeitQuest(questId: number): void {
     this.activeQuests.delete(questId);
+    this.untrackQuest(questId);
+    this.fulfilledState.delete(questId);
     console.log(`Quest forfeited: ${QuestData.quests.get(questId)?.name}`);
   }
 
@@ -274,6 +345,7 @@ export default class QuestManager {
           const newCount = current + 1;
           const questName = QuestData.quests.get(questId)?.name || '';
           console.log(`[Quest] ${questName}: killed mob ${mobId} (${newCount}/${required})`);
+          this.checkFulfilled(questId);
         }
       }
     }

@@ -282,6 +282,12 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
       MyCharacter.skillManager.deserialize(charData.skills);
     }
 
+    // Hotkey bindings (skills + items)
+    if (charData.keymap?.length) {
+      const UIHotkeyBar = (await import('./UI/UIHotkeyBar')).default;
+      await UIHotkeyBar.deserialize(charData.keymap);
+    }
+
     // Server IDs and position
     (MyCharacter as any)._serverCharId = charData.id;
     (MyCharacter as any)._startMapId = charData.mapId;

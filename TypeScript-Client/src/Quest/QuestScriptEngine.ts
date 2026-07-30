@@ -1,6 +1,5 @@
-import QuestData, { npcNames, mobNames } from './QuestData';
+import QuestData, { npcNames, mobNames, ensureItemNames, getItemNameSync } from './QuestData';
 import { QuestState } from './QuestData';
-import WZManager from '../wz-utils/WZManager';
 import { fadeToBlack } from '../MapState';
 import { makeSafeScriptApi, createScriptJavaShim } from '../NpcScriptEngine';
 
@@ -20,28 +19,15 @@ export interface PendingDialog {
   inlineImages?: InlineImage[];
 }
 
-// Global item name cache — loaded on demand
-const itemNameCache: Map<number, string> = new Map();
-
+// Item names come from QuestData's shared cache, which recursively walks
+// nested String.wz structures (Eqp.img is Eqp/Accessory/<id> etc. — a flat
+// scan misses every equip/medal name)
 export async function loadItemNames() {
-  if (itemNameCache.size > 0) return;
-  const files = ['Consume', 'Eqp', 'Etc', 'Ins', 'Cash'];
-  for (const file of files) {
-    try {
-      const node: any = await WZManager.get(`String.wz/${file}.img`);
-      if (!node?.nChildren) continue;
-      for (const child of node.nChildren) {
-        const id = parseInt(child.nName);
-        if (isNaN(id)) continue;
-        const nameNode = child.nGet?.('name');
-        if (nameNode?.nValue) itemNameCache.set(id, nameNode.nValue);
-      }
-    } catch {}
-  }
+  await ensureItemNames();
 }
 
 export function getItemName(itemId: number): string {
-  return itemNameCache.get(itemId) || `item`;
+  return getItemNameSync(itemId);
 }
 
 // Strip MapleStory format codes from script dialog text
@@ -54,10 +40,10 @@ function stripScriptCodes(text: string): string {
     .replace(/#p(\d+)#/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
     .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
     .replace(/#a\d+#/g, '')
-    .replace(/#t(\d+)#/g, (_, id) => itemNameCache.get(parseInt(id)) || 'item')
+    .replace(/#t(\d+):?#/g, (_, id) => getItemNameSync(parseInt(id)).trim())
     .replace(/#m\d+#/g, 'map')
-    .replace(/#i\d+#/g, '').replace(/#c\d+#/g, '')
-    .replace(/#v(\d+)#/g, '\x01ITEM:$1\x02')  // item icon placeholder
+    .replace(/#i\d+:?#/g, '').replace(/#c\d+:?#/g, '')
+    .replace(/#v(\d+):?#/g, '\x01ITEM:$1\x02')  // item icon placeholder (some GMS texts use #v<id>:#)
     .replace(/#fUI\/UIWindow\.img\/QuestIcon\/(\d+)\/\d+#/g, '\x01QICON:$1\x02')  // quest icon placeholder
     .replace(/#f[^#]*#/g, '') // other image paths — strip
     .replace(/#L\d+#/g, '').replace(/#l/g, '')
@@ -67,7 +53,9 @@ function stripScriptCodes(text: string): string {
 
 export default class QuestScriptEngine {
   private scriptCache: Map<number, string> = new Map();
-  private status: number = -1;
+  // Per-conversation script closure — see advance() for why this persists
+  private scriptFuncs: { start: Function | null; end: Function | null } | null = null;
+  private scriptQm: any = null;
   private currentQuestId: number = 0;
   private currentPhase: 'start' | 'end' = 'start';
   pendingDialog: PendingDialog | null = null;
@@ -111,8 +99,10 @@ export default class QuestScriptEngine {
     this.onShowDialog = opts.onShowDialog;
     this.onDispose = opts.onDispose;
     this.changeMapFn = opts.changeMap || null;
-    this.status = -1;
     this.disposed = false;
+    // Fresh conversation — new script closure with fresh top-level vars
+    this.scriptFuncs = null;
+    this.scriptQm = null;
 
     await this.advance(1, 0, -1);
   }
@@ -133,27 +123,29 @@ export default class QuestScriptEngine {
     this.pendingDialog = null;
     this.disposed = false;
 
-    const qm = this.createQM();
-
     try {
-      // Replace the initial status declaration with our persisted value
-      const modifiedScript = scriptCode.replace(
-        /var\s+status\s*=\s*-?\d+\s*;?/,
-        `var status = ${this.status};`
-      );
+      // Build the script closure once per conversation — start/end capture
+      // ALL the script's top-level vars (status, selections, flags), so they
+      // persist across interactions like the original server's per-
+      // conversation script instance. Re-running the source each time reset
+      // helper vars (only `status` was patched back in), which broke every
+      // script that remembers a selection between pages.
+      if (!this.scriptFuncs) {
+        this.scriptQm = this.createQM();
+        const shim = createScriptJavaShim(this.scriptQm);
+        const factory = new Function('qm', 'Java', 'java', 'Packages', `
+          ${scriptCode}
+          return {
+            start: typeof start === 'function' ? start : null,
+            end: typeof end === 'function' ? end : null,
+          };
+        `);
+        this.scriptFuncs = factory(this.scriptQm, shim.Java, shim.java, shim.Packages);
+      }
 
-      const shim = createScriptJavaShim(qm);
-      const fn = new Function('qm', 'Java', 'java', 'Packages', `
-        ${modifiedScript}
-        if (typeof ${this.currentPhase} === 'function') {
-          ${this.currentPhase}(${mode}, ${type}, ${selection});
-        }
-        return status;
-      `);
-
-      const newStatus = fn(qm, shim.Java, shim.java, shim.Packages);
-      if (typeof newStatus === 'number') {
-        this.status = newStatus;
+      const fn = (this.scriptFuncs as any)?.[this.currentPhase];
+      if (typeof fn === 'function') {
+        fn(mode, type, selection);
       }
     } catch (e) {
       console.error(`[QuestScript] Error in quest ${this.currentQuestId} (${this.currentPhase}):`, e);
@@ -161,15 +153,16 @@ export default class QuestScriptEngine {
       return;
     }
 
-    if (this.pendingDialog && this.disposed) {
+    const dialog = this.pendingDialog as PendingDialog | null;
+    if (dialog && this.disposed) {
       // Script sent a final message AND disposed — show as one-shot OK dialog
       // Next advance() call will see disposed=true and call onDispose to close
-      this.pendingDialog.type = 'ok';
-      this.onShowDialog?.(this.pendingDialog);
+      dialog.type = 'ok';
+      this.onShowDialog?.(dialog);
     } else if (this.disposed) {
       this.onDispose?.();
-    } else if (this.pendingDialog) {
-      this.onShowDialog?.(this.pendingDialog);
+    } else if (dialog) {
+      this.onShowDialog?.(dialog);
     }
   }
 
@@ -237,6 +230,7 @@ export default class QuestScriptEngine {
           questManager?.removeItems(itemId, -count);
           console.log(`[QuestScript] -${-count}x item #${itemId}`);
         }
+        import('../UI/UIChatLog').then(({ default: UIChatLog }) => UIChatLog.logItemChange(itemId, count)).catch(() => {});
       },
       haveItem(itemId: number, count?: number) {
         const has = questManager?.getItemCount(itemId) ?? 0;
@@ -270,9 +264,15 @@ export default class QuestScriptEngine {
       showInfo(path: string) { /* tutorial images — TODO */ },
       warp(mapId: number, portalId?: number) {
         engine.disposed = true;
+        const id = Number(mapId);
+        // A broken script must never warp via changeMap's defaultMap fallback
+        if (!Number.isFinite(id) || id <= 0) {
+          console.error(`[QuestScript] Quest ${engine.currentQuestId} warp with invalid mapId:`, mapId);
+          return;
+        }
         if (engine.changeMapFn) {
           fadeToBlack();
-          engine.changeMapFn(mapId);
+          engine.changeMapFn(id);
         }
       },
       teachSkill(skillId: number, level?: number, masterLevel?: number) {

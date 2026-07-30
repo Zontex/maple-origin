@@ -17,12 +17,15 @@ import ClickManager from "./UI/ClickManager";
 import ShopUI from "./UI/ShopUI";
 import WZManager from "./wz-utils/WZManager";
 import UIMiniMap from "./UI/UIMiniMap";
+import UIQuestAlarm from "./UI/UIQuestAlarm";
 import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
 import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
+import DirectionScene from "./Effects/DirectionScene";
+import TransportationManager from "./Transport/TransportationManager";
 
 // henesys 100000000
 // 100020100 - maps with pigs - useful to test fast things with mobs
@@ -32,7 +35,7 @@ const defaultMap = 1000000; // Southperry (Pio's map - has reactors)
 // const defaultMap: number = 100040102; // elinia - monkey map
 
 export interface MapState extends UIState {
-  changeMap: (map: number) => Promise<void>;
+  changeMap: (map: number, portalName?: string | number) => Promise<void>;
   isTouchControllsEnabled: boolean;
   joyStick: JoyStick;
   statsMenu: StatsMenuSprite;
@@ -66,6 +69,12 @@ const fadeDuration = 500; // ms
 let fadeTimer = 0;
 let fadeWaitForDoneLoading = false; // Wait for map to finish loading before fading in
 let oobRespawning = false; // Out-of-bounds respawn in progress
+// Map loads can race (reconnect re-login, cutscene warps, double-fired
+// transitions). Each initializeMapState takes a sequence number; a run that
+// has been superseded stops after its awaits instead of clobbering the
+// newer load's state — that half-applied state was rendering maps with no
+// player and no HUD.
+let mapLoadSeq = 0;
 
 // Call before map.load() — holds black screen until doneLoading
 export function fadeToBlack() {
@@ -77,7 +86,13 @@ export function fadeToBlack() {
   if (chatInput) chatInput.style.visibility = 'hidden';
 }
 
-async function initializeMapState(map = defaultMap, isFirstUpdate = false, portalName?: string) {
+async function initializeMapState(map = defaultMap, isFirstUpdate = false, portalName?: string | number) {
+  const loadSeq = ++mapLoadSeq;
+
+  // Any cutscene from the previous map is void now — restores the character
+  // and invalidates in-flight scene loads (map loads can race)
+  DirectionScene.cancel();
+
   // Hold black screen until map is fully loaded
   fadeAlpha = 1;
   fadeDirection = 'none';
@@ -95,16 +110,34 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
     MapleMap.doneLoading = true;
   }
 
+  // A newer load started while we were awaiting — let it finish the job
+  if (loadSeq !== mapLoadSeq) {
+    console.log(`[MapState] Map load ${map} superseded — aborting stale initialization`);
+    return;
+  }
+
   MyCharacter.map = MapleMap;
 
   if (isFirstUpdate) {
     await UIMap.initialize();
     await UIMiniMap.initialize();
+    await UIQuestAlarm.initialize();
+    UIQuestAlarm.setCharacter(MyCharacter);
+    if (loadSeq !== mapLoadSeq) {
+      console.log(`[MapState] Map load ${map} superseded — aborting stale initialization`);
+      return;
+    }
   }
 
   // Spawn at named portal if specified, otherwise first spawn portal (index 0)
   let spawned = false;
-  if (portalName && portalName !== 'sp' && MapleMap.portals) {
+  if (typeof portalName === 'number' && MapleMap.portals?.[portalName]) {
+    // Portal INDEX (Cosmic warpEveryone(map, pto) semantics — transport arrivals)
+    const indexedPortal = MapleMap.portals[portalName];
+    MyCharacter.pos.x = indexedPortal.x;
+    MyCharacter.pos.y = indexedPortal.y;
+    spawned = true;
+  } else if (typeof portalName === 'string' && portalName && portalName !== 'sp' && MapleMap.portals) {
     // Named portal (e.g. portal-to-portal transitions)
     const namedPortal = MapleMap.portals.find((p: any) => p.name === portalName);
     if (namedPortal) {
@@ -146,10 +179,32 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
   MyCharacter.pos.fallDistance = 0;
   MyCharacter.pos.landingImpactVy = 0;
   oobRespawning = false;
+
+  // v83 map-enter scripts (info/onUserEnter): the Maple Island job-experience
+  // rooms play a Direction3 cutscene that ends by warping back out
+  const JOB_INTRO_SCRIPTS: Record<string, string> = {
+    goSwordman: 'swordman',
+    goMagician: 'magician',
+    goArcher: 'archer',
+    goRogue: 'rogue',
+    goPirate: 'pirate',
+  };
+  const onUserEnter = MapleMap.wzNode?.info?.onUserEnter?.nValue;
+  const introJob = onUserEnter && JOB_INTRO_SCRIPTS[onUserEnter];
+  if (introJob) {
+    const started = await DirectionScene.startJobIntro(introJob, MyCharacter);
+    // The intro rooms have no exit portal — if the scene can't load, warp
+    // back out rather than stranding the player in an empty room
+    if (!started && loadSeq === mapLoadSeq) {
+      const returnMap = MapleMap.wzNode?.info?.returnMap?.nValue || 1020000;
+      console.warn(`[MapState] Job intro failed — returning to map ${returnMap}`);
+      MapStateInstance.changeMap(returnMap);
+    }
+  }
   // Fade-in will be triggered automatically when doneLoading becomes true
 }
 
-MapStateInstance.changeMap = async function (map = defaultMap, portalName?: string) {
+MapStateInstance.changeMap = async function (map = defaultMap, portalName?: string | number) {
   // Auto-save character before map transition
   MySocket.saveCharacterToServer();
   await initializeMapState(map, false, portalName);
@@ -293,6 +348,9 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
       // Minimap click (world button)
       if (UIMiniMap.handleClick(cx, cy)) return;
 
+      // Quest Helper widget — swallow clicks over it (handled via wasClicked)
+      if (UIQuestAlarm.containsPoint(cx, cy)) return;
+
       // Handle selection clicks on quest/NPC script dialogs
       if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {
         if (MapleMap.questDialog.handleClick(cx, cy)) return;
@@ -342,6 +400,10 @@ MapStateInstance.doUpdate = function (
 
   if (!!MapleMap.doneLoading) {
     MapleMap.update(msPerTick);
+
+    // Transportation schedules (boats/trains/elevator/timed rides) — wall-clock
+    // driven, so it belongs here rather than in any map-local timer
+    TransportationManager.update(MapleMap, (m, p) => MapStateInstance.changeMap(m, p));
 
     // Update ShopUI
     if (ShopUI.isVisible) {
@@ -400,8 +462,12 @@ MapStateInstance.doUpdate = function (
       }
       MyCharacter.update(msPerTick);
     } else {
+      // Cutscene: advance the scene and swallow all player input (GMS locks
+      // the UI while a Direction intro plays)
+      DirectionScene.update(msPerTick);
       const questDialogOpen = MapleMap.questDialog && !MapleMap.questDialog.isHidden;
-      const dialogOpen = !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen;
+      const dialogOpen =
+        !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen || DirectionScene.isActive;
 
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
@@ -427,26 +493,28 @@ MapStateInstance.doUpdate = function (
         }
       }
 
-      if (canvas.isKeyDown("s") && !this.previousKeyboardState.s) {
+      if (canvas.isKeyDown("s") && !this.previousKeyboardState.s && !DirectionScene.isActive) {
         this.statsMenu.setIsHidden(!this.statsMenu.isHidden);
       }
-      if (canvas.isKeyDown("i") && !this.previousKeyboardState.i) {
+      if (canvas.isKeyDown("i") && !this.previousKeyboardState.i && !DirectionScene.isActive) {
         this.inventoryMenu.setIsHidden(!this.inventoryMenu.isHidden);
       }
-      if (canvas.isKeyDown("q") && !this.previousKeyboardState.q) {
+      if (canvas.isKeyDown("q") && !this.previousKeyboardState.q && !DirectionScene.isActive) {
         this.questLog.setIsHidden(!this.questLog.isHidden);
       }
       if (canvas.isKeyDown("m") && !this.previousKeyboardState.m) {
-        UIMiniMap.isHidden = !UIMiniMap.isHidden;
+        // v83: M toggles the minimap between full view and the collapsed
+        // title strip — it can never be removed completely
+        UIMiniMap.viewMode = UIMiniMap.viewMode === 'max' ? 'min' : 'max';
       }
-      if (canvas.isKeyDown("e") && !this.previousKeyboardState.e) {
+      if (canvas.isKeyDown("e") && !this.previousKeyboardState.e && !DirectionScene.isActive) {
         this.equipMenu.setIsHidden(!this.equipMenu.isHidden);
       }
-      if (canvas.isKeyDown("k") && !(this.previousKeyboardState as any).k) {
+      if (canvas.isKeyDown("k") && !(this.previousKeyboardState as any).k && !DirectionScene.isActive) {
         this.skillMenu.setIsHidden(!this.skillMenu.isHidden);
       }
 
-      if (canvas.isKeyDown("esc")) {
+      if (canvas.isKeyDown("esc") && !DirectionScene.isActive) {
         // First check if any dialog is open
         if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {
           MapleMap.questDialog.hide();
@@ -548,6 +616,7 @@ MapStateInstance.doUpdate = function (
 
     UIMap.doUpdate(msPerTick, camera, canvas);
     UIMiniMap.update(msPerTick);
+    UIQuestAlarm.update(msPerTick, canvas);
     DebugDrag.update(canvas.mouseX, canvas.mouseY, canvas.clicked);
 
     this.UIMenus.forEach((menu) => {
@@ -601,6 +670,12 @@ MapStateInstance.doRender = function (
 
     // Minimap on top of game world
     UIMiniMap.render(canvas, camera);
+
+    // Quest Helper widget + quest notice balloons
+    UIQuestAlarm.render(canvas);
+
+    // Direction cutscene overlay (job-experience rooms) above the world
+    DirectionScene.render(canvas, camera);
 
     // UIMap draws HUD + cursor
     UIMap.doRender(canvas, camera, lag, msPerTick, tdelta);

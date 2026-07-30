@@ -9,6 +9,20 @@ function handlePlayerInfo(playerId, playerInfo) {
   if (!player) return;
 
   playerInfo.mapId = Number(playerInfo.mapId);
+  // A client mid-load can report NaN — keep the last known map instead of
+  // poisoning player.info/player.mapId (this fed disconnect saves map 10000)
+  if (!Number.isFinite(playerInfo.mapId) || playerInfo.mapId <= 0) {
+    const lastKnown = Number(player.mapId);
+    console.warn(`[Player] player_info with invalid mapId from ${playerId} — keeping ${player.mapId}`);
+    if (!Number.isFinite(lastKnown) || lastKnown <= 0) {
+      // No usable map at all — register the info so player_update isn't
+      // ignored, but defer join broadcast/host assignment until the client
+      // reports a real map (its update loop re-registers)
+      player.info = { ...playerInfo, mapId: undefined, id: playerId };
+      return;
+    }
+    playerInfo.mapId = lastKnown;
+  }
 
   player.info = { ...playerInfo, id: playerId };
   player.mapId = playerInfo.mapId;
@@ -28,7 +42,9 @@ function handlePlayerUpdate(playerId, updateData) {
 
   if (updateData.mapId !== undefined) {
     updateData.mapId = Number(updateData.mapId);
-  } else {
+  }
+  // NaN/0 map ids (client mid-load) must not replace the tracked map
+  if (!Number.isFinite(updateData.mapId) || updateData.mapId <= 0) {
     updateData.mapId = Number(player.mapId || player.info.mapId);
   }
 

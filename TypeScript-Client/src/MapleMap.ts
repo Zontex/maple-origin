@@ -17,16 +17,19 @@ import GameCanvas from "./GameCanvas";
 import UINpcTalk from './UI/UINpcTalk';
 import UIQuestDialog from './UI/UIQuestDialog';
 import QuestScriptEngine from './Quest/QuestScriptEngine';
-import NpcScriptEngine from './NpcScriptEngine';
+import NpcScriptEngine, { stripScriptCodes } from './NpcScriptEngine';
 import QuestData from './Quest/QuestData';
 import Reactor from './Reactor';
 import UIMiniMap from './UI/UIMiniMap';
+import UIShipClock from './UI/UIShipClock';
+import ShipObject from './Transport/ShipObject';
 import { _setMapleMap } from './Physics';
 
 export interface MapleMap {
   id: number | string;
   wzNode: any;
   isTown: boolean;
+  isSwimMap: boolean;
   footholds: any;
   boundaries: any;
   backgrounds: any;
@@ -46,6 +49,7 @@ export interface MapleMap {
   reactors: Reactor[];
   itemDrops: any;
   PlayerCharacter: any;
+  shipObject: any;
   doneLoading: boolean;
   changeMap: any;
   load: (id: number | string) => Promise<void>;
@@ -86,6 +90,8 @@ export interface MapleMap {
     canvasElement: HTMLElement,
     camera: CameraInterface
   ) => void;
+  tryNpcScript: (npc: any) => Promise<void>;
+  showDefaultNpcTalk: (npc: any) => Promise<void>;
 }
 
 const MapleMap = {} as MapleMap;
@@ -110,7 +116,9 @@ MapleMap.load = async function (id: number | string) {
   }
   this.wzNode = await WZManager.get(filename);
   this.isTown = !!this.wzNode.info.town.nValue;
-  console.log(`is town: ${this.isTown}`);
+  // Swim maps (info/swim=1) switch airborne physics to water physics
+  this.isSwimMap = !!this.wzNode.info.nGet("swim").nGet("nValue", 0);
+  console.log(`is town: ${this.isTown}, swim: ${this.isSwimMap}`);
   console.log("Map WZ Node:", this.wzNode);
   this.npcs = [];
   this.monsters = [];
@@ -141,6 +149,10 @@ MapleMap.load = async function (id: number | string) {
   this.objects = objects;
   this.portals = portals;
   this.names = names;
+
+  // Transport visuals: docked/enemy vessel (shipObj node) + departure clock
+  this.shipObject = await ShipObject.fromMapNode(this.wzNode, id as number);
+  UIShipClock.setFromMap(this.wzNode, id as number);
 
   // Phase 3: NPCs, monsters, reactors in parallel (all depend on footholds, not each other)
   await Promise.all([
@@ -173,6 +185,13 @@ MapleMap.load = async function (id: number | string) {
 
   // Mark done AFTER dialogs are ready — click handlers depend on them
   this.doneLoading = true;
+
+  // Apply a mob-host assignment that arrived while the map was loading
+  if ((this as any)._pendingHostMode !== undefined) {
+    const pending = (this as any)._pendingHostMode;
+    delete (this as any)._pendingHostMode;
+    this.setMobHostMode(pending);
+  }
 
   // Update minimap for the new map
   UIMiniMap.loadMapData();
@@ -443,6 +462,13 @@ MapleMap.spawnMonster = async function (opts: any = {}) {
 };
 
 MapleMap.setMobHostMode = function (isHost: boolean) {
+  // Host assignment can arrive while the map is still loading — remember it
+  // and apply when the monsters exist (late-spawned mobs also read
+  // __mySocket.isMobHost at spawn time)
+  if (!Array.isArray(this.monsters)) {
+    (this as any)._pendingHostMode = isHost;
+    return;
+  }
   for (const mob of this.monsters) {
     mob.isRemote = !isHost;
     if (mob.isRemote) {
@@ -592,6 +618,7 @@ MapleMap.loadNPCs = async function (wzNode) {
       cy: npcNode.cy.nValue,
       f: npcNode.nGet("f").nGet("nValue", 0),
       fh: npcNode.fh.nValue,
+      hide: npcNode.nGet("hide").nGet("nValue", 0),
       map: this
     });
   }
@@ -709,6 +736,7 @@ MapleMap.update = function (msPerTick) {
   }
 
   this.backgrounds.forEach((bg: Background) => bg.update(msPerTick));
+  this.shipObject?.update(msPerTick);
   this.objects.forEach((obj: Obj) => obj.update(msPerTick));
   this.npcs.forEach((npc: NPC) => npc.update(msPerTick));
   this.monsters.forEach((mob: Monster) => mob.update(msPerTick));
@@ -741,10 +769,30 @@ MapleMap.render = function (
   }
 
   currentMonsters = currentMonsters.filter((m) => !m.destroyed);
-  const draw = (obj: any) =>
-    obj.draw(canvas, camera, lag, msPerTick, tdelta);
+  // One entity's draw error must not abort the frame — everything drawn
+  // after it (mobs, portals, HUD) would silently vanish
+  const draw = (obj: any) => {
+    try {
+      obj.draw(canvas, camera, lag, msPerTick, tdelta);
+    } catch (e) {
+      if (!(obj as any)._drawErrorLogged) {
+        (obj as any)._drawErrorLogged = true;
+        console.error('[MapleMap] draw failed for entity:', e);
+      }
+    }
+  };
 
   this.backgrounds.filter((bg: Background) => !bg.front).forEach(draw);
+
+  // Docked/enemy vessel sits on the water behind every gameplay layer
+  if (this.shipObject) {
+    try { this.shipObject.draw(canvas, camera); } catch (e) {
+      if (!this.shipObject._drawErrorLogged) {
+        this.shipObject._drawErrorLogged = true;
+        console.error('[MapleMap] shipObj draw failed:', e);
+      }
+    }
+  }
 
   // Draw character effects (level-up, quest clear, quest start, EXP gain)
   const drawEffect = (c: MapleCharacter, frames: any, frameIndex: number) => {
@@ -795,7 +843,7 @@ MapleMap.render = function (
     for (let i = 0; i <= 7; i++) drawLayer(i);
 
     if (this.PlayerCharacter) {
-      this.PlayerCharacter.draw(canvas, camera, lag, msPerTick, tdelta);
+      draw(this.PlayerCharacter);
       drawPlayerEffects(this.PlayerCharacter);
     }
   } else {
@@ -803,7 +851,7 @@ MapleMap.render = function (
     for (let i = 0; i <= playerLayer; i++) drawLayer(i);
 
     if (this.PlayerCharacter) {
-      this.PlayerCharacter.draw(canvas, camera, lag, msPerTick, tdelta);
+      draw(this.PlayerCharacter);
       drawPlayerEffects(this.PlayerCharacter);
     }
 
@@ -828,6 +876,9 @@ MapleMap.render = function (
   this.itemDrops.forEach((drop: DropItemSprite) => {
     drop.draw(canvas, camera);
   });
+
+  // Station departure clock (world-space) / timed-ride countdown
+  UIShipClock.draw(canvas, camera);
 
   // Object.values(this.footholds).forEach(draw); // debug: draw foothold lines
 };
@@ -861,7 +912,7 @@ async function _handleClickInner(
   console.log("Click detected at:", mouseX, mouseY);
 
   for (const npc of this.npcs as any[]) {
-    if (!npc.pos) continue;
+    if (!npc.pos || npc.hide) continue;
     // Compute hitbox from the NPC's current sprite frame (same coords as draw())
     const currentFrame = npc.stances?.[npc.stance]?.frames?.[npc.frame];
     const spriteW = currentFrame?.nWidth || 56;
@@ -949,10 +1000,10 @@ async function _handleClickInner(
               onDispose: () => {
                 dialog.hide();
               },
-              changeMap: async (mapId: number, portalName?: string) => {
+              changeMap: async (mapId: number, portalName?: string | number) => {
                 const mapState = (window as any).MapStateInstance;
                 if (mapState?.changeMap) {
-                  await mapState.changeMap(mapId);
+                  await mapState.changeMap(mapId, portalName);
                 }
               },
             });
@@ -1097,7 +1148,7 @@ async function _handleClickInner(
 };
 
 
-// Try running an NPC script; falls back to generic "Hello" dialog
+// Try running an NPC script; falls back to the NPC's default dialogue
 MapleMap.tryNpcScript = async function (npc: any) {
   const engine = this.npcScriptEngine;
   const hasScript = await engine.hasScript(npc.id);
@@ -1111,8 +1162,7 @@ MapleMap.tryNpcScript = async function (npc: any) {
       ShopUI.show(npc.id);
       return;
     }
-    await this.npcDialog.changeText(npc.id, null, npc.strings.name, 'Hello');
-    this.npcDialog.setIsHidden(false);
+    await this.showDefaultNpcTalk(npc);
     return;
   }
 
@@ -1144,13 +1194,49 @@ MapleMap.tryNpcScript = async function (npc: any) {
     onDispose: () => {
       dialog.hide();
     },
-    changeMap: async (mapId: number, portalName?: string) => {
+    changeMap: async (mapId: number, portalName?: string | number) => {
       const mapState = (window as any).MapStateInstance;
       if (mapState?.changeMap) {
-        await mapState.changeMap(mapId);
+        await mapState.changeMap(mapId, portalName);
       }
     },
   });
+};
+
+// Authentic v83 behavior for script-less, quest-less NPCs: show the NPC's
+// default dialogue lines (d0/d1 from String.wz/Npc.img) as a paged dialog.
+// NPCs with no default dialogue say nothing at all — the original client
+// simply doesn't open a chat window for them.
+MapleMap.showDefaultNpcTalk = async function (npc: any) {
+  const dLines: string[] = npc.strings?.questDialogues || [];
+  if (dLines.length === 0) return;
+
+  // d-lines use the same #p/#t/#b format codes as script dialogue
+  const { ensureItemNames } = await import('./Quest/QuestData');
+  await ensureItemNames();
+
+  const dialog = this.questDialog;
+  const npcName = npc.strings?.name || '';
+  let page = 0;
+  const showPage = () => {
+    const last = page === dLines.length - 1;
+    dialog.showScriptDialog({
+      npcId: npc.id,
+      npcName,
+      questName: '',
+      text: stripScriptCodes(dLines[page]),
+      dialogType: last ? 'ok' : 'next',
+      onAction: (mode: number) => {
+        if (mode === -1 || last) {
+          dialog.hide();
+          return;
+        }
+        page++;
+        showPage();
+      },
+    });
+  };
+  showPage();
 };
 
 export default MapleMap;

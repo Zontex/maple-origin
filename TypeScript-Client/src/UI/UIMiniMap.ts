@@ -46,8 +46,19 @@ const UIMiniMap = {
   mapMark: null as HTMLImageElement | null,
   mapMarkName: '',
 
-  // Whether minimap is hidden
+  // Hidden only for maps with no minimap data (info/hideMinimap)
   isHidden: false,
+  // v83 minimap states: 'max' = full map, 'min' = collapsed title strip.
+  // The M key (or the -/+ header buttons) toggles between them.
+  viewMode: 'max' as 'max' | 'min',
+  minStrip: null as { w: HTMLImageElement; c: HTMLImageElement; e: HTMLImageElement } | null,
+  btMin: null as HTMLImageElement | null,
+  btMax: null as HTMLImageElement | null,
+  // Hitboxes for the collapsed strip's buttons, rebuilt each frame it renders
+  _minLayout: null as {
+    btMaxX: number; btMaxY: number; btMaxW: number; btMaxH: number;
+    mapBtnX: number; mapBtnY: number; mapBtnW: number; mapBtnH: number;
+  } | null,
 
   // Cached offscreen canvas for the static frame (rebuilt on map change)
   _cachedFrame: null as HTMLCanvasElement | null,
@@ -63,6 +74,8 @@ const UIMiniMap = {
     innerW: number; innerH: number;
     worldBtnX: number; worldBtnY: number;
     worldBtnW: number; worldBtnH: number;
+    minBtnX: number; minBtnY: number;
+    minBtnW: number; minBtnH: number;
   } | null,
 };
 
@@ -88,6 +101,18 @@ UIMiniMap.initialize = async function () {
 
     this.titleImg = miniMapNode.title.nGetImage();
     this.worldBtnNormal = miniMapNode.BtMap.normal.nGet('0').nGetImage();
+
+    const minNode = miniMapNode.Min;
+    this.minStrip = {
+      w: minNode.w.nGetImage(),
+      c: minNode.c.nGetImage(),
+      e: minNode.e.nGetImage(),
+    };
+
+    // v83 minimap header buttons: blue -/+ squares from Basic.img
+    const basic = await WZManager.get('UI.wz/Basic.img');
+    this.btMin = basic.BtMin.normal.nGet('0').nGetImage();
+    this.btMax = basic.BtMax.normal.nGet('0').nGetImage();
 
     const mapHelper = await WZManager.get('Map.wz/MapHelper.img');
     const mmIcons = mapHelper.minimap;
@@ -282,13 +307,20 @@ UIMiniMap._buildCache = function () {
     draw(this.titleImg, nwW + 5, 8);
   }
 
-  // WORLD button
+  // WORLD button + minimize (-) button to its left, like the v83 header
   const worldBtnW = this.worldBtnNormal?.width || 36;
   const worldBtnH = this.worldBtnNormal?.height || 12;
   const worldBtnX = totalW - neW - worldBtnW - 4;
   const worldBtnY = 6;
   if (this.worldBtnNormal && this.worldBtnNormal.width > 0) {
     draw(this.worldBtnNormal, worldBtnX, worldBtnY);
+  }
+  const minBtnW = this.btMin?.width || 12;
+  const minBtnH = this.btMin?.height || 12;
+  const minBtnX = worldBtnX - minBtnW - 3;
+  const minBtnY = worldBtnY;
+  if (this.btMin && this.btMin.width > 0) {
+    draw(this.btMin, minBtnX, minBtnY);
   }
 
   // Map mark icon (38x38)
@@ -349,7 +381,9 @@ UIMiniMap._buildCache = function () {
     const mw = md.width;
     const mh = md.height;
     for (const portal of MapleMap.portals) {
-      if (portal.type === 0) continue; // spawn points
+      // Only portals visible in the world (regular=2, GM event=4, visible
+      // scripted=7) get a minimap dot — invisible/touch/script triggers don't
+      if (portal.type !== 2 && portal.type !== 4 && portal.type !== 7) continue;
       if (portal.toMap >= 999999999 && !portal.script) continue; // non-functional portals
       const px = mapDrawX + (portal.x + cx) * mapImgW / mw - (portalIcon.width || 4) / 2;
       const py = mapDrawY + (portal.y + cy) * mapImgH / mh - (portalIcon.height || 4) / 2;
@@ -364,7 +398,7 @@ UIMiniMap._buildCache = function () {
     const mw = md.width;
     const mh = md.height;
     for (const npc of MapleMap.npcs) {
-      if (!npc.x) continue;
+      if (!npc.x || npc.hide) continue;
       const nx = mapDrawX + (npc.x + cx) * mapImgW / mw - (npcIcon.width || 2) / 2;
       const ny = mapDrawY + ((npc.cy || npc.y || 0) + cy) * mapImgH / mh - (npcIcon.height || 4) / 2;
       draw(npcIcon, nx, ny);
@@ -386,6 +420,8 @@ UIMiniMap._buildCache = function () {
     innerW, innerH,
     worldBtnX, worldBtnY,
     worldBtnW, worldBtnH,
+    minBtnX, minBtnY,
+    minBtnW, minBtnH,
   };
 };
 
@@ -399,10 +435,61 @@ UIMiniMap.render = function (canvas: GameCanvas, _camera: CameraInterface) {
   // Build cache if needed (once per map)
   if (!this._cachedFrame) {
     this._buildCache();
-    if (!this._cachedFrame || !this._layout) return;
+  }
+  const L = this._layout;
+  if (!this._cachedFrame || !L) return;
+
+  // Collapsed state (v83): Min/w + stretched Min/c + Min/e strip sized to
+  // the map name, with the [+] and [MAP] buttons at the right end
+  if (this.viewMode === 'min' && this.minStrip) {
+    const bx = L.bx, by = L.by;
+    const { w, c, e } = this.minStrip;
+    const ctx = canvas.context;
+
+    const mapName = (typeof MapleMap.names?.mapName === 'string' && MapleMap.names.mapName) || '';
+    ctx.font = 'bold 12px Arial';
+    const textW = Math.ceil(ctx.measureText(mapName).width);
+
+    const maxBtnW = this.btMax?.width || 12;
+    const maxBtnH = this.btMax?.height || 12;
+    const mapBtnW = this.worldBtnNormal?.width || 36;
+    const mapBtnH = this.worldBtnNormal?.height || 12;
+
+    const textX = bx + w.width + 2;
+    const btnsW = maxBtnW + 3 + mapBtnW;
+    const cW = 2 + textW + 8 + btnsW + 2;
+    const stripH = c.height || 20;
+
+    canvas.drawImage({ img: w, dx: bx, dy: by });
+    ctx.drawImage(c, bx + w.width, by, cW, stripH);
+    canvas.drawImage({ img: e, dx: bx + w.width + cW, dy: by });
+
+    if (mapName) {
+      ctx.save();
+      ctx.font = 'bold 12px Arial';
+      ctx.fillStyle = '#000000';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(mapName, textX, by + Math.floor(stripH / 2) + 1);
+      ctx.restore();
+    }
+
+    const btnY = by + Math.floor((stripH - maxBtnH) / 2);
+    const maxBtnX = textX + textW + 8;
+    const mapBtnX = maxBtnX + maxBtnW + 3;
+    if (this.btMax && this.btMax.width > 0) {
+      canvas.drawImage({ img: this.btMax, dx: maxBtnX, dy: btnY });
+    }
+    if (this.worldBtnNormal && this.worldBtnNormal.width > 0) {
+      canvas.drawImage({ img: this.worldBtnNormal, dx: mapBtnX, dy: by + Math.floor((stripH - mapBtnH) / 2) });
+    }
+
+    this._minLayout = {
+      btMaxX: maxBtnX, btMaxY: btnY, btMaxW: maxBtnW, btMaxH: maxBtnH,
+      mapBtnX, mapBtnY: by + Math.floor((stripH - mapBtnH) / 2), mapBtnW, mapBtnH,
+    };
+    return;
   }
 
-  const L = this._layout;
   const bx = L.bx;
   const by = L.by;
 
@@ -455,13 +542,34 @@ UIMiniMap.render = function (canvas: GameCanvas, _camera: CameraInterface) {
 UIMiniMap.handleClick = function (cx: number, cy: number): boolean {
   if (this.isHidden || !this._layout) return false;
 
+  const hit = (x: number, y: number, w: number, h: number) =>
+    cx >= x && cx <= x + w && cy >= y && cy <= y + h;
+
+  // Collapsed strip: [+] restores the full map, [MAP] opens the world map
+  if (this.viewMode === 'min') {
+    const M = this._minLayout;
+    if (!M) return false;
+    if (hit(M.btMaxX, M.btMaxY, M.btMaxW, M.btMaxH)) {
+      this.viewMode = 'max';
+      return true;
+    }
+    if (hit(M.mapBtnX, M.mapBtnY, M.mapBtnW, M.mapBtnH)) {
+      console.log('[UIMiniMap] World map button clicked');
+      return true;
+    }
+    return false;
+  }
+
   const L = this._layout;
   const bx = L.bx;
   const by = L.by;
-  const wbx = bx + L.worldBtnX;
-  const wby = by + L.worldBtnY;
 
-  if (cx >= wbx && cx <= wbx + L.worldBtnW && cy >= wby && cy <= wby + L.worldBtnH) {
+  if (hit(bx + L.minBtnX, by + L.minBtnY, L.minBtnW, L.minBtnH)) {
+    this.viewMode = 'min';
+    return true;
+  }
+
+  if (hit(bx + L.worldBtnX, by + L.worldBtnY, L.worldBtnW, L.worldBtnH)) {
     console.log('[UIMiniMap] World map button clicked');
     return true;
   }

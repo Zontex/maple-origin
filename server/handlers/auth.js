@@ -91,10 +91,26 @@ function handleSelectCharacter(playerId, data) {
 function handleSaveCharacter(playerId, data) {
   const player = players.get(playerId);
   if (!player || !player.characterId) return;
+  // Never persist a bogus map id — drop map/pos so the DB row keeps the last
+  // real location instead of teleporting the character to the start map
+  if (!validMapId(data.mapId)) {
+    console.warn(`[Save] save_character without valid mapId (${data.mapId}) for ${player.characterName || player.characterId} — keeping stored map`);
+    delete data.mapId;
+    delete data.posX;
+    delete data.posY;
+  }
   // Store full save data so disconnect handler has it
   player.lastSaveData = data;
   const result = Character.saveCharacter(player.characterId, data);
   sendToPlayer(player.ws, { type: 'save_character_result', ...result });
+}
+
+// A usable in-game map id, or null. NaN/0/undefined (login screen, map still
+// loading) must NEVER be persisted — Number(NaN || fallback) short-circuits
+// through falsy NaN, which is how characters got teleported to map 10000.
+function validMapId(value) {
+  const id = Number(value);
+  return Number.isFinite(id) && id > 0 ? id : null;
 }
 
 function autoSaveCharacter(player) {
@@ -103,11 +119,18 @@ function autoSaveCharacter(player) {
   // Prefer the last full save from the client (has equipped/inventory/quests)
   // Fall back to player.info (position updates only) if no full save received yet
   if (player.lastSaveData) {
-    // Update position from latest player.info if available
-    if (player.info) {
-      player.lastSaveData.mapId = Number(player.info.mapId || player.lastSaveData.mapId || 10000);
+    // Update position from latest player.info — only with a valid map id;
+    // otherwise keep whatever the last full save recorded
+    const infoMapId = validMapId(player.info?.mapId);
+    if (infoMapId) {
+      player.lastSaveData.mapId = infoMapId;
       player.lastSaveData.posX = Math.round(player.info.x || player.lastSaveData.posX || 0);
       player.lastSaveData.posY = Math.round(player.info.y || player.lastSaveData.posY || 0);
+    } else if (!validMapId(player.lastSaveData.mapId)) {
+      // Neither source has a real map — leave the DB value untouched
+      delete player.lastSaveData.mapId;
+      delete player.lastSaveData.posX;
+      delete player.lastSaveData.posY;
     }
     const result = Character.saveCharacter(player.characterId, player.lastSaveData);
     if (result.success) {
@@ -124,9 +147,6 @@ function autoSaveCharacter(player) {
   if (!player.info) return;
   const info = player.info;
   const saveData = {
-    mapId: Number(info.mapId || player.mapId || 10000),
-    posX: Math.round(info.x || 0),
-    posY: Math.round(info.y || 0),
     level: info.level,
     exp: info.exp,
     str: info.str, dex: info.dex, int: info.int, luk: info.luk, ap: info.ap,
@@ -135,6 +155,16 @@ function autoSaveCharacter(player) {
     mesos: info.mesos,
     fame: info.fame,
   };
+  // Map/position only when the client reported a real in-game map — a save
+  // without them keeps the character where the DB last placed them
+  const mapId = validMapId(info.mapId) || validMapId(player.mapId);
+  if (mapId) {
+    saveData.mapId = mapId;
+    saveData.posX = Math.round(info.x || 0);
+    saveData.posY = Math.round(info.y || 0);
+  } else {
+    console.warn(`[Save] No valid mapId for ${player.characterName || player.characterId} — keeping stored map`);
+  }
   const result = Character.saveCharacter(player.characterId, saveData);
   if (result.success) {
     console.log(`[Save] Auto-saved ${player.characterName || player.characterId} (fallback)`);

@@ -266,7 +266,7 @@ node tools/wz-to-json.js <input.wz> <output_dir>
 - **Player equipment sync**: `sendPlayerInfo` and `sendPlayerUpdate` must include `equipped` array. Remote characters use this to render correct gear. Equipment changes detected via key comparison in `handlePlayerUpdate`.
 
 ## Quest Script Engine
-Backend quest scripts (`backend/scripts/quest/*.js`, 253 files) are plain JavaScript that run client-side via `new Function()`. They are copied to `TypeScript-Client/public/scripts/quest/`.
+Quest scripts (`TypeScript-Client/public/scripts/quest/*.js`, ~258 files, originally from the Cosmic v83 emulator) are plain JavaScript that run client-side via `new Function()`. The Cosmic backend reference copy has been deleted — `public/scripts/` is the only location. Cosmic's DB seed data (shops, drops, etc.) is preserved in `tools/cosmic-db-data/`.
 
 ### Script Pattern
 All scripts follow this structure:
@@ -275,10 +275,10 @@ var status = -1;
 function start(mode, type, selection) { /* dialog flow for quest start */ }
 function end(mode, type, selection) { /* dialog flow for quest completion */ }
 ```
-- `status` tracks the current dialog page, persisted across calls
+- `status` tracks the current dialog page
 - `mode`: 1 = forward/accept, 0 = back/decline, -1 = close
 - `type`: 0 = navigation, 1 = accept/decline or yes/no
-- Scripts are re-executed on each user interaction with the persisted `status`
+- The engine builds the script closure ONCE per conversation and calls its start/end (NPC: start/action) functions on each interaction — ALL top-level vars (`status`, `selectedMap`, `town`, ...) persist naturally for the whole conversation, like the original server's per-conversation script instance. Do NOT re-run the source per interaction: patching only `status` back in resets helper vars (this sent Phil's cab passengers to the defaultMap instead of their chosen town).
 
 ### Critical: Dialog Button Mode Rules
 - **Single-button dialogs (`sendNext`, `sendPrev`, `sendOk`) ALL send `mode=1`**. The button label is cosmetic — the single action always advances the script forward.
@@ -378,7 +378,7 @@ Use `Math.floor(itemId / 1000000)` to determine inventory tab:
 When any NPC/quest dialog opens, all UI menus (inventory, stats, quest log) should be closed automatically via `MapStateInstance.closeAllMenus()`.
 
 ## NPC Script Engine
-Backend NPC scripts (`backend/scripts/npc/*.js`, 708 files) run client-side via `new Function()`. They are copied to `TypeScript-Client/public/scripts/npc/`.
+NPC scripts (`TypeScript-Client/public/scripts/npc/*.js`, ~683 files, originally from the Cosmic v83 emulator) run client-side via `new Function()`. The Cosmic backend reference copy has been deleted — `public/scripts/` is the only location.
 
 ### Script Pattern
 NPC scripts follow this structure:
@@ -410,7 +410,11 @@ function action(mode, type, selection) { /* dialog flow */ }
 2. Check for quest listings — if NPC has available/in-progress/completable quests, show combined dialog with category headers
 3. If NPC also has a script, add "ETC" section with conversation option in the quest listing
 4. If no quests, try NPC script (NpcScriptEngine) — `tryNpcScript(npc)`
-5. Fallback: generic "Hello" dialog (UINpcTalk)
+5. Fallback (authentic v83): shop → open ShopUI; else show the NPC's default dialogue `d0`/`d1` lines from `String.wz/Npc.img` as a paged dialog (`showDefaultNpcTalk`); NPCs with no d-lines say nothing at all — never a made-up "Hello"
+
+### NPC Default Dialogue (String.wz/Npc.img)
+- `n0`, `n1`, ... — overhead chat balloon lines; the pool an NPC actually uses is listed by key in `Npc.wz/<id>.img/info/speak` (values like "n0", occasionally "d0"). NPCs without an `info/speak` node show no balloon.
+- `d0`, `d1`, ... — default click-dialogue pages (682 of 1733 NPCs have them, max 2). Shown as sendNext(d0) → sendOk(d1); single d0 → sendOk. Lines use standard format codes (`#p`, `#t`, `#b`) so they render through `stripScriptCodes` + UIQuestDialog.
 
 ### sendSimple Selection Parsing
 `sendSimple` text contains `#L<index>#<label>#l` patterns for selectable options:

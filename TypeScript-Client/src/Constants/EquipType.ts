@@ -133,7 +133,8 @@ const WEAPON_CONFIG: Record<number, WeaponConfig> = {
     isRanged: false,
     meleeRange: 70,
     stances: {
-      melee: [Stance.swingO1, Stance.swingO2, Stance.swingO3, Stance.stabO1, Stance.stabO2],
+      // Staff WZ sprites have no stabO2
+      melee: [Stance.swingO1, Stance.swingO2, Stance.swingO3, Stance.stabO1],
       ranged: [],
     },
   },
@@ -141,7 +142,8 @@ const WEAPON_CONFIG: Record<number, WeaponConfig> = {
     isRanged: false,
     meleeRange: 90,
     stances: {
-      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      // 2H blunt/blade weapons carry swingT frames, not swingO
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingT1, Stance.swingT2, Stance.swingT3],
       ranged: [],
     },
   },
@@ -149,7 +151,7 @@ const WEAPON_CONFIG: Record<number, WeaponConfig> = {
     isRanged: false,
     meleeRange: 90,
     stances: {
-      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingT1, Stance.swingT2, Stance.swingT3],
       ranged: [],
     },
   },
@@ -157,7 +159,7 @@ const WEAPON_CONFIG: Record<number, WeaponConfig> = {
     isRanged: false,
     meleeRange: 90,
     stances: {
-      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingT1, Stance.swingT2, Stance.swingT3],
       ranged: [],
     },
   },
@@ -165,7 +167,8 @@ const WEAPON_CONFIG: Record<number, WeaponConfig> = {
     isRanged: false,
     meleeRange: 100,
     stances: {
-      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2, Stance.swingO3],
+      // Spears/polearms only have stabT/swingP/swingT2 frames; spears favor stabs
+      melee: [Stance.stabT1, Stance.stabT2, Stance.swingP1],
       ranged: [],
     },
   },
@@ -173,7 +176,7 @@ const WEAPON_CONFIG: Record<number, WeaponConfig> = {
     isRanged: false,
     meleeRange: 100,
     stances: {
-      melee: [Stance.swingO1, Stance.swingO2, Stance.swingO3, Stance.stabO1, Stance.stabO2],
+      melee: [Stance.swingT2, Stance.swingP1, Stance.swingP2, Stance.stabT1, Stance.stabT2],
       ranged: [],
     },
   },
@@ -189,16 +192,19 @@ const WEAPON_CONFIG: Record<number, WeaponConfig> = {
     isRanged: true,
     meleeRange: 80,
     stances: {
-      melee: [Stance.swingT1, Stance.swingT3],
-      ranged: [Stance.shoot1],
+      // Crossbow WZ sprites: swingT1/stabT1 melee, shoot2 (not shoot1) firing
+      melee: [Stance.swingT1, Stance.stabT1],
+      ranged: [Stance.shoot2],
     },
   },
   [WeaponType.CLAW]: {
     isRanged: true,
     meleeRange: 60,
     stances: {
-      melee: [Stance.swingT1, Stance.swingT3],
-      ranged: [Stance.shoot1],
+      // Claw WZ sprites only have swingO/stabO frames — the v83 star throw
+      // is the one-hand flick (swingO1), there is no shoot stance for claws
+      melee: [Stance.stabO1, Stance.stabO2, Stance.swingO1, Stance.swingO2],
+      ranged: [Stance.swingO1],
     },
   },
   [WeaponType.KNUCKLER]: {

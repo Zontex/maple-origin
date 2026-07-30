@@ -39,6 +39,7 @@ export default class UIMesoDropDialog {
   private mode: DropDialogMode = 'meso';
   private itemName: string = '';
   private showInput: boolean = true;
+  private verb: string = 'drop';
 
   static async fromOpts(opts: { canvas: GameCanvas }) {
     const dialog = new UIMesoDropDialog(opts);
@@ -112,12 +113,13 @@ export default class UIMesoDropDialog {
     this.buttons.forEach(btn => ClickManager.addButton(btn));
   }
 
-  show(maxAmount: number, onConfirm: (amount: number) => void, mode: DropDialogMode = 'meso', itemName: string = '') {
+  show(maxAmount: number, onConfirm: (amount: number) => void, mode: DropDialogMode = 'meso', itemName: string = '', verb: string = 'drop') {
     this.isHidden = false;
     this.maxAmount = maxAmount;
     this.onConfirm = onConfirm;
     this.mode = mode;
     this.itemName = itemName;
+    this.verb = verb;
     this.errorMessage = '';
     this.errorTimer = 0;
 
@@ -258,7 +260,7 @@ export default class UIMesoDropDialog {
         align: 'center',
       });
       canvas.drawText({
-        text: `like to drop?`,
+        text: `like to ${this.verb}?`,
         x: textX,
         y: textAreaTop + 16,
         color: '#000000',
@@ -276,7 +278,7 @@ export default class UIMesoDropDialog {
         align: 'center',
       });
       canvas.drawText({
-        text: 'drop this item?',
+        text: `${this.verb} this item?`,
         x: textX,
         y: textAreaTop + 16,
         color: '#000000',

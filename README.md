@@ -138,9 +138,8 @@ maple-origin/
 │   ├── models/                # User + Character CRUD
 │   └── handlers/              # Auth, player, mob, item, chat
 ├── server.js                  # WebSocket server entry point
-├── backend/                   # Cosmic v83 Java reference (857 files)
-│   └── scripts/               # 1,823 JS scripts (NPC, quest, portal)
 └── tools/                     # WZ converter, parser, explorer
+    └── cosmic-db-data/        # Cosmic DB seed SQL (shops, drops) kept for conversion
 ```
 
 **Design principle:** Everything is rendered from WZ sprite data. No custom HTML/CSS UI, no canvas-drawn rectangles for panels.

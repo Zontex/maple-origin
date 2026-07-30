@@ -28,7 +28,13 @@ export async function getShopInfo(shopId: number): Promise<ShopInfo | null> {
       return null;
     }
   }
-  return shopDataCache.get(shopId) ?? null;
+  const direct = shopDataCache.get(shopId);
+  if (direct) return direct;
+  // Some shops have shopId != npcId (e.g. 57 → NPC 2002001); NPC clicks look up by npcId
+  for (const info of shopDataCache.values()) {
+    if (info.npcId === shopId) return info;
+  }
+  return null;
 }
 
 /** Get the sell price for an item (WZ price, matching original game) */

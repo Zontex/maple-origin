@@ -168,6 +168,15 @@ export default class UIQuestDialog {
     }
   }
 
+  /** Kick off async loads for any \x01ITEM:id\x02 inline icons so draw() finds them in the cache */
+  private preloadInlineIcons(texts: string[]) {
+    for (const t of texts) {
+      for (const m of t.matchAll(/\x01ITEM:(\d+)\x02/g)) {
+        void this.loadItemIcon(parseInt(m[1]));
+      }
+    }
+  }
+
   /** Return the ID of the randomly selected prop item (if any), for consistent quest completion */
   getSelectedPropItemId(): number | undefined {
     return this.selectedPropItem?.id;
@@ -365,6 +374,7 @@ export default class UIQuestDialog {
     // Resolve deferred #t and #c item codes now that item names are loaded
     const character = (window as any).charecter;
     this.sayMessages = allMessages.map(msg => resolveItemCodes(msg, character?.questManager));
+    this.preloadInlineIcons(this.sayMessages);
     this.sayOriginalIndices = originalIndices ?? allMessages.map((_, i) => i);
     this.messageIndex = 0;
     this.quizReply = null;
@@ -396,6 +406,8 @@ export default class UIQuestDialog {
 
   private buildPagesForCurrentMessage() {
     const text = this.quizReply ?? this.sayMessages[this.messageIndex] ?? '';
+    // Covers paths that set text without going through show()/accept (e.g. quiz replies)
+    this.preloadInlineIcons([text]);
     const lines = this.wrapText(text, TEXT_MAX_W);
 
     this.pages = [];
@@ -417,8 +429,12 @@ export default class UIQuestDialog {
 
   private recalcLayout() {
     // fillCount based on NPC sprite height AND text height
-    const currentLines = this.pages[this.currentPage]?.length || 1;
-    const textH = TEXT_TOP_OFFSET + currentLines * LINE_H;
+    const currentLines = this.pages[this.currentPage] || [''];
+    let textH = TEXT_TOP_OFFSET;
+    for (const line of currentLines) {
+      // Lines with inline item icons draw taller (icon ~32px vs LINE_H)
+      textH += /\x01ITEM:\d+\x02/.test(line) ? 34 : LINE_H;
+    }
 
     this.fillCount = 6;
     if (this.speakerImg) {
@@ -477,12 +493,36 @@ export default class UIQuestDialog {
       return;
     }
 
-    if (this.accepted) {
-      this.addButton(this.x + 9, bottomY, this.utilDlgExNode?.BtClose?.nChildren, () => this.hide());
-      return;
-    }
-
-    if (this.phase === 'inProgress') {
+    if (this.accepted || this.phase === 'inProgress') {
+      // Post-accept / in-progress pages navigate with Next/Prev; last page gets OK (GMS behavior)
+      if (!this.isLastPage || !this.isLastMessage) {
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
+          this.utilDlgExNode?.BtNext?.nChildren, () => {
+            if (!this.isLastPage) {
+              this.currentPage++;
+            } else {
+              this.messageIndex++;
+              this.buildPagesForCurrentMessage();
+            }
+            this.recalcLayout();
+          });
+      } else {
+        this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
+          this.utilDlgExNode?.BtOK?.nChildren, () => this.hide());
+      }
+      if (this.currentPage > 0 || this.messageIndex > 0) {
+        this.addButton(this.x + DIALOG_WIDTH - 120, bottomY,
+          this.utilDlgExNode?.BtPrev?.nChildren, () => {
+            if (this.currentPage > 0) {
+              this.currentPage--;
+            } else {
+              this.messageIndex = Math.max(0, this.messageIndex - 1);
+              this.buildPagesForCurrentMessage();
+              this.currentPage = Math.max(0, this.pages.length - 1);
+            }
+            this.recalcLayout();
+          });
+      }
       this.addButton(this.x + 9, bottomY, this.utilDlgExNode?.BtClose?.nChildren, () => this.hide());
       return;
     }
@@ -507,7 +547,7 @@ export default class UIQuestDialog {
     if (!this.isLastPage || !this.isLastMessage) {
       if (!selectionsActive) {
         this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
-          this.questNode?.BtOK?.nChildren, () => {
+          this.utilDlgExNode?.BtNext?.nChildren, () => {
             if (!this.isLastPage) {
               this.currentPage++;
             } else {
@@ -519,7 +559,7 @@ export default class UIQuestDialog {
       }
       if (this.currentPage > 0 || this.messageIndex > 0) {
         this.addButton(this.x + DIALOG_WIDTH - 120, bottomY,
-          this.questNode?.BtNo?.nChildren, () => {
+          this.utilDlgExNode?.BtPrev?.nChildren, () => {
             if (this.currentPage > 0) {
               this.currentPage--;
             } else {
@@ -547,15 +587,17 @@ export default class UIQuestDialog {
             this.selectionRects = [];
             const questDialogues = QuestData.dialogues.get(this.questId);
             const qmRef = (window as any).charecter?.questManager;
+            // Each Say.img yes entry is its own dialog page, navigated with Next/Prev (GMS behavior)
             if (questDialogues?.start?.yes?.length) {
-              const yesText = resolveItemCodes(questDialogues.start.yes.join(' '), qmRef);
-              this.pages = [this.wrapText(yesText, TEXT_MAX_W)];
+              this.sayMessages = questDialogues.start.yes.map(t => resolveItemCodes(t, qmRef));
             } else {
               const questInfo = QuestData.quests.get(this.questId);
-              const ipText = resolveItemCodes(questInfo?.inProgressText || 'Quest accepted!', qmRef);
-              this.pages = [this.wrapText(ipText, TEXT_MAX_W)];
+              this.sayMessages = [resolveItemCodes(questInfo?.inProgressText || 'Quest accepted!', qmRef)];
             }
-            this.currentPage = 0;
+            this.preloadInlineIcons(this.sayMessages);
+            this.sayOriginalIndices = [];
+            this.messageIndex = 0;
+            this.buildPagesForCurrentMessage();
             this.recalcLayout();
           });
         this.addButton(this.x + DIALOG_WIDTH - 60, bottomY,
@@ -563,9 +605,12 @@ export default class UIQuestDialog {
             const questDialogues = QuestData.dialogues.get(this.questId);
             if (questDialogues?.start?.no?.length) {
               this.accepted = true;
-              const noText = resolveItemCodes(questDialogues.start.no.join(' '), (window as any).charecter?.questManager);
-              this.pages = [this.wrapText(noText, TEXT_MAX_W)];
-              this.currentPage = 0;
+              const qmRef = (window as any).charecter?.questManager;
+              this.sayMessages = questDialogues.start.no.map(t => resolveItemCodes(t, qmRef));
+              this.preloadInlineIcons(this.sayMessages);
+              this.sayOriginalIndices = [];
+              this.messageIndex = 0;
+              this.buildPagesForCurrentMessage();
               this.recalcLayout();
             } else {
               this.hide();

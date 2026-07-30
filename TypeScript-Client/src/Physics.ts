@@ -66,6 +66,7 @@ class Physics {
   djump: any = null;
   isClimbing: boolean = false;
   flying: boolean = false;
+  swimming: boolean = false; // in a swim map — airborne physics become water physics
   walk_speed: number = default_walk_speed;
   landingImpactVy: number = 0; // Records vy at moment of landing for fall damage
   fallStartY: number = 0; // Y position when player left a foothold
@@ -125,8 +126,11 @@ class Physics {
       }
       fh = null;
     } else {
-      if (flying) {
-        vy = -shoe_swim_speed_v * swim_jump;
+      // In water: jump key gives a small upward swim kick (flappy-bird feel —
+      // each kick hops up, gravity pulls back down). The vy gate paces
+      // re-kicks while the key is held instead of stacking every frame.
+      if (this.swimming && vy > -80) {
+        vy = -shoe_swim_speed_v * swim_jump * 0.5;
       }
     }
     this.fh = fh;
@@ -204,12 +208,22 @@ class Physics {
     // Track when player becomes airborne for fall damage calculation
     const wasOnGround = !!this.fh;
 
+    // Swim maps switch airborne physics to water physics for everything
+    // that isn't a flying mob (fly mobs steer themselves)
+    this.swimming = !this.flying && !!getMapleMap()?.isSwimMap;
+
     let mleft = this.left && !this.right;
     let mright = !this.left && this.right;
     let delta = msPerTick / 1000;
     let vx = this.vx;
     let vy = this.vy;
     let fh = this.fh;
+
+    // Holding down on the ground = prone — you can't walk while crouched
+    if (fh && this.down && !this.isClimbing) {
+      mleft = false;
+      mright = false;
+    }
 
     // Flying entities (mobs with a fly stance) ignore gravity and footholds;
     // their AI steers vx/vy directly
@@ -264,6 +278,27 @@ class Physics {
         mvr += fh.force;
         this.vx = (mvr * fx) / len;
         this.vy = (mvr * fy) / len;
+      } else if (this.swimming) {
+        // Water physics, flappy-bird style: constant water gravity always
+        // pulls down toward a slow terminal sink speed — the jump kick (in
+        // jump()) is the only way up, so staying afloat takes repeated kicks.
+        // Horizontal keeps v83 swim feel: accelerate toward the swim speed
+        // cap, decay overspeed (kick/knockback) through drag.
+        const acc = (swim_force / shoe_mass) * delta;
+        const drag = (float_drag_1 / shoe_mass) * delta;
+        const maxH = swim_speed * shoe_swim_speed_h;
+        const waterGravity = 700;
+        const sinkTerminal = 300;
+
+        this.vx = mleft
+          ? vx < -maxH ? Math.min(-maxH, vx + drag) : Math.max(-maxH, vx - acc)
+          : mright
+          ? vx > maxH ? Math.max(maxH, vx - drag) : Math.min(maxH, vx + acc)
+          : vx > 0
+          ? Math.max(0, vx - drag)
+          : Math.min(0, vx + drag);
+
+        this.vy = Math.min(vy + waterGravity * delta, sinkTerminal);
       } else {
         let shoefloat = (float_drag_2 / shoe_mass) * delta;
         vy > 0
@@ -436,8 +471,9 @@ class Physics {
       // Just became airborne — record starting Y
       this.fallStartY = this.y;
     } else if (!wasOnGround && this.fh) {
-      // Just landed — compute fall distance (positive = fell downward)
-      this.fallDistance = this.y - this.fallStartY;
+      // Just landed — compute fall distance (positive = fell downward).
+      // Sinking through water never hurts.
+      this.fallDistance = this.swimming ? 0 : this.y - this.fallStartY;
     }
   }
 }

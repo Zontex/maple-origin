@@ -12,8 +12,15 @@ interface ReactorState {
   hitFrames: HTMLImageElement[];
   hitOrigins: { x: number; y: number }[];
   hitDelays: number[];
+  hitSound: HTMLAudioElement | null;
   nextState: number; // state to transition to on hit (from event)
 }
+
+// Reactors with no entry of their own in Sound.wz/Reactor.img borrow a sibling's sounds
+// (e.g. the Maple Island generic box 2001 uses box 2000's wooden hit sound)
+const REACTOR_SOUND_FALLBACK: Record<number, number> = {
+  2001: 2000,
+};
 
 export default class Reactor {
   id: number = 0;
@@ -118,6 +125,7 @@ export default class Reactor {
           hitFrames: [],
           hitOrigins: [],
           hitDelays: [],
+          hitSound: null,
           nextState: stateIndex + 1,
         };
 
@@ -178,6 +186,8 @@ export default class Reactor {
         }
       }
 
+      await this.loadHitSounds();
+
       console.log(`[Reactor] Loaded reactor ${this.id}: ${this.states.length} states (maxState=${this.maxState})`);
       for (let i = 0; i < this.states.length; i++) {
         const s = this.states[i];
@@ -185,6 +195,32 @@ export default class Reactor {
       }
     } catch (e) {
       console.error(`[Reactor] Failed to load reactor ${this.id}:`, e);
+    }
+  }
+
+  /** Load per-state hit sounds from Sound.wz/Reactor.img/<id>/<state>/Hit */
+  private async loadHitSounds(): Promise<void> {
+    const soundIds = [this.id];
+    if (REACTOR_SOUND_FALLBACK[this.id] !== undefined) {
+      soundIds.push(REACTOR_SOUND_FALLBACK[this.id]);
+    }
+
+    for (const soundId of soundIds) {
+      try {
+        const soundNode: any = await WZManager.get(`Sound.wz/Reactor.img/${soundId}`);
+        if (!soundNode) continue;
+        let found = false;
+        for (let i = 0; i < this.states.length; i++) {
+          const hitNode = this.resolveNode(soundNode[String(i)]?.Hit);
+          if (hitNode?.nGetAudio) {
+            this.states[i].hitSound = hitNode.nGetAudio();
+            found = true;
+          }
+        }
+        if (found) return;
+      } catch {
+        // No sound entry for this id — try the next candidate
+      }
     }
   }
 
@@ -200,6 +236,11 @@ export default class Reactor {
     const nextState = state.nextState;
     const willDestroy = nextState >= this.maxState - 1;
     this._isRemoteHit = isRemoteHit;
+
+    // Hit sound is audible for remote players' hits too
+    if (state.hitSound) {
+      try { PLAY_AUDIO(state.hitSound); } catch {}
+    }
 
     // Play hit animation from the CURRENT state (before advancing)
     if (state.hitFrames.length > 0) {

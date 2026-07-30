@@ -1,4 +1,5 @@
 import MyCharacter from "../MyCharacter";
+import UIMobGage from './UIMobGage';
 import WZManager from "../wz-utils/WZManager";
 import UICommon from "./UICommon";
 import MapleInput from "./MapleInput";
@@ -9,6 +10,8 @@ import ClickManager from "./ClickManager";
 import MapState from "../MapState";
 import GameCanvas from "../GameCanvas";
 import UIDevTools from "./UIDevTools";
+import UIHotkeyBar from "./UIHotkeyBar";
+import UIChatLog from "./UIChatLog";
 
 export interface UIMapInterface {
   statusBarLevelDigits: any[];
@@ -84,91 +87,95 @@ const startUIPosition = {
 };
 
 UIMap.addButtons = function (canvas) {
-  console.log("addButtons");
-  console.log(this.statusBarNode.EquipKey.nChildren);
+  // GMS v83 status-bar key row, right-aligned (left → right):
+  // BtClaim | EquipKey InvenKey StatKey SkillKey | KeySet | QuickSlot arrow
+  const rowY = 536 + startUIPosition.y;
+  const addBtn = (x: number, node: any, onClick: () => void, y: number = rowY) => {
+    const btn = new MapleStanceButton(canvas, {
+      x: x + startUIPosition.x,
+      y,
+      img: node.nChildren,
+      isRelativeToCamera: true,
+      isPartOfUI: true,
+      onClick,
+    });
+    ClickManager.addButton(btn);
+    this.buttons.add(btn);
+    return btn;
+  };
 
-  const quickSlot = new MapleStanceButton(canvas, {
-    x: 768 + startUIPosition.x,
-    y: 536 + startUIPosition.y,
-    img: this.statusBarNode.QuickSlot.nChildren,
-    isRelativeToCamera: true,
-    isPartOfUI: true,
-    onClick: () => {
-      // console.log("Current stance: ", self.stance);
-      console.log("equip click!");
-    },
-  });
-  ClickManager.addButton(quickSlot);
-  this.buttons.add(quickSlot);
+  // QuickSlot toggle — up arrow shown while the quickslot is hidden,
+  // down arrow while it is open (two overlapping buttons, one visible)
+  const syncQuickSlotArrows = () => {
+    quickSlotUp.isHidden = UIHotkeyBar.isVisible;
+    quickSlotDown.isHidden = !UIHotkeyBar.isVisible;
+  };
+  const toggleQuickSlot = () => {
+    UIHotkeyBar.isVisible = !UIHotkeyBar.isVisible;
+    syncQuickSlotArrows();
+  };
+  const quickSlotUp = addBtn(768, this.statusBarNode.QuickSlot, toggleQuickSlot);
+  const quickSlotDown = addBtn(768, this.statusBarNode.QuickSlotD, toggleQuickSlot);
+  syncQuickSlotArrows();
 
-  const keyboardlKey = new MapleStanceButton(canvas, {
-    x: 736 + startUIPosition.x,
-    y: 536 + startUIPosition.y,
-    img: this.statusBarNode.KeySet.nChildren,
-    isRelativeToCamera: true,
-    isPartOfUI: true,
-    onClick: () => {
-      // console.log("Current stance: ", self.stance);
-      console.log("keyboard settings click!");
-    },
+  addBtn(736, this.statusBarNode.KeySet, () => {
+    console.log("keyboard settings click!");
   });
-  ClickManager.addButton(keyboardlKey);
-  this.buttons.add(keyboardlKey);
+  addBtn(704, this.statusBarNode.SkillKey, () => {
+    if (MapState.skillMenu) {
+      MapState.skillMenu.setIsHidden(!MapState.skillMenu.isHidden);
+    }
+  });
+  addBtn(672, this.statusBarNode.StatKey, () => {
+    if (MapState.statsMenu) {
+      MapState.statsMenu.setIsHidden(!MapState.statsMenu.isHidden);
+    }
+  });
+  addBtn(640, this.statusBarNode.InvenKey, () => {
+    MapState.inventoryMenu.setIsHidden(!MapState.inventoryMenu.isHidden);
+  });
+  addBtn(608, this.statusBarNode.EquipKey, () => {
+    MapState.equipMenu.setIsHidden(!MapState.equipMenu.isHidden);
+  });
 
-  const skillKey = new MapleStanceButton(canvas, {
-    x: 704 + startUIPosition.x,
-    y: 536 + startUIPosition.y,
-    img: this.statusBarNode.SkillKey.nChildren,
-    isRelativeToCamera: true,
-    isPartOfUI: true,
-    onClick: () => {
-      if (MapState.skillMenu) {
-        MapState.skillMenu.setIsHidden(!MapState.skillMenu.isHidden);
-      }
-    },
-  });
-  ClickManager.addButton(skillKey);
-  this.buttons.add(skillKey);
+  // White claim (siren) button left of the key group — 20x19, nudged down
+  // to sit on the same baseline as the 20px pills
+  addBtn(583, this.statusBarNode.BtClaim, () => {
+    console.log("claim click!");
+  }, rowY + 1);
 
-  const invetoryKey = new MapleStanceButton(canvas, {
-    x: 672 + startUIPosition.x,
-    y: 536 + startUIPosition.y,
-    img: this.statusBarNode.InvenKey.nChildren,
-    isRelativeToCamera: true,
-    isPartOfUI: true,
-    onClick: () => {
-      // console.log("Current stance: ", self.stance);
-      console.log("inventory click!");
-      MapState.inventoryMenu.setIsHidden(!MapState.inventoryMenu.isHidden);
-    },
-  });
-  ClickManager.addButton(invetoryKey);
-  this.buttons.add(invetoryKey);
-
-  const equipKey = new MapleStanceButton(canvas, {
-    x: 640 + startUIPosition.x,
-    y: 536 + startUIPosition.y,
-    img: this.statusBarNode.EquipKey.nChildren,
-    isRelativeToCamera: true,
-    isPartOfUI: true,
-    onClick: () => {
-      MapState.equipMenu.setIsHidden(!MapState.equipMenu.isHidden);
-    },
-  });
-  ClickManager.addButton(equipKey);
-  this.buttons.add(equipKey);
+  // Big 54x34 buttons on the lower gray band, right-aligned under the key
+  // row (left → right): SHOP, TRADE, MENU, SHORT CUT
+  const bigY = 565 + startUIPosition.y;
+  addBtn(570, this.statusBarNode.BtShop, () => {
+    console.log("cash shop click — not implemented yet");
+  }, bigY);
+  addBtn(626, this.statusBarNode.BtNPT, () => {
+    console.log("trade click — not implemented yet");
+  }, bigY);
+  addBtn(682, this.statusBarNode.BtMenu, () => {
+    console.log("menu click — not implemented yet");
+  }, bigY);
+  addBtn(738, this.statusBarNode.BtShort, () => {
+    console.log("shortcut click — not implemented yet");
+  }, bigY);
 };
 
 UIMap.doUpdate = function (msPerTick, camera, canvas) {
   if (this.firstUpdate) {
     console.log("First update");
     this.chat = new MapleInput(canvas, {
-      x: 5,
+      x: 90,
       y: 540 + startUIPosition.y,
-      width: 530,
+      width: 445,
       color: "#000000",
       background: "transparent",
       height: 13,
+    });
+    UIChatLog.notice('[Welcome] Welcome to MapleStory!!');
+    // Minimized chat closes the input once typing ends
+    this.chat.addFocusoutListener(() => {
+      UIChatLog.typing = false;
     });
     this.chat.addSubmitListener(() => {
       const msg = this.chat!.input.value;
@@ -206,7 +213,8 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
         } else {
           // Regular chat message - show in a chat balloon
           this.showPlayerChatBalloon(msg);
-          
+          UIChatLog.addMessage(`${MyCharacter.name} : ${msg}`, 'player');
+
           // Send chat message to other players via socket
           import('../mysocket').then(({ default: MySocket }) => {
             MySocket.sendChatMessage(msg);
@@ -223,7 +231,17 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
     this.addButtons(canvas);
   }
   if (!canvas.focusInput && canvas.focusGame && canvas.isKeyDown("enter")) {
+    // Minimized chat opens the input just for typing (GMS behavior).
+    // Un-hide before focus() — a display:none input can't take focus.
+    if (!UIChatLog.expanded) UIChatLog.typing = true;
+    this.chat!.input.style.display = '';
     this.chat!.input.focus();
+  }
+  // The HTML input only exists on screen while the chat row is open —
+  // minimized chat replaces the row with the last-message strip
+  if (this.chat && !canvas.focusInput) {
+    const open = UIChatLog.expanded || UIChatLog.typing;
+    this.chat.input.style.display = open ? '' : 'none';
   }
   UICommon.doUpdate(msPerTick);
 };
@@ -354,6 +372,8 @@ UIMap.drawNumbers = function (canvas, hp, maxHp, mp, maxMp, exp, maxExp) {
 };
 
 UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
+  // Top-center mob HP gauge (drawn under the rest of the HUD)
+  UIMobGage.draw(canvas);
   const barY = 529 + startUIPosition.y;
   const bgW = this.statusBg.width || 800;
 
@@ -443,8 +463,11 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
     obj.draw(canvas, camera, lag, msPerTick, tdelta);
   });
 
+  // Chat log above the status bar (under the cursor drawn by UICommon)
+  UIChatLog.render(canvas);
+
   UICommon.doRender(canvas, camera, lag, msPerTick, tdelta);
-  
+
   // Draw chat balloon if player has one - MUST be drawn LAST to appear on top of everything
   if (MapleMap.PlayerCharacter && 
       MapleMap.PlayerCharacter.showChatBalloon && 
@@ -453,168 +476,16 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   }
 };
 
-// Function to show player chat balloon
+// Show a chat balloon above a character. MapleCharacter owns the balloon
+// assets (loaded in load()), the timer (update()) and the drawing
+// (drawChatBalloon()) — this just sets the state.
 UIMap.showPlayerChatBalloon = function(message, character = null) {
-  // Use provided character or default to player character
-  const targetCharacter = character || MapleMap.PlayerCharacter;
-  
-  // Make sure the character exists
-  if (!targetCharacter) return;
-  
-  // If the character doesn't have the chat balloon methods/properties yet, add them
-  const player = targetCharacter;
-  
-  // If we need to add the chat balloon functionality to the player
-  if (!player.chatMessage) {
-    // Initialize chat balloon properties
-    player.chatMessage = "";
-    player.showChatBalloon = false;
-    player.chatBalloonTimer = 0;
-    player.chatBalloonDuration = 5000; // Show for 5 seconds
-    
-    // Add update method for chat balloon to player
-    const originalDoUpdate = player.doUpdate || function() {};
-    player.doUpdate = function(msPerTick) {
-      // Call original update if it exists
-      if (originalDoUpdate && typeof originalDoUpdate === 'function') {
-        originalDoUpdate.call(this, msPerTick);
-      }
-      
-      // Update chat balloon timer
-      if (this.showChatBalloon) {
-        this.chatBalloonTimer += msPerTick;
-        if (this.chatBalloonTimer >= this.chatBalloonDuration) {
-          this.showChatBalloon = false;
-          this.chatBalloonTimer = 0;
-        }
-      }
-    };
-    
-    // Add draw method for chat balloon (proper 9-patch with clip)
-    player.drawChatBalloon = function(canvas: any, camera: any) {
-      if (!this.chatBalloon || !this.chatMessage || !this.showChatBalloon) return;
-
-      const fontSize = 12;
-      const lineH = 14;
-      const maxTextW = 140;
-      const padX = 8, padY = 4;
-
-      // Word-wrap
-      const words = this.chatMessage.split(' ');
-      const lines: string[] = [];
-      let cur = '';
-      for (const w of words) {
-        const test = cur ? `${cur} ${w}` : w;
-        if (canvas.measureText({ text: test, fontSize }).width > maxTextW && cur) {
-          lines.push(cur);
-          cur = w;
-        } else {
-          cur = test;
-        }
-      }
-      if (cur) lines.push(cur);
-
-      let textW = 0;
-      for (const l of lines) textW = Math.max(textW, canvas.measureText({ text: l, fontSize }).width);
-      const textH = lines.length * lineH;
-
-      const { nw, ne, sw, se, n, s, w, e, c, arrow } = this.chatBalloon;
-      const nwW = nw.width, nwH = nw.height;
-      const neW = ne.width;
-      const swH = sw.height;
-      const seW = se.width;
-      const innerW = Math.max(textW + padX * 2, 60);
-      const innerH = Math.max(textH + padY * 2, 20);
-      const totalW = nwW + innerW + neW;
-      const totalH = nwH + innerH + swH;
-
-      const playerScreenX = this.pos.x - camera.x;
-      const playerScreenY = this.pos.y - camera.y;
-      const bx = Math.round(playerScreenX - totalW / 2);
-      const by = Math.round(playerScreenY - totalH - 75);
-
-      const ctx = canvas.context;
-      ctx.save();
-
-      // Corners
-      canvas.drawImage({ img: nw, dx: bx, dy: by });
-      canvas.drawImage({ img: ne, dx: bx + totalW - neW, dy: by });
-      canvas.drawImage({ img: sw, dx: bx, dy: by + totalH - sw.height });
-      canvas.drawImage({ img: se, dx: bx + totalW - seW, dy: by + totalH - se.height });
-
-      // Top edge
-      ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by, innerW, nwH); ctx.clip();
-      for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += n.width) canvas.drawImage({ img: n, dx: tx, dy: by });
-      ctx.restore();
-
-      // Bottom edge
-      ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by + totalH - s.height, innerW, s.height); ctx.clip();
-      for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += s.width) canvas.drawImage({ img: s, dx: tx, dy: by + totalH - s.height });
-      ctx.restore();
-
-      // Left edge
-      ctx.save(); ctx.beginPath(); ctx.rect(bx, by + nwH, w.width, innerH); ctx.clip();
-      for (let ty = by + nwH; ty < by + nwH + innerH; ty += w.height) canvas.drawImage({ img: w, dx: bx, dy: ty });
-      ctx.restore();
-
-      // Right edge
-      ctx.save(); ctx.beginPath(); ctx.rect(bx + totalW - e.width, by + nwH, e.width, innerH); ctx.clip();
-      for (let ty = by + nwH; ty < by + nwH + innerH; ty += e.height) canvas.drawImage({ img: e, dx: bx + totalW - e.width, dy: ty });
-      ctx.restore();
-
-      // Center
-      ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by + nwH, innerW, innerH); ctx.clip();
-      for (let fy = by + nwH; fy < by + nwH + innerH; fy += c.height)
-        for (let fx = bx + nwW; fx < bx + nwW + innerW; fx += c.width)
-          canvas.drawImage({ img: c, dx: fx, dy: fy });
-      ctx.restore();
-
-      // Arrow
-      canvas.drawImage({ img: arrow, dx: Math.round(playerScreenX - arrow.width / 2), dy: by + totalH - 1 });
-
-      ctx.restore();
-
-      // Text
-      const textStartY = by + nwH + padY;
-      lines.forEach((line: string, i: number) => {
-        canvas.drawText({ text: line, x: bx + totalW / 2, y: textStartY + i * lineH, color: '#000000', align: 'center', fontSize, fontWeight: 'normal' });
-      });
-    };
-  }
-  
-  // Update the chat balloon loading if needed
-  if (!player.chatBalloon) {
-    // Load chat balloon images if not already loaded
-    WZManager.get("UI.wz/ChatBalloon.img").then((chatBalloonFile) => {
-      const style0 = chatBalloonFile["0"]; // Use style "0" (same as NPCs)
-      
-      // Store chat balloon parts for easy usage
-      player.chatBalloon = {
-        nw: style0.nw.nGetImage(),
-        ne: style0.ne.nGetImage(),
-        sw: style0.sw.nGetImage(),
-        se: style0.se.nGetImage(),
-        n: style0.n.nGetImage(),
-        s: style0.s.nGetImage(),
-        w: style0.w.nGetImage(),
-        e: style0.e.nGetImage(),
-        c: style0.c.nGetImage(),
-        arrow: style0.arrow.nGetImage(),
-      };
-      
-      // Now that we have the chat balloon loaded, show the message
-      player.chatMessage = message;
-      player.showChatBalloon = true;
-      player.chatBalloonTimer = 0;
-    }).catch(e => {
-      console.error("Error loading chat balloon images:", e);
-    });
-  } else {
-    // Chat balloon already loaded, just show the message
-    player.chatMessage = message;
-    player.showChatBalloon = true;
-    player.chatBalloonTimer = 0;
-  }
+  const player = character || MapleMap.PlayerCharacter;
+  if (!player) return;
+  player.chatMessage = message;
+  player.showChatBalloon = true;
+  player.chatBalloonTimer = 0;
+  player.chatBalloonDuration = 5000;
 };
 
 export default UIMap;

@@ -13,6 +13,7 @@ import GameCanvas from "./GameCanvas";
 import { CameraInterface } from "./Camera";
 import MySocket from "./mysocket";
 import MobProjectile from "./Projectile/MobProjectile";
+import UIMobGage from "./UI/UIMobGage";
 
 // Aggro tuning (v83-style: firstAttack mobs charge on sight, others when hit)
 const AGGRO_RANGE_X = 250;
@@ -542,6 +543,10 @@ async addDrops() {
     const indicatorType = isCritical
       ? DamageIndicatorType.PlayerCritialHitMob
       : DamageIndicatorType.PlayerHitMob;
+    // v83 top-center HP gauge is boss-only
+    if (this.isBoss && responsibleMapleCharacter && responsibleMapleCharacter === (window as any).charecter) {
+      UIMobGage.show(this);
+    }
     // Remote mob (non-host client): send damage request to host, show visual only
     if (this.isRemote) {
       // Send damage request to host via server

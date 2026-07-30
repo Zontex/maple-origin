@@ -269,7 +269,9 @@ class InventoryMenuSprite extends DragableMenu {
       (itemDrop as any)._netDropId = dropId;
       this.charecter.map.addItemDrop(itemDrop);
       mySocket.sendItemDrop(item.itemId, quantity, this.charecter.pos.x, this.charecter.pos.y - 20, 0, 0, dropId);
-      console.log(`Dropped ${quantity} of item ${item.itemId}`);
+      const { default: UIChatLog } = await import('../UIChatLog');
+      const itemName = getItemNameSync(item.itemId) || `Item #${item.itemId}`;
+      UIChatLog.system(`You have lost an item (${itemName})`);
     } catch (err) {
       console.error("Error dropping item:", err);
     }
@@ -309,25 +311,63 @@ class InventoryMenuSprite extends DragableMenu {
     });
   }
 
-  // Merge stackable items (for non-EQUIP tabs) by summing their quantities.
-  mergeStackableItems(items: any[]) {
-    const mergedMap = new Map();
-    for (const item of items) {
-      if (!item) continue;
-      const qty = item.quantity || 1;
-      const key = item.itemId;
-      if (this.currentTab === MapleInventoryType.EQUIP) {
-        mergedMap.set(Symbol(), item);
-      } else {
-        if (mergedMap.has(key)) {
-          const existing = mergedMap.get(key);
-          existing.quantity = (existing.quantity || 1) + qty;
-        } else {
-          mergedMap.set(key, { ...item, quantity: qty });
+  // The raw inventory array backing the currently shown tab — slot index in
+  // the grid maps 1:1 to the array index (empty slots are null holes)
+  getCurrentTabArray(): any[] {
+    switch (this.currentTab) {
+      case MapleInventoryType.EQUIP: return this.charecter.inventory.equip;
+      case MapleInventoryType.USE: return this.charecter.inventory.use;
+      case MapleInventoryType.SETUP: return this.charecter.inventory.setup;
+      case MapleInventoryType.ETC: return this.charecter.inventory.etc;
+      case MapleInventoryType.CASH: return this.charecter.inventory.cash;
+      default: return this.charecter.inventory.equip;
+    }
+  }
+
+  // Grid slot index under the mouse, or -1 if not over a slot
+  getSlotAtMouse(mouseX: number, mouseY: number): number {
+    const colXs = [9, 45, 81, 117];
+    const rowYs = [51, 85, 119, 153, 187, 221];
+    const slotSize = 32;
+    for (let row = 0; row < rowYs.length; row++) {
+      for (let col = 0; col < colXs.length; col++) {
+        const slotX = this.x + colXs[col];
+        const slotY = this.y + rowYs[row];
+        if (
+          mouseX >= slotX && mouseX < slotX + slotSize &&
+          mouseY >= slotY && mouseY < slotY + slotSize
+        ) {
+          return row * colXs.length + col;
         }
       }
     }
-    return Array.from(mergedMap.values());
+    return -1;
+  }
+
+  // Drag-move within the tab: place into empty slot, swap with occupant, or
+  // merge same-item stacks up to slotMax (GMS behavior)
+  moveItemToSlot(fromSlot: number, toSlot: number) {
+    if (fromSlot === toSlot || fromSlot < 0 || toSlot < 0) return;
+    const arr = this.getCurrentTabArray();
+    const item = arr[fromSlot];
+    if (!item) return;
+    const target = arr[toSlot] ?? null;
+
+    if (target && target.itemId === item.itemId && this.currentTab !== MapleInventoryType.EQUIP) {
+      const slotMax = target.getSlotMax?.() ?? 100;
+      const room = slotMax - (target.quantity || 1);
+      const moving = Math.min(room, item.quantity || 1);
+      if (moving > 0) {
+        target.quantity = (target.quantity || 1) + moving;
+        item.quantity = (item.quantity || 1) - moving;
+        if (item.quantity <= 0) arr[fromSlot] = null;
+        return;
+      }
+      // Target stack is full — fall through to a swap
+    }
+
+    arr[toSlot] = item;
+    arr[fromSlot] = target;
   }
 
   drawItems(canvas: GameCanvas) {
@@ -353,12 +393,6 @@ class InventoryMenuSprite extends DragableMenu {
       case MapleInventoryType.CASH:
         items = this.charecter.inventory.cash || [];
         break;
-    }
-
-    console.log(`Drawing ${items.length} items for tab ${this.currentTab}`);
-
-    if (this.currentTab !== MapleInventoryType.EQUIP) {
-      items = this.mergeStackableItems(items);
     }
 
     // Grid positions measured from the 175x289 WZ background
@@ -677,10 +711,6 @@ class InventoryMenuSprite extends DragableMenu {
         break;
     }
     
-    if (this.currentTab !== MapleInventoryType.EQUIP) {
-      items = this.mergeStackableItems(items);
-    }
-    
     for (let row = 0; row < slotRows; row++) {
       for (let col = 0; col < slotColumns; col++) {
         const slotIndex = row * slotColumns + col;
@@ -770,9 +800,9 @@ class InventoryMenuSprite extends DragableMenu {
       const mouseX = this.GameCanvas.mouseX;
       const mouseY = this.GameCanvas.mouseY;
 
-      // Only consider it a drag-drop if mouse moved at least 10px from start
+      // Below the drag threshold it's just a click, not a drag-drop
       const dragDist = Math.sqrt((mouseX - startX) ** 2 + (mouseY - startY) ** 2);
-      if (dragDist < 10) {
+      if (dragDist < 4) {
         this.draggingItem = null;
         this.draggingIcon = null;
         this.draggingSlotIndex = -1;
@@ -813,6 +843,16 @@ class InventoryMenuSprite extends DragableMenu {
           this.draggingSlotIndex = -1;
           return;
         }
+      }
+
+      // Dropped onto another slot in the grid — move/swap/merge
+      const targetSlot = this.getSlotAtMouse(mouseX, mouseY);
+      if (targetSlot >= 0) {
+        this.moveItemToSlot(slotIndex, targetSlot);
+        this.draggingItem = null;
+        this.draggingIcon = null;
+        this.draggingSlotIndex = -1;
+        return;
       }
 
       const isOutside =
@@ -865,10 +905,15 @@ class InventoryMenuSprite extends DragableMenu {
     const mesosWithCommas = this.charecter.inventory.mesos
       .toString()
       .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    // Right-aligned inside the white meso field like GMS — the field ends
+    // just left of the window's right border, so even max mesos
+    // (2,147,483,647) stays within the box
     canvas.drawText({
       text: mesosWithCommas,
-      x: this.x + 96,
+      x: this.x + 136,
       y: this.y + 270,
+      fontSize: 11,
+      align: 'right',
     });
   }
 
@@ -929,6 +974,15 @@ class InventoryMenuSprite extends DragableMenu {
     const slot = getEquipSlotForItem(itemId);
     if (slot < 0) {
       console.warn(`[Inventory] Cannot determine equip slot for item ${itemId}`);
+      return;
+    }
+
+    // v83 requirement gate: level/stats/fame must meet the item's reqs
+    // (like GMS, the double-click simply does nothing when unmet — the
+    // tooltip shows the requirements)
+    const infoNode = item.node?.info || item.node?.nGet?.("info");
+    if (!this.charecter.canEquip(infoNode)) {
+      console.log(`[Inventory] Cannot equip ${itemId} — requirements not met`);
       return;
     }
 

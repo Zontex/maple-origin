@@ -350,6 +350,12 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         MyChar.skillManager.deserialize(charData.skills);
       }
 
+      // Apply hotkey bindings (skills + items)
+      if (charData.keymap?.length) {
+        const UIHotkeyBar = (await import('./UIHotkeyBar')).default;
+        await UIHotkeyBar.deserialize(charData.keymap);
+      }
+
       // Apply SP
       if (MyChar.stats && charData.stats?.sp !== undefined) {
         MyChar.stats.sp = charData.stats.sp;
@@ -1107,7 +1113,10 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
           });
         }
       } else {
-        // Empty slot — draw character/0 animated glow under placeholder
+        // Empty slot — glow (character/0) + ghost placeholder (character/1/0).
+        // Both are bottom-center anchored in the WZ data, so drawing them at
+        // the slot anchor puts their feet exactly where a created character
+        // stands — no per-slot fudge offsets.
         const charGlowNode = charSelectNode.nGet('character').nGet('0');
         const glowFrames = charGlowNode.nChildren;
         const glowFrame = this.charAnimFrame % glowFrames.length;
@@ -1116,11 +1125,10 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
           const gfImg = gf.nGetImage();
           const gox = gf.origin ? gf.origin.nGet('nX', 0) : 0;
           const goy = gf.origin ? gf.origin.nGet('nY', 0) : 0;
-          const emptyOffsets = [0, 53, 105];
           canvas.drawImage({
             img: gfImg,
-            dx: slotX - gox + (emptyOffsets[i] || 0),
-            dy: slotY - goy + 2,
+            dx: slotX - gox,
+            dy: slotY - goy,
           });
         }
 
@@ -1130,10 +1138,7 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
           const emptyImg = emptySlotNode.nGetImage();
           const eox = emptySlotNode.origin ? emptySlotNode.origin.nGet('nX', 0) : 0;
           const eoy = emptySlotNode.origin ? emptySlotNode.origin.nGet('nY', 0) : 0;
-          const baseEmptyX = slotX - eox;
-          const baseEmptyY = slotY - eoy;
-          const emptyOffsets = [0, 53, 105];
-          DebugDrag.register(`emptySlot${i}`, baseEmptyX + (emptyOffsets[i] || 0), baseEmptyY, emptyImg.width || 51, emptyImg.height || 71);
+          DebugDrag.register(`emptySlot${i}`, slotX - eox, slotY - eoy, emptyImg.width || 51, emptyImg.height || 71);
           const emptyPos = DebugDrag.get(`emptySlot${i}`);
           canvas.drawImage({
             img: emptyImg,

@@ -148,8 +148,8 @@ export function resolveItemCodes(text: string, questManager?: any): string {
   return text
     .replace(/#h0#/g, () =>
       questManager?.character?.name || (window as any).charecter?.name || 'Player')
-    .replace(/#t(\d+)#?/g, (_, id) => getItemNameSync(parseInt(id)))
-    .replace(/#c(\d+)#?/g, (_, id) => {
+    .replace(/#t(\d+):?#?/g, (_, id) => getItemNameSync(parseInt(id)).trim())
+    .replace(/#c(\d+):?#?/g, (_, id) => {
       if (questManager) {
         return String(questManager.getItemCount(parseInt(id)));
       }
@@ -177,10 +177,11 @@ function stripFormatCodes(text: any): string {
     .replace(/#p(\d+)#/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
     .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
     .replace(/#a\d+#/g, '')   // quest progress counter (dynamic, strip)
-    .replace(/#t(\d+)#/g, '#t$1#')  // Keep item name codes — resolved at display time after item names load
+    .replace(/#t(\d+):?#/g, '#t$1#')  // Keep item name codes — resolved at display time after item names load
     .replace(/#m(\d+)#/g, '#m$1#')  // Keep map name codes — resolved at display time after map names load
-    .replace(/#i(\d+)#/g, '\x01ITEM:$1\x02')  // item icon placeholder — rendered at display time
-    .replace(/#c(\d+)#/g, '#c$1#')  // Keep item count codes — resolved at display time
+    .replace(/#i(\d+):?#/g, '\x01ITEM:$1\x02')  // item icon placeholder — rendered at display time
+    .replace(/#v(\d+):?#/g, '\x01ITEM:$1\x02')  // item icon placeholder (same as #i; some GMS texts use #v<id>:#)
+    .replace(/#c(\d+):?#/g, '#c$1#')  // Keep item count codes — resolved at display time
     .replace(/\\r\\n/g, '\n')
     .replace(/\\n/g, '\n')
     .replace(/\\r/g, '\n');

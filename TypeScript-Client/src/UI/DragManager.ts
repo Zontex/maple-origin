@@ -138,8 +138,9 @@ const DragManager = {
 
     ctx.save();
     ctx.globalAlpha = 0.55;
-    // Draw icon centered on cursor
-    ctx.drawImage(icon, mx - 16, my - 16, 32, 32);
+    // Draw icon centered on cursor at its natural size (scaling it up makes
+    // the ghost look bigger than the item in its slot)
+    ctx.drawImage(icon, mx - Math.floor(icon.width / 2), my - Math.floor(icon.height / 2));
     ctx.restore();
   },
 };

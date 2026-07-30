@@ -5,6 +5,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased] - 2026-07-30
+
+### Added
+- **GMS Quest Helper** (`UI/UIQuestAlarm.ts`) — top-right tracker panel ("Quest Helper (n/5)") listing tracked quests with per-requirement `cur/req` lines: unmet counts in red, completed requirements struck through, round (x) to untrack, minimize/close window buttons from `Basic.img`. The QUEST HELPER button in the quest log toggles tracking; newly accepted quests auto-track. When a quest's requirements become fulfilled (last kill, or item pickup via a 500ms poll) a "Quest Complete!" bubble pops with the QuestAlert light-burst + jingle over the character; turn-in still plays QuestClear
+- **Transportation system** (`Transport/`) — v83 boat/train/genie/subway/elevator/Kerning-train routes ported 1:1 from Cosmic's event scripts with authentic timings; dock `shipObj` vessels render, slide out at takeoff and glide back before arrival (including the Balrog invasion ship); station departure clocks (`UI/UIShipClock.ts`) count down on platform maps and timed rides
+- **Chat log window** (`UI/UIChatLog.ts`) — GMS-style: collapsed mode floats recent lines over the game and fades them; expanded mode is a persistent translucent scrollable log (wheel + VScr4 arrows); yellow notices / white player chat / gray system / pink warnings
+- **Mob HP gauge** (`UI/UIMobGage.ts`) — top-center bar with the last-hit mob's name and remaining HP, built from `UIWindow.img/MobGage` pieces with animated fill
+- **Direction3 job-intro cutscenes** (`Effects/DirectionScene.ts`) — the Maple Island job-experience rooms play their full scripted scene (costume avatar equips, skill stances, effect overlays, title splash, warp-out), with the avatar always facing left as the scene coordinates expect
+- **GMS status bar completed** — key pill row right-aligned like the original (BtClaim siren, Equip/Inventory/Stats/Skills/KeySet pills — Stats was missing entirely), working QuickSlot show/hide toggle with up/down arrow sprites, and the big SHOP / TRADE / MENU / SHORT CUT buttons on the lower band (visual-only until those systems exist)
+- **Quest log window overhaul** — real `VScr4` scrollbars on both panels (tiled track, mouse wheel, draggable thumb, hold-to-repeat arrows, authentic disabled arrows + no thumb when content fits), scrollable description panel (was hard-truncated at 12 lines), active tab rendered bright vs dimmed (v83 ships byte-identical enabled/disabled tab sprites), and quest descriptions no longer covered by a stretched "OBTAIN SELECTIVELY" reward label misused as a row highlight
+- **Inventory meso display** — right-aligned inside the white meso field like GMS (large amounts previously overflowed onto the window frame)
+
+### Fixed
+- **NPC/quest script state loss between dialog pages** — the engines re-ran the whole script source on every click, patching only `status` back in, so every other top-level variable reset (Phil's cab set `selectedMap` on one page and read `-1` on the next, warping passengers to the default map — Amherst — instead of their destination). Both engines now build the script closure once per conversation and call its `start`/`action` (`start`/`end`) functions, so all script variables persist like the original server's per-conversation script instance; `cm.warp`/`qm.warp` also reject invalid map ids outright
+- **Characters teleported to the start map on reload** — the server's disconnect auto-save evaluated `Number(info.mapId || player.mapId || 10000)`; a `NaN` map id (client mid-load) is falsy and fell through to literal 10000 with pos (0,0). Every save path now validates the map id (client refuses to send `player_info`/`player_update`/saves without a real map; server keeps the stored map/pos when a payload lacks one)
+- **All mobs frozen (only blinking)** — a deferred `player_info` (map still loading) was silently dropped forever, so the server never registered the player and never assigned a mob host; registration now retries from the update loop the moment the map id is valid, and the server defers host assignment instead of ignoring the player
+- **Job-intro cutscene mirrored** — the avatar kept the player's walking direction, shooting away from the scene's targets; scenes now force the sprite's natural left-facing orientation
+
+---
+
 ## [Unreleased] - 2026-07-29
 
 ### Script engine overhaul (NPC / quest / portal)
