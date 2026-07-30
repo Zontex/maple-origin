@@ -150,6 +150,10 @@ class MapleCharacter {
   levelUpDelay: number = 0;
   // Quest effects
   questClearActive: boolean = false;
+  jobChangedActive: boolean = false;
+  jobChangedFrames: any = null;
+  jobChangedFrame: number = 0;
+  jobChangedDelay: number = 0;
   questClearFrames: any = null;
   questClearFrame: number = 0;
   questClearDelay: number = 0;
@@ -607,6 +611,25 @@ class MapleCharacter {
     this.hp = this.maxHp;
     this.mp = this.maxMp;
     this.recalcLocalStats();
+
+    // v83 job advancement fanfare (sound + light pillar effect)
+    this.playJobChanged();
+  }
+
+  async playJobChanged() {
+    try {
+      const sfxNode: any = await WZManager.get("Sound.wz/Game.img/JobChanged");
+      if (sfxNode?.nGetAudio) PLAY_AUDIO(sfxNode.nGetAudio());
+      const fx: any = await WZManager.get("Effect.wz/BasicEff.img/JobChanged");
+      if (fx?.nChildren?.length > 0) {
+        this.jobChangedFrames = fx.nChildren;
+        this.jobChangedActive = true;
+        this.jobChangedFrame = 0;
+        this.jobChangedDelay = 0;
+      }
+    } catch (e) {
+      console.error('playJobChanged error:', e);
+    }
   }
 
   levelUp() {
@@ -2077,6 +2100,22 @@ isCloseToMob = (inAllDirections = true) => {
         this.questClearActive = false;
         this.questClearFrame = 0;
         this.questClearDelay = 0;
+      }
+    }
+
+    // Job advancement effect
+    if (this.jobChangedActive && this.jobChangedFrames) {
+      this.jobChangedDelay += msPerTick;
+      const curFrame = this.jobChangedFrames[this.jobChangedFrame];
+      const frameDelay = curFrame?.delay?.nValue ?? 100;
+      if (this.jobChangedDelay > frameDelay) {
+        this.jobChangedDelay -= frameDelay;
+        this.jobChangedFrame += 1;
+      }
+      if (this.jobChangedFrame >= this.jobChangedFrames.length || !this.jobChangedFrames[this.jobChangedFrame]) {
+        this.jobChangedActive = false;
+        this.jobChangedFrame = 0;
+        this.jobChangedDelay = 0;
       }
     }
 
