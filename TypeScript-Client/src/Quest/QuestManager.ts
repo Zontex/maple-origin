@@ -97,11 +97,45 @@ export default class QuestManager {
       if (Date.now() - completedAt < interval * 60 * 1000) return false;
     }
 
-    // Script-based quests are handled by QuestScriptEngine, not canStartQuest
-    if (reqs.start.startscript || reqs.complete.endscript) return false;
+    // Quests with a scripted START are begun by QuestScriptEngine (the script
+    // calls forceStartQuest), not canStartQuest. A scripted END is irrelevant
+    // here — those quests still start via the normal static accept dialog.
+    if (reqs.start.startscript) return false;
 
     const met = this.meetsRequirement(reqs.start);
     return met;
+  }
+
+  // Full start-requirement check (level, job, prereq quests, items, dates) for
+  // scripted quests — the QuestScriptEngine path bypasses canStartQuest, so the
+  // NPC click flow uses this to gate startscripts the same way the listing does.
+  canRunStartScript(questId: number): boolean {
+    const reqs = QuestData.requirements.get(questId);
+    if (!reqs) return false;
+    return this.meetsRequirement(reqs.start);
+  }
+
+  // Gate for running a quest's endscript — Cosmic checks quest.canComplete()
+  // server-side before running end scripts. Mob kills and positive item counts
+  // must be met; count-0 item entries are skipped (Cosmic treats missing/zero
+  // count as always-met — e.g. Roger's Apple relies on the script's own check).
+  canRunEndScript(questId: number): boolean {
+    const active = this.activeQuests.get(questId);
+    if (!active) return false;
+    const reqs = QuestData.requirements.get(questId);
+    if (!reqs) return false;
+
+    if (reqs.complete.mobs) {
+      for (const mob of reqs.complete.mobs) {
+        if ((active.mobProgress.get(mob.id) || 0) < mob.count) return false;
+      }
+    }
+    if (reqs.complete.items) {
+      for (const item of reqs.complete.items) {
+        if (item.count > 0 && this.getItemCount(item.id) < item.count) return false;
+      }
+    }
+    return true;
   }
 
   canCompleteQuest(questId: number): boolean {
@@ -111,19 +145,12 @@ export default class QuestManager {
     const reqs = QuestData.requirements.get(questId);
     if (!reqs) return false;
 
-    // Script-based quests — check item requirements if any, otherwise show in-progress
+    // Script-based quests — completable (the endscript runs when clicked in the
+    // NPC's quest listing) as soon as the WZ completion reqs are met, exactly
+    // what the real client computes from Check.img. The endscript does any
+    // further checking itself (e.g. Roger's Apple HP check).
     if (reqs.complete.endscript) {
-      // If there are item requirements, check them (e.g. Roger's Apple consumed)
-      if (reqs.complete.items && reqs.complete.items.length > 0) {
-        // Quest items with count=0 mean "check existence" — completable when item is gone
-        for (const item of reqs.complete.items) {
-          if (item.count > 0 && this.getItemCount(item.id) < item.count) return false;
-          if (item.count === 0 && this.getItemCount(item.id) > 0) return false;
-        }
-        return true;
-      }
-      // No item requirements — can't determine, show as in-progress
-      return false;
+      return this.canRunEndScript(questId);
     }
 
     // Check mob kill requirements

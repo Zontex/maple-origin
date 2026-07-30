@@ -91,6 +91,7 @@ export interface MapleMap {
     camera: CameraInterface
   ) => void;
   tryNpcScript: (npc: any) => Promise<void>;
+  runQuestScript: (npc: any, questId: number, phase: 'start' | 'end') => Promise<void>;
   showDefaultNpcTalk: (npc: any) => Promise<void>;
 }
 
@@ -816,6 +817,7 @@ MapleMap.render = function (
   const drawPlayerEffects = (pc: any) => {
     if (pc.levelingUp) drawLevelUp(pc);
     if (pc.questClearActive) drawEffect(pc, pc.questClearFrames, pc.questClearFrame);
+    if (pc.jobChangedActive) drawEffect(pc, pc.jobChangedFrames, pc.jobChangedFrame);
     if (pc.questStartActive) drawEffect(pc, pc.questStartFrames, pc.questStartFrame);
     if (pc.incExpActive) drawEffect(pc, pc.incExpFrames, pc.incExpFrame);
     if (pc.skillEffectActive) drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame);
@@ -937,207 +939,154 @@ async function _handleClickInner(
 
         // Check for quest dialog
         const questManager = (window as any).charecter?.questManager;
-        const character = (window as any).charecter;
         const quests = questManager?.getQuestsForNpc(npc.id);
         console.log(`[NPC Click] questManager=${!!questManager}, quests=`, quests);
 
-        // Check for script-based quests first
-        const npcQuestIds = QuestData.npcToQuests.get(npc.id) || [];
-        let scriptHandled = false;
+        // GMS behavior: when the NPC has any quests, always show the combined
+        // quest listing first — scripted quests appear in it like static ones
+        // (getQuestsForNpc gates them on Check.img requirements), and their
+        // start/end scripts only run when the quest is clicked in the listing.
+        let npcHasScript = false;
+        try { npcHasScript = await this.npcScriptEngine.hasScript(npc.id); } catch {}
+        const hasQuests = questManager && quests &&
+          (quests.available.length > 0 || quests.inProgress.length > 0 || quests.completable.length > 0);
+        console.log(`[NPC Click] npcHasScript=${npcHasScript}, hasQuests=${hasQuests}`);
 
-        for (const questId of npcQuestIds) {
-          const reqs = QuestData.requirements.get(questId);
-          if (!reqs) continue;
-          const state = questManager?.getQuestState(questId);
-
-          // Determine phase: if not started and this NPC starts it, run start()
-          // If started and this NPC completes it, run end()
-          // Only use script path if the matching phase has a script (startscript vs endscript)
-          let phase: 'start' | 'end' | null = null;
-          if (state === 0 && reqs.start.npc === npc.id && reqs.start.startscript) {
-            // Check prerequisite quests before offering this quest
-            const prereqsMet = !reqs.start.quests || reqs.start.quests.every(
-              (pq: any) => questManager?.getQuestState(pq.id) >= pq.state
-            );
-            if (!prereqsMet) continue;
-            phase = 'start';
-          } else if (state === 1 && reqs.complete.npc === npc.id && reqs.complete.endscript) {
-            phase = 'end';
+        if (hasQuests) {
+          // If NPC has a script and ONLY in-progress quests (no available/completable),
+          // prefer the NPC script — these quests just say "go talk to X" and the script
+          // handles the actual action (warp, etc.). Otherwise show GMS-style quest listing.
+          if (npcHasScript && quests.available.length === 0 && quests.completable.length === 0) {
+            await this.tryNpcScript(npc);
+            return;
           }
-          if (!phase) continue;
-          // Note: do NOT re-run startscript when quest is in-progress (state=1) on the start NPC.
-          // The quest is already started — the NPC's own script should handle the next action (warp, etc.).
 
-          if (phase && await this.scriptEngine.hasScript(questId)) {
-            const questName = QuestData.quests.get(questId)?.name || '';
-            const dialog = this.questDialog;
-            const engine = this.scriptEngine;
+          // Build quest listing selections like the original game
+          const selections: any[] = [];
+          let idx = 0;
 
-            await engine.begin({
+          // Completable quests (list3 header)
+          for (let i = 0; i < quests.completable.length; i++) {
+            const questId = quests.completable[i];
+            const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
+            selections.push({
+              index: idx,
+              label: questName,
+              headerType: i === 0 ? 'completable' : undefined,
               questId,
-              phase,
-              character,
-              onShowDialog: (pending) => {
-                dialog.showScriptDialog({
-                  npcId: npc.id,
-                  npcName: npc.strings.name || 'NPC',
-                  questName,
-                  questId,
-                  text: pending.text,
-                  dialogType: pending.type,
-                  selections: (pending as any).selections,
-                  input: (pending as any).input,
-                  onInput: (pending as any).onInput,
-                  onAction: (mode, type, selection) => {
-                    if (mode === -1) {
-                      dialog.hide();
-                    } else {
-                      engine.advance(mode, type, selection);
-                    }
-                  },
-                });
-              },
-              onDispose: () => {
-                dialog.hide();
-              },
-              changeMap: async (mapId: number, portalName?: string | number) => {
-                const mapState = (window as any).MapStateInstance;
-                if (mapState?.changeMap) {
-                  await mapState.changeMap(mapId, portalName);
-                }
-              },
+              questPhase: 'complete',
             });
-
-            scriptHandled = true;
-            break;
+            idx++;
           }
-        }
 
-        if (!scriptHandled) {
-          let npcHasScript = false;
-          try { npcHasScript = await this.npcScriptEngine.hasScript(npc.id); } catch {}
-          const hasQuests = questManager && quests &&
-            (quests.available.length > 0 || quests.inProgress.length > 0 || quests.completable.length > 0);
-          console.log(`[NPC Click] scriptHandled=${scriptHandled}, npcHasScript=${npcHasScript}, hasQuests=${hasQuests}`);
+          // In-progress quests (list0 header)
+          for (let i = 0; i < quests.inProgress.length; i++) {
+            const questId = quests.inProgress[i];
+            const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
+            selections.push({
+              index: idx,
+              label: questName,
+              headerType: i === 0 ? 'inProgress' : undefined,
+              questId,
+              questPhase: 'inProgress',
+            });
+            idx++;
+          }
 
-          if (hasQuests) {
-            // If NPC has a script and ONLY in-progress quests (no available/completable),
-            // prefer the NPC script — these quests just say "go talk to X" and the script
-            // handles the actual action (warp, etc.). Otherwise show GMS-style quest listing.
-            if (npcHasScript && quests.available.length === 0 && quests.completable.length === 0) {
-              await this.tryNpcScript(npc);
-              return;
-            }
+          // Available quests (list1 header)
+          for (let i = 0; i < quests.available.length; i++) {
+            const questId = quests.available[i];
+            const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
+            selections.push({
+              index: idx,
+              label: questName,
+              headerType: i === 0 ? 'available' : undefined,
+              questId,
+              questPhase: 'start',
+            });
+            idx++;
+          }
 
-            // Build quest listing selections like the original game
-            const selections: any[] = [];
-            let idx = 0;
+          // Add "ETC" section for NPC conversation if NPC has a script
+          if (npcHasScript) {
+            selections.push({
+              index: idx,
+              label: 'What else?',
+              headerType: 'etc',
+              questId: null,
+              questPhase: 'talk',
+            });
+            idx++;
+          }
 
-            // Completable quests (list3 header)
-            for (let i = 0; i < quests.completable.length; i++) {
-              const questId = quests.completable[i];
-              const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
-              selections.push({
-                index: idx,
-                label: questName,
-                headerType: i === 0 ? 'completable' : undefined,
-                questId,
-                questPhase: 'complete',
-              });
-              idx++;
-            }
-
-            // In-progress quests (list0 header)
-            for (let i = 0; i < quests.inProgress.length; i++) {
-              const questId = quests.inProgress[i];
-              const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
-              selections.push({
-                index: idx,
-                label: questName,
-                headerType: i === 0 ? 'inProgress' : undefined,
-                questId,
-                questPhase: 'inProgress',
-              });
-              idx++;
-            }
-
-            // Available quests (list1 header)
-            for (let i = 0; i < quests.available.length; i++) {
-              const questId = quests.available[i];
-              const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
-              selections.push({
-                index: idx,
-                label: questName,
-                headerType: i === 0 ? 'available' : undefined,
-                questId,
-                questPhase: 'start',
-              });
-              idx++;
-            }
-
-            // Add "ETC" section for NPC conversation if NPC has a script
-            if (npcHasScript) {
-              selections.push({
-                index: idx,
-                label: 'What else?',
-                headerType: 'etc',
-                questId: null,
-                questPhase: 'talk',
-              });
-              idx++;
-            }
-
-            // Show combined NPC dialog with quest selections
-            const dialog = this.questDialog;
-            const npcName = npc.strings.name || 'NPC';
-            const mapObj = this;
-            await dialog.showScriptDialog({
-              npcId: npc.id,
-              npcName,
-              questName: '',
-              text: '',
-              dialogType: 'simple',
-              selections,
-              onAction: async (mode: number, type: number, selIdx: number) => {
-                dialog.hide();
-                if (mode === -1) return;
-                const sel = selections[selIdx];
-                if (!sel) return;
-                const { questId, questPhase } = sel;
-                if (questPhase === 'talk') {
-                  // Run the NPC script for normal conversation
-                  await mapObj.tryNpcScript(npc);
+          // Show combined NPC dialog with quest selections
+          const dialog = this.questDialog;
+          const npcName = npc.strings.name || 'NPC';
+          const mapObj = this;
+          await dialog.showScriptDialog({
+            npcId: npc.id,
+            npcName,
+            questName: '',
+            text: '',
+            dialogType: 'simple',
+            selections,
+            onAction: async (mode: number, type: number, selIdx: number) => {
+              dialog.hide();
+              if (mode === -1) return;
+              const sel = selections[selIdx];
+              if (!sel) return;
+              const { questId, questPhase } = sel;
+              if (questPhase === 'talk') {
+                // Run the NPC script for normal conversation
+                await mapObj.tryNpcScript(npc);
+                return;
+              }
+              const reqs = QuestData.requirements.get(questId);
+              if (questPhase === 'complete') {
+                // Scripted end — run the endscript, like the server does when a
+                // completable quest is selected.
+                if (reqs?.complete.endscript && await mapObj.scriptEngine.hasScript(questId)) {
+                  await mapObj.runQuestScript(npc, questId, 'end');
                   return;
                 }
-                if (questPhase === 'complete') {
-                  await dialog.show({
-                    questId,
-                    npcId: npc.id,
-                    npcName,
-                    phase: 'complete',
-                    onCompleted: () => { questManager.completeQuest(questId, dialog.getSelectedPropItemId()); },
-                  });
-                } else if (questPhase === 'start') {
-                  await dialog.show({
-                    questId,
-                    npcId: npc.id,
-                    npcName,
-                    phase: 'start',
-                    onAccepted: () => { questManager.startQuest(questId); },
-                  });
-                } else {
-                  await dialog.show({
-                    questId,
-                    npcId: npc.id,
-                    npcName,
-                    phase: 'inProgress',
-                  });
+                await dialog.show({
+                  questId,
+                  npcId: npc.id,
+                  npcName,
+                  phase: 'complete',
+                  onCompleted: () => { questManager.completeQuest(questId, dialog.getSelectedPropItemId()); },
+                });
+              } else if (questPhase === 'start') {
+                // Scripted start — requirements were already checked when the
+                // listing was built.
+                if (reqs?.start.startscript && await mapObj.scriptEngine.hasScript(questId)) {
+                  await mapObj.runQuestScript(npc, questId, 'start');
+                  return;
                 }
-              },
-            });
-          } else {
-            await this.tryNpcScript(npc);
-          }
+                await dialog.show({
+                  questId,
+                  npcId: npc.id,
+                  npcName,
+                  phase: 'start',
+                  // startscript quests whose script file is missing fall back to
+                  // the static dialog — startQuest refuses them, so force-start
+                  // (the listing already verified the start requirements).
+                  onAccepted: () => {
+                    if (!questManager.startQuest(questId)) questManager.forceStartQuest(questId);
+                  },
+                });
+              } else {
+                await dialog.show({
+                  questId,
+                  npcId: npc.id,
+                  npcName,
+                  phase: 'inProgress',
+                });
+              }
+            },
+          });
+        } else {
+          await this.tryNpcScript(npc);
         }
       } catch (err) {
         console.error(`[NPC Click] Error handling NPC ${npc.id}:`, err);
@@ -1147,6 +1096,50 @@ async function _handleClickInner(
   }
 };
 
+
+// Run a quest's start/end script (QuestScriptEngine) for the given NPC.
+// Callers gate on canRunStartScript/canRunEndScript before invoking.
+MapleMap.runQuestScript = async function (npc: any, questId: number, phase: 'start' | 'end') {
+  const character = (window as any).charecter;
+  const questName = QuestData.quests.get(questId)?.name || '';
+  const dialog = this.questDialog;
+  const engine = this.scriptEngine;
+
+  await engine.begin({
+    questId,
+    phase,
+    character,
+    onShowDialog: (pending: any) => {
+      dialog.showScriptDialog({
+        npcId: npc.id,
+        npcName: npc.strings.name || 'NPC',
+        questName,
+        questId,
+        text: pending.text,
+        dialogType: pending.type,
+        selections: pending.selections,
+        input: pending.input,
+        onInput: pending.onInput,
+        onAction: (mode: number, type: number, selection: number) => {
+          if (mode === -1) {
+            dialog.hide();
+          } else {
+            engine.advance(mode, type, selection);
+          }
+        },
+      });
+    },
+    onDispose: () => {
+      dialog.hide();
+    },
+    changeMap: async (mapId: number, portalName?: string | number) => {
+      const mapState = (window as any).MapStateInstance;
+      if (mapState?.changeMap) {
+        await mapState.changeMap(mapId, portalName);
+      }
+    },
+  });
+};
 
 // Try running an NPC script; falls back to the NPC's default dialogue
 MapleMap.tryNpcScript = async function (npc: any) {
