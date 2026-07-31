@@ -1,6 +1,7 @@
 import WZManager from "../wz-utils/WZManager";
 import ClickManager from "./ClickManager";
 import DragManager from "./DragManager";
+import DragableMenu from "./Menu/DragableMenu";
 import { MapleStanceButton } from "./MapleStanceButton";
 import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
@@ -357,6 +358,13 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
   }
   if (this._clickHeld) return;
   this._clickHeld = true;
+
+  // This window draws beneath the inventory, skill and stats windows, so a
+  // press that lands on one of those belongs to it — not to whatever key
+  // happens to sit underneath. Without this, dragging an item out of an
+  // inventory positioned over the keyboard also picked up the action icon on
+  // the key below it, and two things came away in one gesture.
+  if (DragableMenu.anyHits(mx, my)) return;
 
   // Grab the title plate to move the window.
   if (

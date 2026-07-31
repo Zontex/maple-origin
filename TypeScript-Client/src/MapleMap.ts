@@ -1062,6 +1062,20 @@ async function _handleClickInner(
   const mouseY = (event.clientY - rect.top) / scaleY;
   console.log("Click detected at:", mouseX, mouseY);
 
+  // A click that lands on a UI window belongs to that window, not to the map
+  // behind it. Double-clicking an apple in an inventory that happened to sit
+  // over an NPC ate the apple AND opened the NPC's dialogue.
+  const { default: DragableMenu } = await import("./UI/Menu/DragableMenu");
+  if (DragableMenu.anyHits(mouseX, mouseY)) return;
+  const { default: UIKeyConfigRef } = await import("./UI/UIKeyConfig");
+  if (
+    UIKeyConfigRef.isVisible &&
+    mouseX >= UIKeyConfigRef.x && mouseX <= UIKeyConfigRef.x + 629 &&
+    mouseY >= UIKeyConfigRef.y && mouseY <= UIKeyConfigRef.y + 373
+  ) {
+    return;
+  }
+
   for (const npc of this.npcs as any[]) {
     if (!npc.pos || npc.hide) continue;
     // Compute hitbox from the NPC's current sprite frame (same coords as draw())

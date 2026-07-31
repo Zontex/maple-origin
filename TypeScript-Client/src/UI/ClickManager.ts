@@ -171,10 +171,13 @@ ClickManager.doUpdate = function (msPerTick: number, camera: CameraInterface) {
       } else {
         for (const dragableMenu of this.dragableMenus) {
           const menuRect = dragableMenu.getRect(camera);
-          const isMenuUnderMouse = GUIUtil.pointInRectangle(
-            mousePoint,
-            menuRect
-          );
+          // Topmost only. This loop takes the first registered menu whose
+          // rect contains the mouse, which is registration order, not draw
+          // order — so pressing on a window that overlaps another could pick
+          // up and move the one underneath as well. Ownership decides it.
+          const isMenuUnderMouse =
+            GUIUtil.pointInRectangle(mousePoint, menuRect) &&
+            ((dragableMenu as any).ownsPoint?.(mousePoint.x, mousePoint.y) ?? true);
           if (isMenuUnderMouse || this.chosenMenu === dragableMenu) {
             if (this.chosenMenu !== dragableMenu && !clickedOnLastUpdate) {
               this.chosenMenu = dragableMenu;

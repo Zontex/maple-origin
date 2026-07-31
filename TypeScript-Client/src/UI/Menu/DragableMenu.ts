@@ -61,6 +61,15 @@ class DragableMenu {
     return null;
   }
 
+  /**
+   * Whether any open menu covers the point. For windows that are not menus
+   * themselves — the key config window draws beneath all of them, so a press
+   * landing on a menu must not also reach a key underneath it.
+   */
+  static anyHits(x: number, y: number): boolean {
+    return DragableMenu.stack.some((m) => DragableMenu.hits(m, x, y));
+  }
+
   private static hits(menu: DragableMenu, x: number, y: number): boolean {
     if (!menu || menu.isHidden) return false;
     const r = menu.getRect({} as CameraInterface);
