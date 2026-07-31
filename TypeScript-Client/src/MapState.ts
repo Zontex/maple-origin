@@ -106,7 +106,9 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
     await MapleMap.load(map);
   } catch (e) {
     console.error('Error loading map:', map, e);
-    // Ensure fade-in still happens so user isn't stuck on black screen
+    // load() resets all per-frame collections before its first await, so the
+    // map is a safe empty state — releasing the fade here avoids a stuck
+    // black screen without crash-looping update()/render()
     MapleMap.doneLoading = true;
   }
 

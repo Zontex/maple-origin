@@ -53,6 +53,12 @@ class Obj {
       }
     });
 
+    // Start decoding all frames now — drawImage skips undecoded images, so
+    // lazily created animation frames blink on their first render. Fire and
+    // forget: awaiting every decode blocks map load for seconds. Frames can
+    // be undefined when a UOL fails to resolve.
+    for (const f of this.frames) void f?.nPreloadImage?.();
+
     this.setFrame(0);
 
     this.x = wzNode.x.nValue;
@@ -208,10 +214,20 @@ class Obj {
         });
       }
     } else {
+      const fx = dx - camera.x;
+      const fy = dy - camera.y;
+      // Skip non-tiling objects fully outside the viewport (only safe when
+      // unrotated — rotation can swing the sprite beyond its bounding box)
+      if (
+        angle === 0 &&
+        (fx > config.width || fy > config.height || fx + width < 0 || fy + height < 0)
+      ) {
+        return;
+      }
       canvas.drawImage({
         img: currentImage,
-        dx: dx - camera.x,
-        dy: dy - camera.y,
+        dx: fx,
+        dy: fy,
         flipped: !!this.flipped,
         alpha,
         angle,

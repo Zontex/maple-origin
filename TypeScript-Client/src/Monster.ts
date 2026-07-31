@@ -71,6 +71,9 @@ class Monster {
   stance: any = null;
   onStanceFinish: any = null;
   flipped: boolean = false;
+  // info/noFlip=1 (tutorial sign mobs, some bosses): sprite is never
+  // mirrored regardless of facing, so baked-in signage stays readable
+  noFlip: boolean = false;
   layer: number = 0;
   isRemote: boolean = false; // Network-controlled mob — skip local AI
   _spawning: boolean = false;  // GMS fade-in effect on respawn
@@ -141,6 +144,7 @@ class Monster {
       mobFile = await WZManager.get(`${WZFiles.Mob}/${strId}.img`);
     }
     this.mobFile = mobFile;
+    this.noFlip = !!mobFile.info.noFlip?.nValue;
 
     // Movement type: v83 has no info.moveAbility — Cosmic derives mobility
     // from stance presence. Honor moveAbility as an override if present.
@@ -278,6 +282,23 @@ class Monster {
     }, {});
 
     this.setStance(MobStance.stand);
+
+    // Start decoding every stance + attack-ball frame now — drawImage skips
+    // undecoded images, so lazily-created frames blink on first render. Fire
+    // and forget: awaiting every decode blocks map load for seconds.
+    mobFile.nChildren
+      .filter((c: any) => c.nName !== "info")
+      .forEach((stanceNode: any) => {
+        (stanceNode.nChildren || []).forEach((frame: any) => {
+          const f = frame.nTagName === "uol" ? frame.nResolveUOL() : frame;
+          void f?.nPreloadImage?.();
+        });
+      });
+    for (const attack of this.attacks) {
+      (attack.ballNode?.nChildren || []).forEach((frame: any) => {
+        void frame?.nPreloadImage?.();
+      });
+    }
 
     this.isInHit = false;
     this.afterHitShowHpBarTime = 6000;
@@ -1194,7 +1215,9 @@ async addDrops() {
     const originX = currentFrame.nGet("origin").nGet("nX", 0);
     const originY = currentFrame.nGet("origin").nGet("nY", 0);
 
-    const adjustX = !this.flipped ? originX : currentFrame.nWidth - originX;
+    // noFlip mobs render unmirrored no matter which way they face
+    const drawFlipped = this.noFlip ? false : !!this.flipped;
+    const adjustX = !drawFlipped ? originX : currentFrame.nWidth - originX;
 
     // GMS fade-in effect on respawn (effect -2)
     let alpha = 1;
@@ -1208,7 +1231,7 @@ async addDrops() {
       img: currentImage,
       dx: this.pos.x - camera.x - adjustX,
       dy: this.pos.y - camera.y - originY,
-      flipped: !!this.flipped,
+      flipped: drawFlipped,
       alpha,
     });
 

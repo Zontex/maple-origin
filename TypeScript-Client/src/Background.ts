@@ -66,6 +66,12 @@ class Background {
       });
     }
 
+    // Start decoding all frames now — drawImage skips undecoded images, so
+    // lazily created animation frames blink on their first render. Fire and
+    // forget: awaiting every decode blocks map load for seconds. Frames can
+    // be undefined when a UOL fails to resolve.
+    for (const f of this.frames) void f?.nPreloadImage?.();
+
     this.setFrame(0);
 
     this.x = wzNode.x.nValue;

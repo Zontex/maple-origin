@@ -121,7 +121,9 @@ class GameCanvas {
     if (this.game.getContext === null) {
       throw new Error("GameCanvas: getContext is null");
     }
-    this.context = this.game.getContext("2d")!;
+    // The game paints an opaque full-screen background every frame, so an
+    // opaque backing store skips per-frame alpha compositing with the page
+    this.context = this.game.getContext("2d", { alpha: false })!;
     this.context.imageSmoothingEnabled = false;
 
     this.listenMouse();
@@ -299,6 +301,13 @@ class GameCanvas {
     const alpha = opts.alpha !== undefined ? opts.alpha : 1;
     const scaleX = opts.scaleX !== undefined ? opts.scaleX : 1;
     const scaleY = opts.scaleY !== undefined ? opts.scaleY : 1;
+
+    // Fast path: the vast majority of sprites draw unrotated, unflipped and
+    // opaque — skip the save/translate/rotate/restore state churn entirely
+    if (!flipped && angle === 0 && alpha === 1 && scaleX === 1 && scaleY === 1) {
+      this.context.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+      return;
+    }
 
     const effectiveWidth = dw * scaleX;
     const effectiveHeight = dh * scaleY;

@@ -121,6 +121,13 @@ class Portal {
       }
     }
 
+    // Start decoding all frames now — drawImage skips undecoded images, so
+    // the portal animation blinks on its first cycle otherwise. Fire and
+    // forget: awaiting decodes blocks map load.
+    if (this.frames) {
+      for (const f of this.frames) void f?.nPreloadImage?.();
+    }
+
     this.setFrame(0);
 
     // Invisible/non-drawn portals still need a collision rect
