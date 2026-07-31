@@ -616,7 +616,9 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   UIGameOption.doUpdate(canvas);
   UIGameOption.draw(canvas, camera, lag, msPerTick, tdelta);
   UIKeyConfig.doUpdate(canvas);
-  UIKeyConfig.draw(canvas, camera, lag, msPerTick, tdelta);
+  // Drawn from MapState instead, before the inventory/stats/quest windows —
+  // this block runs after them, so KEYBOARD SETTING covered every menu
+  // opened on top of it.
 
   // Chat log above the status bar (under the cursor drawn by UICommon)
   UIChatLog.render(canvas);

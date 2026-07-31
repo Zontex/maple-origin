@@ -174,7 +174,19 @@ const UIHotkeyBar = {
   // inventory (InventoryMenuSprite owns the spec parsing / sound / removal)
   activateItem(itemId: number) {
     const inventoryMenu = (window as any).MapStateInstance?.inventoryMenu;
-    if (!inventoryMenu?.consumeItem) return;
+    if (!inventoryMenu) return;
+
+    // Setup tab first. Only the Use tab was ever searched, so a chair bound
+    // to a key silently did nothing — it does not live in `use`, and the
+    // lookup simply found no item and returned.
+    const setupTab = MyCharacter.inventory?.setup || [];
+    const setupItem = setupTab.find((i: any) => i && i.itemId === itemId);
+    if (setupItem) {
+      inventoryMenu.useSetupItem?.(setupItem);
+      return;
+    }
+
+    if (!inventoryMenu.consumeItem) return;
     const useTab = MyCharacter.inventory?.use || [];
     const item = useTab.find((i: any) => i && i.itemId === itemId && (i.quantity ?? 1) > 0);
     if (!item) return; // ran out — key does nothing, like GMS

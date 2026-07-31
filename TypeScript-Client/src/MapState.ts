@@ -49,6 +49,34 @@ function actionDown(canvas: GameCanvas, action: BindableAction): boolean {
 function actionPressed(canvas: GameCanvas, action: BindableAction): boolean {
   return actionDown(canvas, action) && !previousActionState[action];
 }
+/**
+ * Items bound straight onto a keyboard key, which is how anything outside the
+ * eight quickslot keys gets used — a chair on X, for instance. Edge-triggered
+ * per key, so holding it does not re-fire.
+ */
+/** Held across frames so a press raises a window once, not every frame. */
+let menuFocusLatched = false;
+const previousItemKeyState: Record<number, boolean> = {};
+function checkItemKeys(canvas: GameCanvas) {
+  const codes = new Set([
+    ...Object.keys(KeyBindings.itemBindings),
+    ...Object.keys(KeyBindings.skillBindings),
+  ]);
+  for (const codeStr of codes) {
+    const code = Number(codeStr);
+    const keyName = KeyBindings.keyNameForScancode(code);
+    if (!keyName) continue;
+    const down = canvas.isKeyDown(keyName);
+    if (down && !previousItemKeyState[code]) {
+      const itemId = KeyBindings.itemBindings[code];
+      const skillId = KeyBindings.skillBindings[code];
+      if (itemId !== undefined) UIHotkeyBar.activateItem(itemId);
+      else if (skillId !== undefined) void UIHotkeyBar.activateSkill(skillId);
+    }
+    previousItemKeyState[code] = down;
+  }
+}
+
 function latchActions(canvas: GameCanvas) {
   // Driven off ACTIONS rather than a hand-written list so a newly bindable
   // action cannot be left unlatched and fire on every frame it is held.
@@ -59,6 +87,7 @@ function latchActions(canvas: GameCanvas) {
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
+import DragableMenu from "./UI/Menu/DragableMenu";
 import DirectionScene from "./Effects/DirectionScene";
 import TransportationManager from "./Transport/TransportationManager";
 import MapStateCache from "./MapStateCache";
@@ -372,6 +401,9 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
   });
 
   this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu];
+  // Same array, same order as the draw pass — so "later in the list" means
+  // "drawn on top", which is what click ownership is decided on.
+  DragableMenu.setStack(this.UIMenus);
 
   // Initialize hotkey bar (visible by default so players can use skill slots)
   UIHotkeyBar.initialize();
@@ -558,13 +590,20 @@ MapStateInstance.doUpdate = function (
         if (canvas.isKeyDown("right")) {
           MyCharacter.rightClick();
         }
-        // Edge-triggered: a jump is one impulse per press. Physics.jump()
-        // assigns vy outright, so calling it on every frame the key is held
-        // kept re-setting vy to full jump speed and gravity never got to bite —
-        // the character rose at constant max speed off the ground, and flew
-        // straight up a rope (the isClimbing branch has no airborne check).
-        if (actionPressed(canvas, "jump")) {
-          MyCharacter.jump();
+        // Held, not edge-triggered: holding jump while walking keeps hopping,
+        // re-firing each time the last jump lands. What stops that flying is
+        // the landed check in canJump, not the key edge — Physics.jump()
+        // assigns vy outright, so anything that lets it run while the
+        // character is still rising re-launches at full speed every frame.
+        if (actionDown(canvas, "jump")) {
+          MyCharacter.tryJump(
+            canvas.isKeyDown("left") || canvas.isKeyDown("right")
+          );
+        } else {
+          // Letting go re-arms the rope push-off. Catching a rope disarms it,
+          // so a jump key that was already held when the rope was caught
+          // cannot launch until it has been released and pressed again.
+          MyCharacter.ropePushArmed = true;
         }
         if (actionDown(canvas, "attack")) {
           MyCharacter.attack();
@@ -667,7 +706,16 @@ MapStateInstance.doUpdate = function (
       // Process drag and drop
       const drop = DragManager.update(canvas);
       if (drop) {
-        UIHotkeyBar.handleDrop(drop);
+        // The key config window gets first refusal: it is the only way to put
+        // an item on a key outside the eight quickslots.
+        if (!UIKeyConfig.handleDrop(drop)) {
+          UIHotkeyBar.handleDrop(drop);
+        }
+      }
+
+      // Items bound directly to a key (see KeyBindings.itemBindings)
+      if (!dialogOpen) {
+        checkItemKeys(canvas);
       }
 
       MyCharacter.update(msPerTick);
@@ -750,6 +798,23 @@ MapStateInstance.doUpdate = function (
     UIQuestAlarm.update(msPerTick, canvas);
     DebugDrag.update(canvas.mouseX, canvas.mouseY, canvas.clicked);
 
+    // A press raises the window under it before anything reads the click, so
+    // the window you clicked is both on top and the one that responds.
+    // Latched: canvas.clicked stays true for the whole press.
+    // Re-registered every tick rather than once at map load: the menu list is
+    // rebuilt when a map loads, and a stale stack means ownership is decided
+    // against instances nobody is looking at any more.
+    DragableMenu.setStack(this.UIMenus);
+
+    if (canvas.clicked) {
+      if (!menuFocusLatched) {
+        menuFocusLatched = true;
+        DragableMenu.raiseAt(canvas.mouseX, canvas.mouseY);
+      }
+    } else {
+      menuFocusLatched = false;
+    }
+
     this.UIMenus.forEach((menu) => {
       menu.update(msPerTick, camera, canvas);
     });
@@ -775,6 +840,11 @@ MapStateInstance.doRender = function (
     if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {
       MapleMap.questDialog.draw(canvas, camera, lag, msPerTick, tdelta);
     }
+
+    // KEYBOARD SETTING sits under the draggable menus. Its input still runs
+    // from UIMap.doUpdate; only the drawing moved here, because that block
+    // runs after this one and the window covered anything opened on top.
+    UIKeyConfig.draw(canvas, camera, lag, msPerTick, tdelta);
 
     this.UIMenus.forEach((menu) => {
       menu.draw(canvas, camera, lag, msPerTick, tdelta);

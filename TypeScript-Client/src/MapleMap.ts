@@ -76,7 +76,7 @@ export interface MapleMap {
   loadNames: (id: number) => Promise<any>;
   loadTiles: (wzNode: any) => Promise<any>;
   loadObjects: (wzNode: any) => Promise<any>;
-  loadNPCs: (wzNode: any) => Promise<any>;
+  loadNPCs: (wzNode: any, mapId: number | string) => Promise<any>;
   loadMonsters: (wzNode: any) => Promise<any>;
   loadReactors: (wzNode: any) => Promise<void>;
   spawnMonster: (opts: any) => Promise<void>;
@@ -202,7 +202,9 @@ MapleMap.load = async function (id: number | string) {
 
   // Phase 3: NPCs, monsters, reactors in parallel (all depend on footholds, not each other)
   await Promise.all([
-    this.loadNPCs(this.wzNode.life),
+    // id is passed in rather than read from this.id — that is not assigned
+    // until further down, so at this point it still holds the previous map.
+    this.loadNPCs(this.wzNode.life, id),
     this.loadMonsters(this.wzNode.life),
     this.loadReactors(this.wzNode.reactor),
   ]);
@@ -692,7 +694,26 @@ MapleMap.changeMap = async function (newMapId: number) {
   console.log(`Map changed to ${newMapId}`);
 };
 
-MapleMap.loadNPCs = async function (wzNode) {
+/** Map id -> extra NPCs, loaded once from /data/custom-npcs.json. */
+let customNpcCache: Record<string, any[]> | null = null;
+async function getCustomNpcs(mapId: string | number): Promise<any[]> {
+  if (!customNpcCache) {
+    try {
+      const resp = await fetch("/data/custom-npcs.json");
+      const data = await resp.json();
+      customNpcCache = {};
+      for (const [id, list] of Object.entries(data)) {
+        if (Array.isArray(list)) customNpcCache[id] = list;
+      }
+    } catch (e) {
+      console.warn("[MapleMap] no custom NPC data:", e);
+      customNpcCache = {};
+    }
+  }
+  return customNpcCache[String(mapId)] || [];
+}
+
+MapleMap.loadNPCs = async function (wzNode, mapId) {
   for (const npcNode of wzNode.nChildren.filter(
     (n: any) => n.type.nValue === "n"
   )) {
@@ -706,6 +727,26 @@ MapleMap.loadNPCs = async function (wzNode) {
       hide: npcNode.nGet("hide").nGet("nValue", 0),
       map: this
     });
+  }
+
+  // NPCs this project adds on top of Map.wz. They spawn through the same path
+  // as the WZ ones, so clicking, shops and dialogue all behave identically —
+  // the only difference is where the placement came from.
+  for (const extra of await getCustomNpcs(mapId)) {
+    try {
+      await this.spawnNPC({
+        oId: null,
+        id: extra.id,
+        x: extra.x,
+        cy: extra.cy,
+        f: extra.f ?? 0,
+        fh: extra.fh,
+        hide: extra.hide ?? 0,
+        map: this,
+      });
+    } catch (e) {
+      console.warn(`[MapleMap] custom NPC ${extra.id} failed to spawn:`, e);
+    }
   }
 };
 
@@ -1101,6 +1142,20 @@ async function _handleClickInner(
   const mouseX = (event.clientX - rect.left) / scaleX;
   const mouseY = (event.clientY - rect.top) / scaleY;
   console.log("Click detected at:", mouseX, mouseY);
+
+  // A click that lands on a UI window belongs to that window, not to the map
+  // behind it. Double-clicking an apple in an inventory that happened to sit
+  // over an NPC ate the apple AND opened the NPC's dialogue.
+  const { default: DragableMenu } = await import("./UI/Menu/DragableMenu");
+  if (DragableMenu.anyHits(mouseX, mouseY)) return;
+  const { default: UIKeyConfigRef } = await import("./UI/UIKeyConfig");
+  if (
+    UIKeyConfigRef.isVisible &&
+    mouseX >= UIKeyConfigRef.x && mouseX <= UIKeyConfigRef.x + 629 &&
+    mouseY >= UIKeyConfigRef.y && mouseY <= UIKeyConfigRef.y + 373
+  ) {
+    return;
+  }
 
   for (const npc of this.npcs as any[]) {
     if (!npc.pos || npc.hide) continue;

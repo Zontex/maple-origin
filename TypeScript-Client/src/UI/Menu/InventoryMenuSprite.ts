@@ -19,6 +19,7 @@ import mySocket from "../../mysocket";
 import UIHotkeyBar from "../UIHotkeyBar";
 import UIEquipTooltip from "../UIEquipTooltip";
 import { getEquipSlotForItem } from "./EquipMenuSprite";
+import UIKeyConfig from "../UIKeyConfig";
 
 class InventoryMenuSprite extends DragableMenu {
   opts: any;
@@ -762,6 +763,12 @@ class InventoryMenuSprite extends DragableMenu {
 
   // Handle dragging an item out of the inventory
   handleItemDrag(item: any, slotIndex: number) {
+    // Checked before any state is set, not just before beginPending. This
+    // window keeps its own drag flags and draws its own carried icon, so a
+    // press landing on a window stacked above this one still produced a
+    // second ghost here — two things dragging off one click.
+    if (!this.ownsPoint(this.GameCanvas.mouseX, this.GameCanvas.mouseY)) return;
+
     ClickManager.isDraggingItem = true;
     this.isDragging = true;
     this.draggingItem = item;
@@ -775,7 +782,13 @@ class InventoryMenuSprite extends DragableMenu {
     // both Item.wz items and Character.wz equips
     let iconImg: HTMLImageElement | null = null;
     try {
-      const iconNode = item.node?.info?.iconRaw ?? item.node?.iconRaw;
+      // iconRaw first, then icon. Not every item has iconRaw — chairs are one
+      // — and without the fallback the icon came back null, which skipped
+      // beginPending entirely, so those items could not be dragged onto a
+      // quickslot or a key at all. ShopUI has always used the same fallback.
+      const iconNode =
+        item.node?.info?.iconRaw ?? item.node?.info?.icon ??
+        item.node?.iconRaw ?? item.node?.icon;
       if (iconNode?.nGetImage) {
         iconImg = iconNode.nGetImage();
         this.draggingIcon = iconImg;
@@ -784,7 +797,9 @@ class InventoryMenuSprite extends DragableMenu {
       this.draggingIcon = null;
     }
 
-    // Also register with global DragManager for hotkey bar drops
+    // Also register with global DragManager for hotkey bar drops. Only when
+    // this window owns the point — overlapping menus each read the mouse for
+    // themselves, so without it two windows start a drag off one press.
     if (iconImg) {
       DragManager.beginPending('item', item.itemId, iconImg, startX, startY);
     }
@@ -816,6 +831,29 @@ class InventoryMenuSprite extends DragableMenu {
       // application and ground drops below still work
       if (DragManager.isDragging) {
         const barSlot = UIHotkeyBar.getSlotAtMouse?.(mouseX, mouseY) ?? -1;
+        // A key in the KEYBOARD SETTING window is a drop target too — without
+        // this the cancel below killed the drag before the frame could bind
+        // it, which is why an item could never be dropped onto a key.
+        const onKey = UIKeyConfig.isOverKey?.(mouseX, mouseY) ?? false;
+        if (onKey) {
+          // Bind here, on the actual mouse-up, rather than leaving it for the
+          // next frame to notice. This handler is the release; deferring it
+          // made the drop depend on a later frame still seeing wasMouseUp,
+          // and when that frame missed it the icon stayed on the cursor and
+          // took a second click to place.
+          UIKeyConfig.handleDrop({
+            type: 'item',
+            id: this.draggingItem?.itemId,
+            icon: this.draggingIcon,
+            mouseX,
+            mouseY,
+          } as any);
+          DragManager.cancel();
+          this.draggingItem = null;
+          this.draggingIcon = null;
+          this.draggingSlotIndex = -1;
+          return;
+        }
         if (barSlot >= 0) {
           this.draggingItem = null;
           this.draggingIcon = null;
@@ -1195,7 +1233,18 @@ class InventoryMenuSprite extends DragableMenu {
   }
 
   // Drop items — single items drop immediately, stackable items show quantity dialog
-  showItemDropDialog(item: any, slotIndex: number) {
+  async showItemDropDialog(item: any, slotIndex: number) {
+    // What the item itself says. v83 marks untradeable and quest items in
+    // their own WZ info node, and their tooltips already tell the player as
+    // much in orange — nothing was enforcing it, so a Relaxer chair
+    // (tradeBlock=1) could be thrown on the floor. This covers every item
+    // carrying the flags, not just chairs.
+    const { canDropItem } = await import('../../Inventory/ItemRestrictions');
+    if (!(await canDropItem(item.itemId))) {
+      console.log(`[Inventory] #${item.itemId} cannot be dropped (untradeable or quest item)`);
+      return;
+    }
+
     // Block dropping quest items
     const questManager = this.charecter?.questManager;
     if (questManager) {

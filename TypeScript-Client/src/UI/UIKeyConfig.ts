@@ -1,5 +1,7 @@
 import WZManager from "../wz-utils/WZManager";
 import ClickManager from "./ClickManager";
+import DragManager from "./DragManager";
+import DragableMenu from "./Menu/DragableMenu";
 import { MapleStanceButton } from "./MapleStanceButton";
 import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
@@ -108,6 +110,17 @@ interface UIKeyConfigInterface {
   dragY: number;
   _clickHeld: boolean;
   _restore: Record<number, BindableAction> | null;
+  /** Horizontal offset of each button from the window's left edge. */
+  _buttonDx: number[];
+  /** Grab offset while the title bar is being dragged, null when it is not. */
+  _windowDrag: { dx: number; dy: number } | null;
+  syncButtons: () => void;
+  /** itemId -> inventory icon, for items bound straight onto a key. */
+  itemIcons: Record<number, HTMLImageElement>;
+  loadItemIcon: (itemId: number) => void;
+  handleDrop: (drop: { type: string; id: number; mouseX: number; mouseY: number }) => boolean;
+  /** True when the point is over a bindable key of an open window. */
+  isOverKey: (x: number, y: number) => boolean;
   initialize: (canvas: GameCanvas) => Promise<void>;
   show: () => void;
   hide: () => void;
@@ -129,6 +142,75 @@ UIKeyConfig.dragX = 0;
 UIKeyConfig.dragY = 0;
 UIKeyConfig._clickHeld = false;
 UIKeyConfig._restore = null;
+UIKeyConfig._buttonDx = [];
+UIKeyConfig._windowDrag = null;
+
+/** The title plate across the top of the background, used as the drag handle. */
+const TITLE_H = 26;
+
+UIKeyConfig.itemIcons = {};
+
+/**
+ * Item icons come from the same place the inventory gets them, and are only
+ * fetched once per item.
+ */
+UIKeyConfig.loadItemIcon = function (itemId: number) {
+  if (this.itemIcons[itemId]) return;
+  void (async () => {
+    try {
+      const Item = (await import("../Inventory/Item")).default;
+      const obj: any = await Item.fromOpts({ itemId, quantity: 1 });
+      const node = obj?.node?.info?.iconRaw || obj?.node?.info?.icon;
+      if (node?.nGetImage) this.itemIcons[itemId] = node.nGetImage();
+    } catch (e) {
+      console.warn(`[UIKeyConfig] no icon for item ${itemId}`, e);
+    }
+  })();
+};
+
+/**
+ * Take an item dragged out of the inventory and drop it onto a key.
+ *
+ * This is what makes "put the chair on X" possible at all: the quickslot bar
+ * is fixed to the eight v83 keys, so anything outside that set has to be
+ * bound here. Returns true when the drop was consumed.
+ */
+/**
+ * Drag sources ask this before deciding whether to cancel the drag on mouse
+ * up. They run their own DOM mouseup handler, which fires before the next
+ * frame, and anything not dropped on the quickslot bar used to be cancelled
+ * there — so a drop onto a key was destroyed before the frame could bind it.
+ */
+UIKeyConfig.isOverKey = function (x: number, y: number) {
+  if (!this.isVisible) return false;
+  return KEY_SLOTS.some((s) => inside(slotRect(s), x, y));
+};
+
+UIKeyConfig.handleDrop = function (drop: any) {
+  if (!this.isVisible) return false;
+  if (drop.type !== "item" && drop.type !== "skill") return false;
+  const slot = KEY_SLOTS.find((s) => inside(slotRect(s), drop.mouseX, drop.mouseY));
+  if (!slot) return false;
+  // The drag already carries the icon it was drawn with, so reuse it rather
+  // than going back to WZ — that also covers skills, whose icons never came
+  // from the item tree in the first place.
+  if (drop.icon) this.itemIcons[drop.id] = drop.icon;
+  if (drop.type === "skill") {
+    KeyBindings.bindSkill(slot.code, drop.id);
+  } else {
+    KeyBindings.bindItem(slot.code, drop.id);
+    this.loadItemIcon(drop.id);
+  }
+  return true;
+};
+
+/** Buttons carry absolute coordinates, so they have to follow the window. */
+UIKeyConfig.syncButtons = function () {
+  this.buttons.forEach((b, i) => {
+    b.x = this.x + (this._buttonDx[i] ?? 0);
+    b.y = this.y + BTN_Y;
+  });
+};
 
 const slotRect = (s: KeySlot) => ({
   x: UIKeyConfig.x + s.x,
@@ -193,7 +275,9 @@ UIKeyConfig.initialize = async function (canvas: GameCanvas) {
       });
       ClickManager.addButton(b);
       this.buttons.push(b);
+      this._buttonDx.push(dx);
     };
+    this._buttonDx = [];
     // Bindings apply as they are dropped, so OK only has to close.
     mk(BTN_X.default, kc.nGet("BtDefault"), () => KeyBindings.resetToDefault());
     mk(BTN_X.delete, kc.nGet("BtDelete"), () => KeyBindings.replaceAll({}));
@@ -216,6 +300,9 @@ UIKeyConfig.show = function () {
   this._clickHeld = false;
   // Captured so Cancel can put every binding back — they apply as you drop.
   this._restore = KeyBindings.snapshot();
+  for (const code of Object.keys(KeyBindings.itemBindings)) {
+    this.loadItemIcon(KeyBindings.itemBindings[Number(code)]);
+  }
   this.buttons.forEach((b) => (b.isHidden = false));
 };
 
@@ -237,6 +324,24 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
   this.dragX = mx;
   this.dragY = my;
 
+  // Moving the window itself, by its title plate. Handled before anything
+  // else so a drag in progress owns the mouse.
+  if (this._windowDrag) {
+    if (canvas.clicked) {
+      this.x = mx - this._windowDrag.dx;
+      this.y = my - this._windowDrag.dy;
+      // Keep it reachable — the title bar must stay on screen or there is no
+      // way to drag it back.
+      this.x = Math.max(-WIN_W + 80, Math.min(config.width - 80, this.x));
+      this.y = Math.max(0, Math.min(config.height - TITLE_H, this.y));
+      this.syncButtons();
+      return;
+    }
+    this._windowDrag = null;
+    this._clickHeld = false;
+    return;
+  }
+
   // canvas.clicked stays true for the whole press, so the pickup is latched
   // to the frame the button goes down and the drop to the frame it comes up.
   if (!canvas.clicked) {
@@ -254,9 +359,44 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
   if (this._clickHeld) return;
   this._clickHeld = true;
 
+  // This window draws beneath the inventory, skill and stats windows, so a
+  // press that lands on one of those belongs to it — not to whatever key
+  // happens to sit underneath. Without this, dragging an item out of an
+  // inventory positioned over the keyboard also picked up the action icon on
+  // the key below it, and two things came away in one gesture.
+  if (DragableMenu.anyHits(mx, my)) return;
+
+  // Grab the title plate to move the window.
+  if (
+    mx >= this.x && mx <= this.x + WIN_W &&
+    my >= this.y && my <= this.y + TITLE_H
+  ) {
+    this._windowDrag = { dx: mx - this.x, dy: my - this.y };
+    return;
+  }
+
   // Pick up off a key…
   const slot = KEY_SLOTS.find((s) => inside(slotRect(s), mx, my));
   if (slot) {
+    // An item on a key is cleared by clicking it — there is no palette for
+    // items to go back to, they came from the inventory and still live there.
+    // An item or skill on a key is picked up and carried, the same as an
+    // action — a bare click used to wipe it, so brushing a key lost the
+    // binding. It only goes away if you drop it somewhere that is not a key.
+    const heldItem = KeyBindings.itemBindings[slot.code];
+    const heldSkill = KeyBindings.skillBindings[slot.code];
+    if (heldItem !== undefined || heldSkill !== undefined) {
+      const id = heldItem !== undefined ? heldItem : heldSkill!;
+      // Deliberately does NOT unbind here. The binding only moves once the
+      // drag lands on another key, because bindItem/bindSkill clear the old
+      // one themselves — so a press that turns out to be a plain click, or a
+      // drag let go over nothing, leaves the key exactly as it was.
+      DragManager.beginPending(
+        heldItem !== undefined ? "item" : "skill",
+        id, this.itemIcons[id] ?? null, mx, my
+      );
+      return;
+    }
     const action = KeyBindings.bindings[slot.code];
     if (action) {
       const info = ACTIONS.find((a) => a.action === action);
@@ -280,6 +420,23 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
 UIKeyConfig.draw = function (canvas, camera, lag, msPerTick, tdelta) {
   if (!this.isVisible || !this.background) return;
   canvas.drawImage({ img: this.background, dx: this.x, dy: this.y });
+
+  // Items and skills bound straight to a key draw their own icon.
+  for (const s of KEY_SLOTS) {
+    const itemId = KeyBindings.itemBindings[s.code] ?? KeyBindings.skillBindings[s.code];
+    if (itemId === undefined) continue;
+    const img = this.itemIcons[itemId];
+    if (!img) {
+      if (KeyBindings.itemBindings[s.code] !== undefined) this.loadItemIcon(itemId);
+      continue;
+    }
+    const r = slotRect(s);
+    canvas.drawImage({
+      img,
+      dx: Math.round(r.x + (r.w - Math.min(img.width || ICON, ICON)) / 2),
+      dy: Math.round(r.y + (r.h - Math.min(img.height || ICON, ICON)) / 2),
+    });
+  }
 
   // Icons sitting on the keys they are bound to.
   for (const s of KEY_SLOTS) {
