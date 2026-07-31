@@ -1,12 +1,11 @@
 import WZManager from "../wz-utils/WZManager";
+import Settings from "../Settings";
 
 export interface AudioManager {
   bgm: HTMLAudioElement;
   bgmName: string;
   playBackgroundMusic: (name: string) => Promise<void>;
 }
-const Volume = 0.4;
-console.log("Background Volume", Volume);
 
 const currentAudioManager: AudioManager = {
   bgm: new Audio(),
@@ -29,10 +28,15 @@ const currentAudioManager: AudioManager = {
       this.bgm = wzNode.nGetAudio();
       this.bgm.loop = true;
       console.log(`Playing ${name}`);
-      this.bgm.volume = Volume;
+      this.bgm.volume = Settings.bgmVolume;
       this.bgm.play().catch(() => {});
     }
   },
+};
+
+// Track the volume slider live, including while a track is already playing.
+Settings.onBgmVolumeChange = (volume: number) => {
+  if (currentAudioManager.bgm) currentAudioManager.bgm.volume = volume;
 };
 
 // Global listener: retry BGM on any user interaction if it should be playing but isn't

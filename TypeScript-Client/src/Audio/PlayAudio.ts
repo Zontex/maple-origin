@@ -14,8 +14,15 @@
 //   concurrentAudio.play();
 // }
 
+import Settings from "../Settings";
+
 const playingAudios = new Map<any, number>();
 
+/**
+ * `volume` stays the caller's per-sound level; the player's SOUND setting
+ * scales it, so an effect that was deliberately quiet stays proportionally
+ * quiet as the slider moves.
+ */
 function PLAY_AUDIO(audio: any, volume = 1, allowOverlap = false) {
   const now = Date.now();
   const lastPlayed = playingAudios.get(audio) || 0;
@@ -24,7 +31,7 @@ function PLAY_AUDIO(audio: any, volume = 1, allowOverlap = false) {
   // to prevent audio spam from rapid-fire calls in the same frame
   if (allowOverlap || now - lastPlayed > 50) {
     const concurrentAudio = audio.cloneNode();
-    concurrentAudio.volume = volume;
+    concurrentAudio.volume = Math.min(1, Math.max(0, volume * Settings.sfxVolume));
     concurrentAudio.play();
     playingAudios.set(audio, now);
   }
