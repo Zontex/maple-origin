@@ -12,6 +12,7 @@ import GameCanvas from "../GameCanvas";
 import UIDevTools from "./UIDevTools";
 import UIHotkeyBar from "./UIHotkeyBar";
 import UIChatLog from "./UIChatLog";
+import UIGameMenu from "./UIGameMenu";
 
 export interface UIMapInterface {
   statusBarLevelDigits: any[];
@@ -154,12 +155,67 @@ UIMap.addButtons = function (canvas) {
     console.log("trade click — not implemented yet");
   }, bigY);
   addBtn(682, this.statusBarNode.BtMenu, () => {
-    console.log("menu click — not implemented yet");
+    UIGameMenu.toggle();
   }, bigY);
   addBtn(738, this.statusBarNode.BtShort, () => {
     console.log("shortcut click — not implemented yet");
   }, bigY);
+
+  // Popup for the MENU button. Not awaited — its assets load in the
+  // background and the panel starts hidden, so nothing can be clicked early.
+  void UIGameMenu.initialize(canvas);
+  UIGameMenu.onAction = (action) => {
+    switch (action) {
+      case "quit":
+        void quitToLogin(canvas);
+        break;
+      case "channel":
+        console.log("change channel — not implemented yet");
+        break;
+      case "skin":
+        console.log("change skin — not implemented yet");
+        break;
+      case "gameOption":
+        console.log("game option — not implemented yet");
+        break;
+      case "systemOption":
+        console.log("system option — not implemented yet");
+        break;
+    }
+  };
 };
+
+// QUIT GAME. The v83 client exits to the desktop; the browser equivalent is
+// dropping the session and going back to the login screen. Saving before the
+// socket closes matters — the server's disconnect handler also auto-saves, but
+// that races with the close and can persist a stale snapshot.
+async function quitToLogin(canvas: GameCanvas) {
+  // Imported lazily, like the chat send below: mysocket pulls in MapleMap and
+  // MyCharacter, so a static import here closes a require cycle through UIMap.
+  const MySocket = (await import("../mysocket")).default;
+
+  try {
+    MySocket.saveCharacterToServer();
+  } catch (e) {
+    console.error("[Quit] save failed", e);
+  }
+
+  // Otherwise the next page load auto-logs back in and the quit looks ignored.
+  try {
+    const { clearDevSession } = await import("../DevAutoLogin");
+    clearDevSession();
+  } catch {}
+
+  try {
+    MySocket.disconnect();
+  } catch (e) {
+    console.error("[Quit] disconnect failed", e);
+  }
+
+  const StateManager = (await import("../StateManager")).default;
+  const LoginState = (await import("../LoginState")).default;
+  await StateManager.setState(LoginState, canvas);
+}
 
 UIMap.doUpdate = function (msPerTick, camera, canvas) {
   if (this.firstUpdate) {
@@ -230,7 +286,13 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
 
     this.addButtons(canvas);
   }
-  if (!canvas.focusInput && canvas.focusGame && canvas.isKeyDown("enter")) {
+  // Enter only opens the chat during free exploration. While the game menu is
+  // up it confirms the highlighted entry instead, and swallowEnter keeps the
+  // keypress that dismissed the panel from landing here on the same frame.
+  if (
+    !canvas.focusInput && canvas.focusGame && canvas.isKeyDown("enter") &&
+    !UIGameMenu.isVisible && !UIGameMenu.swallowEnter
+  ) {
     // Minimized chat opens the input just for typing (GMS behavior).
     // Un-hide before focus() — a display:none input can't take focus.
     if (!UIChatLog.expanded) UIChatLog.typing = true;
@@ -462,6 +524,9 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   this.buttons.forEach((obj) => {
     obj.draw(canvas, camera, lag, msPerTick, tdelta);
   });
+
+  // GAME MENU popup sits above the bar it springs from, but below the cursor
+  UIGameMenu.draw(canvas, camera, lag, msPerTick, tdelta);
 
   // Chat log above the status bar (under the cursor drawn by UICommon)
   UIChatLog.render(canvas);
