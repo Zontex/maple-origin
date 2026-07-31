@@ -13,7 +13,33 @@ let nextDropId = 1;
 
 // Survives the reload that returns a disconnected player to login, so the
 // login screen can show the "unable to connect" notice
-export const DISCONNECTED_FLAG = 'maple:disconnected';
+const DISCONNECTED_FLAG = 'maple:disconnected';
+
+/** True when this page load followed a lost-connection reload. */
+export function wasDisconnected(): boolean {
+  try {
+    return sessionStorage.getItem(DISCONNECTED_FLAG) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Read and clear the flag — call once, from whoever shows the notice. */
+export function consumeDisconnected(): boolean {
+  const hit = wasDisconnected();
+  if (hit) {
+    try {
+      sessionStorage.removeItem(DISCONNECTED_FLAG);
+    } catch {}
+  }
+  return hit;
+}
+
+export function markDisconnected() {
+  try {
+    sessionStorage.setItem(DISCONNECTED_FLAG, '1');
+  } catch {}
+}
 
 interface PlayerState {
   id: string;
@@ -667,9 +693,7 @@ class MySocket {
       // manual reload. Reloading guarantees clean state; the flag survives it
       // so the login screen can explain what happened.
       console.error('Connection lost — returning to the login screen');
-      try {
-        sessionStorage.setItem(DISCONNECTED_FLAG, '1');
-      } catch {}
+      markDisconnected();
       window.location.reload();
     }
   }
