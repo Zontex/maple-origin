@@ -63,6 +63,7 @@ export interface MapState extends UIState {
     k: boolean;
     esc: boolean;
     enter: boolean;
+    alt: boolean;
   };
 }
 
@@ -341,6 +342,7 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     k: false,
     esc: false,
     enter: false,
+    alt: false,
   } as any;
 
   await initializeMapState(map, true);
@@ -499,7 +501,12 @@ MapStateInstance.doUpdate = function (
         if (canvas.isKeyDown("right")) {
           MyCharacter.rightClick();
         }
-        if (canvas.isKeyDown("alt")) {
+        // Edge-triggered: a jump is one impulse per press. Physics.jump()
+        // assigns vy outright, so calling it on every frame ALT is held kept
+        // re-setting vy to full jump speed and gravity never got to bite —
+        // the character rose at constant max speed off the ground, and flew
+        // straight up a rope (the isClimbing branch has no airborne check).
+        if (canvas.isKeyDown("alt") && !this.previousKeyboardState.alt) {
           MyCharacter.jump();
         }
         if (canvas.isKeyDown("ctrl")) {
@@ -613,6 +620,7 @@ MapStateInstance.doUpdate = function (
     (this.previousKeyboardState as any).k = canvas.isKeyDown("k");
     this.previousKeyboardState.esc = canvas.isKeyDown("esc");
     this.previousKeyboardState.enter = canvas.isKeyDown("enter");
+    this.previousKeyboardState.alt = canvas.isKeyDown("alt");
     // Release the Enter that confirmed a game-menu entry, so the next press is
     // free to open the chat again.
     if (!canvas.isKeyDown("enter")) UIGameMenu.swallowEnter = false;
