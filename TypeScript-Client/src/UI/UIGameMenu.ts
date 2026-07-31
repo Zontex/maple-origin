@@ -25,17 +25,15 @@ const WELL_TOP = 19;
 const WELL_H = 112;
 const BTN_H = 25;
 
-// Each button's art ends in its own dark border, which reads as a gap against
-// the equally dark well — so distributing across the measured bounds alone
-// leaves the stack looking short of the frame top and bottom. A small overhang
-// past the well fills it visually without touching the white border.
-const WELL_OVERHANG = 2;
-
+// Distributed to fill the well exactly: first button flush with its top, last
+// flush with its bottom. That consumes all 112px, so there is no slack left to
+// spread into — the dark lines between entries are each button's own border
+// art, not empty space, and pushing past them puts the bottom entry on the
+// frame's border (measured in game: it ended at y=520 against a well bottom of
+// y=517).
 function buttonY(index: number, count: number): number {
-  const top = WELL_TOP - WELL_OVERHANG;
-  if (count <= 1) return top;
-  const span = WELL_H + WELL_OVERHANG * 2 - BTN_H;
-  return top + Math.round((index * span) / (count - 1));
+  if (count <= 1) return WELL_TOP;
+  return WELL_TOP + Math.round((index * (WELL_H - BTN_H)) / (count - 1));
 }
 
 // Status bar art is 800x71 and sits flush with the bottom of the screen; the
