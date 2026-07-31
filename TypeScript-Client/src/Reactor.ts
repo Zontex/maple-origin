@@ -36,7 +36,10 @@ export default class Reactor {
   private currentState: number = 0;
   private maxState: number = 0;
   destroyed: boolean = false;
-  respawnScheduled: boolean = false;
+  // Wall-clock time this reactor is due back, stamped when it breaks and
+  // carried across map changes. 0 means it is standing, or that reactorTime
+  // says it never returns.
+  respawnAt: number = 0;
   private pendingDestroy: boolean = false;
   private pendingAdvance: number = -1;
   private _isRemoteHit: boolean = false; // True if hit was triggered by network
@@ -270,6 +273,10 @@ export default class Reactor {
 
   private destroy(): void {
     this.destroyed = true;
+    // Stamp the deadline at the moment of the break. Wall-clock rather than a
+    // countdown so it survives leaving the map, and set here rather than by
+    // whoever schedules the respawn so every client agrees on when it is due.
+    this.respawnAt = this.reactorTime > 0 ? Date.now() + this.reactorTime * 1000 : 0;
 
     // Only the player who hit the reactor creates drops
     if (!this._isRemoteHit) {
@@ -338,9 +345,21 @@ export default class Reactor {
     }
   }
 
+  // Come back already destroyed, carrying the deadline from the visit that
+  // broke it — the clock kept running while we were on another map, so this
+  // must not restart it. Jumped straight to the final state with no hit
+  // animation or drops: those already happened, to someone who was there.
+  restoreDestroyed(respawnAt: number): void {
+    this.destroyed = true;
+    this.respawnAt = respawnAt;
+    this.currentState = this.maxState;
+    this.frame = 0;
+    this.frameTimer = 0;
+  }
+
   reset(): void {
     this.destroyed = false;
-    this.respawnScheduled = false;
+    this.respawnAt = 0;
     this.pendingDestroy = false;
     this.pendingAdvance = -1;
     this.hitAnimState = -1;

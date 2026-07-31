@@ -20,6 +20,7 @@ import QuestScriptEngine from './Quest/QuestScriptEngine';
 import NpcScriptEngine, { stripScriptCodes } from './NpcScriptEngine';
 import QuestData from './Quest/QuestData';
 import Reactor from './Reactor';
+import MapStateCache from './MapStateCache';
 import UIMiniMap from './UI/UIMiniMap';
 import UIShipClock from './UI/UIShipClock';
 import ShipObject from './Transport/ShipObject';
@@ -107,6 +108,17 @@ _setMapleMap(MapleMap);
 const minLoadTimeInSeconds = 1;
 
 MapleMap.load = async function (id: number | string) {
+  // Remember what we did to the map we are leaving before any of it is torn
+  // down, so coming back does not rewind it (dead mobs, smashed reactors).
+  // Must run while `this.id` is still the OLD map — hence before the
+  // assignment immediately below.
+  MapStateCache.capture(this);
+
+  // Adopt the new id here rather than after the loaders run: loadMonsters and
+  // loadReactors ask the cache what they remember about `this.id`, and with
+  // the assignment further down they were asking about the map we just left
+  this.id = id;
+
   // Clear respawn timers from previous map
   this.clearRespawnTimers?.();
 
@@ -201,8 +213,6 @@ MapleMap.load = async function (id: number | string) {
   AudioManager.playBackgroundMusic(this.wzNode.info.bgm.nValue);
 
   Timer.doReset();
-
-  this.id = id;
 
   // Dialog/engine init in parallel (independent)
   const [npcDialog, questDialog] = await Promise.all([
@@ -532,8 +542,6 @@ let respawnAccumulator = 0;
 MapleMap.clearRespawnTimers = function () {
   monsterSpawnDefs = [];
   respawnAccumulator = 0;
-  for (const timer of reactorRespawnTimers) clearTimeout(timer);
-  reactorRespawnTimers = [];
   reactorSpawnDefs = [];
 };
 
@@ -563,14 +571,31 @@ MapleMap.loadMonsters = async function (wzNode) {
       nextPossibleSpawn: 0,
     };
     monsterSpawnDefs.push(spawnDef);
+
+    // Re-entering a map we have been on: a mob still inside its respawn
+    // window stays down, and a survivor comes back hurt and where we left it
+    // rather than healed at its spawn point
+    const remembered = MapStateCache.getMonsterState(Number(this.id), spawnDef.oId);
+    if (remembered && !remembered.alive) {
+      spawnDef.alive = false;
+      spawnDef.nextPossibleSpawn = remembered.nextPossibleSpawn;
+      continue;
+    }
+    if (remembered) {
+      spawnDef.x = remembered.x;
+      spawnDef.y = remembered.y;
+    }
     await this.spawnMonster(spawnDef);
+    if (remembered && remembered.hp > 0) {
+      const mob = this.findMonsterByOId(spawnDef.oId);
+      if (mob) mob.hp = remembered.hp;
+    }
   }
   currentMonsters = this.monsters;
 };
 
 // --- Reactor loading ---
 let reactorSpawnDefs: any[] = [];
-let reactorRespawnTimers: any[] = [];
 
 MapleMap.loadReactors = async function (wzNode) {
   reactorSpawnDefs = [];
@@ -609,6 +634,13 @@ MapleMap.loadReactors = async function (wzNode) {
         }
       }
       if (bestLayer !== null) reactor.layer = bestLayer;
+
+      // A reactor we smashed stays smashed until its own timer is up. Without
+      // this, the boat cabin's box (reactorTime 3600) could be farmed as fast
+      // as you could walk out the door and back in
+      const remembered = MapStateCache.getReactorState(Number(this.id), reactor.oId);
+      if (remembered) reactor.restoreDestroyed(remembered.respawnAt);
+
       this.reactors.push(reactor);
     } catch (e) {
       console.warn(`[MapleMap] Failed to load reactor ${id}:`, e);
@@ -814,18 +846,24 @@ MapleMap.update = function (msPerTick) {
   this.mobProjectiles = (this.mobProjectiles || []).filter((p: any) => !p.destroyed);
   this.mobProjectiles.forEach((p: any) => p.update(msPerTick));
 
-  // Reactor respawn handling
-  // Reactor respawn — only the mob host handles timers, broadcasts to others
-  for (const reactor of this.reactors) {
-    if (reactor.destroyed && !reactor.respawnScheduled && reactor.reactorTime > 0) {
-      reactor.respawnScheduled = true;
-      if (!isMobHost) continue; // Non-host waits for reactor_respawn message
-      const r = reactor;
-      const timer = setTimeout(() => {
-        r.reset();
-        try { (window as any).__mySocket?.sendReactorRespawn(r.oId); } catch {}
-      }, reactor.reactorTime * 1000);
-      reactorRespawnTimers.push(timer);
+  // Reactor respawn — driven by the deadline stamped at the break, not by a
+  // setTimeout. The timer version had two ways to never fire: it was armed
+  // only for the mob host (a non-host set respawnScheduled and then waited
+  // forever for a broadcast), and every timer was cleared on map change, so
+  // walking out re-armed nothing. Both were hidden while re-entering a map
+  // rebuilt its reactors from scratch; once state persisted, "broken" became
+  // permanent. Comparing wall-clock deadlines needs neither timer nor host,
+  // and every client reaches the same conclusion on its own.
+  {
+    const now = Date.now();
+    for (const reactor of this.reactors) {
+      if (!reactor.destroyed || !reactor.respawnAt || now < reactor.respawnAt) continue;
+      reactor.reset();
+      // The host still announces it, so a client that missed the break (and
+      // therefore has no deadline of its own) is brought back in sync
+      if (isMobHost) {
+        try { (window as any).__mySocket?.sendReactorRespawn(reactor.oId); } catch {}
+      }
     }
   }
 
@@ -850,6 +888,17 @@ MapleMap.update = function (msPerTick) {
     drop.update(msPerTick);
   });
 };
+
+// Collision debug overlay, toggled with F10 (F9 is DebugDrag): draws every
+// foothold line, the player's touch-damage hitbox, and the position anchor —
+// the point whose crossing of a foothold's end is what makes you fall.
+let debugCollision = false;
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'F10') {
+    debugCollision = !debugCollision;
+    console.log(`[Collision] overlay ${debugCollision ? 'ENABLED' : 'disabled'} — green: footholds, red: touch hitbox, yellow: position anchor`);
+  }
+});
 
 // Reusable per-layer buckets for dynamic entities. drawLayer runs up to 8
 // times a frame, and filtering four collections inside it meant 32 throwaway
@@ -1031,7 +1080,39 @@ MapleMap.render = function (
   // Station departure clock (world-space) / timed-ride countdown
   UIShipClock.draw(canvas, camera);
 
-  // Object.values(this.footholds).forEach(draw); // debug: draw foothold lines
+  // F10 collision overlay — on top of everything so lines stay visible
+  if (debugCollision) {
+    for (const fh of this.footholdList || []) {
+      canvas.drawLine({
+        x1: fh.x1 - camera.x, y1: fh.y1 - camera.y,
+        x2: fh.x2 - camera.x, y2: fh.y2 - camera.y,
+        color: '#00FF00', width: 1,
+      });
+    }
+    const pc = this.PlayerCharacter;
+    const box = pc?.getTouchBox?.();
+    if (box) {
+      const ctx = canvas.context;
+      ctx.save();
+      // Touch-damage hitbox
+      ctx.strokeStyle = '#FF3333';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        Math.round(box.x - camera.x) + 0.5,
+        Math.round(box.y - camera.y) + 0.5,
+        box.width,
+        box.height
+      );
+      // Position anchor — a crosshair whose arms END exactly at pos, so it
+      // cannot visually overshoot the foothold line the way a centred dot did
+      ctx.fillStyle = '#FFEE00';
+      const ax = Math.round(pc.pos.x - camera.x);
+      const ay = Math.round(pc.pos.y - camera.y);
+      ctx.fillRect(ax - 4, ay, 9, 1);
+      ctx.fillRect(ax, ay - 4, 1, 5);
+      ctx.restore();
+    }
+  }
 };
 
 // --- New: Simple click handler for NPCs ---

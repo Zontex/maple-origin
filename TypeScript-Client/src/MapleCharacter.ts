@@ -44,6 +44,14 @@ const FULFILLED_SOUND = "Sound.wz/UI.img/Invite";
 // a melee swing
 const ATTACK_BODY_H = 60;
 
+// Touch-damage hitbox: a slim fixed box around the body, anchored at the
+// foothold contact point, like the original client. The old check used the
+// union of every drawn body-part sprite (body, head, hair — including their
+// transparent padding), which made the effective hitbox far wider than the
+// character and mobs "hit" before visually touching.
+const TOUCH_HALF_W = 15;
+const TOUCH_H = 55;
+
 // Nudge for the chair's base relative to the character's foothold contact
 // point. Positive sinks it into the floor, negative lifts it.
 const CHAIR_BASE_OFFSET = 0;
@@ -2055,8 +2063,15 @@ isCloseToMob = (inAllDirections = true) => {
     const { fadeToBlack } = await import('./MapState');
     fadeToBlack();
 
-    if (!this.map!.isTown) {
-      await this.map!.load(this.map!.getNearbyTownMapId());
+    // Death sends you to the map's own `returnMap`, not to "the nearest town".
+    // Those usually agree — a town's returnMap points at itself and a field's
+    // points at its town — but the boat maps are marked `town=1` in the WZ
+    // while their returnMap is the dock you sailed from (Ellinia's ship:
+    // town=1, returnMap=101000300). Gating on isTown therefore skipped the
+    // warp entirely and the Balrog left you respawning on its own deck.
+    const returnMap = Number(this.map!.wzNode?.info?.returnMap?.nValue);
+    if (Number.isFinite(returnMap) && returnMap > 0 && returnMap !== Number(this.map!.id)) {
+      await this.map!.load(returnMap);
     }
 
     const spawnLocation = this.map!.getCenterFootholdLocation();
@@ -2103,6 +2118,20 @@ isCloseToMob = (inAllDirections = true) => {
         this.showDeathDialog();
       }
     }
+  }
+
+  /**
+   * Debug: the touch-damage hitbox in world coordinates, for the F10
+   * collision overlay. Kept next to nothing — it just exposes the same box
+   * checkForMobsHit tests, so the overlay can never drift from the truth.
+   */
+  getTouchBox() {
+    return {
+      x: this.pos.x - TOUCH_HALF_W,
+      y: this.pos.y - TOUCH_H,
+      width: TOUCH_HALF_W * 2,
+      height: TOUCH_H,
+    };
   }
 
   /**
@@ -2281,8 +2310,14 @@ isCloseToMob = (inAllDirections = true) => {
           // bodyAttack === 0 mobs (ranged-only) deal no touch damage
           (monster: Monster) => monster.dying === false && (monster as any).bodyAttack !== 0
         ).find((monster: Monster) => {
+          // Slim fixed body box, not the sprite union — see TOUCH_HALF_W
           const isHit = areAnyRectanglesOverlapping(
-            this.bodyRects,
+            [{
+              x: this.pos.x - TOUCH_HALF_W,
+              y: this.pos.y - TOUCH_H,
+              width: TOUCH_HALF_W * 2,
+              height: TOUCH_H,
+            }],
             {
               x: monster.x,
               y: monster.y,

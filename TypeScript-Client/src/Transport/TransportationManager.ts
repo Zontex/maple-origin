@@ -10,6 +10,7 @@
 //   localStorage.boatForceBalrog — '1' forces the invasion roll
 
 import AudioManager from '../Audio/AudioManager';
+import MapStateCache from '../MapStateCache';
 import {
   TRANSPORT_ROUTES, ELEVATOR, TIMED_RIDES,
   CLOCK_ROUTE_BY_MAP, SHIP_ROUTE_BY_MAP, ENEMY_SHIP_MAPS,
@@ -51,6 +52,9 @@ class TransportationManagerImpl {
   // deck doesn't resurrect kills we witnessed
   private invasionDeaths = new Set<string>();
   private balrogSeen: Record<number, boolean> = {};
+  // Spawns requested but not yet resolved — while one is in flight the mob is
+  // legitimately absent from the map, which must not be read as a kill
+  private balrogPending: Record<number, boolean> = {};
 
   private devRate(): number {
     try {
@@ -211,6 +215,27 @@ class TransportationManagerImpl {
     return route ? this.getPhase(route) : null;
   }
 
+  // Identifies WHICH voyage a ride map belongs to, or null for an ordinary
+  // map. In the original client the deck and cabin are instanced: every
+  // sailing builds a fresh copy and docking destroys it, which is why the
+  // Ellinia cabin's box is always there when you board despite carrying a
+  // one-hour reactorTime — the map it was broken on no longer exists. We have
+  // one persistent map object instead, so the token stands in for the
+  // instance: state carries across the deck/cabin door within a voyage, and
+  // is dropped the moment the cycle rolls over.
+  getInstanceToken(mapId: number): string | null {
+    for (const route of TRANSPORT_ROUTES) {
+      const onRide = route.legs.some(
+        (l) => l.deckMap === mapId || l.cabinMaps?.includes(mapId)
+      );
+      if (onRide) return `${route.key}:${this.getPhase(route).cycleIndex}`;
+    }
+    // Timed rides are instanced per boarding rather than per cycle
+    const ride = TIMED_RIDES.find((r) => r.rideMap === mapId);
+    if (ride) return `${ride.routeKey}:${this.mapEnteredAt}`;
+    return null;
+  }
+
   isEnemyShipVisible(mapId: number): boolean {
     return ENEMY_SHIP_MAPS.has(mapId) && this.haveBalrog('Boats');
   }
@@ -332,9 +357,16 @@ class TransportationManagerImpl {
 
     if (ph.cyclePos < approachPos + invasion.spawnAfterApproachMs / this.devRate()) return;
 
-    // Track deaths we witnessed so re-entering the deck doesn't resurrect them
+    // Track deaths we witnessed so re-entering the deck doesn't resurrect them.
+    // "Seen" means the spawn actually landed, never that one was requested:
+    // spawnMonster is async and loading Mob.wz/8150000 takes several ticks, so
+    // marking it seen up front made the gap before it appeared indistinguish-
+    // able from a kill. That recorded a death for a Balrog still on its way in
+    // — it then showed up and fought normally while already flagged dead for
+    // the cycle, and stepping into the cabin and back out lost it for good.
     for (let i = 0; i < invasion.countPerDeck; i++) {
       const oId = invasion.baseOId + i;
+      if (this.balrogPending[oId]) continue; // spawn in flight, absence proves nothing
       const present = !!mapleMap.findMonsterByOId?.(oId);
       if (this.balrogSeen[oId] && !present) {
         this.invasionDeaths.add(`${ph.cycleIndex}:${oId}`);
@@ -349,11 +381,16 @@ class TransportationManagerImpl {
       const oId = invasion.baseOId + i;
       if (this.invasionDeaths.has(`${ph.cycleIndex}:${oId}`)) continue;
       if (mapleMap.findMonsterByOId?.(oId)) continue;
-      this.balrogSeen[oId] = true;
+      if (this.balrogPending[oId]) continue;
+
+      // Coming back to the deck mid-invasion resumes the same Balrog rather
+      // than handing you a fresh one at full HP
+      const remembered = MapStateCache.getMonsterState(mapId, oId);
+      this.balrogPending[oId] = true;
       Promise.resolve(mapleMap.spawnMonster({
         oId,
         id: invasion.mobId,
-        x: ground.x, y: ground.y,
+        x: remembered?.x ?? ground.x, y: remembered?.y ?? ground.y,
         stance: '', fh: fhId,
         minX: ground.x - 400, maxX: ground.x + 400,
         mobTime: -1,
@@ -361,7 +398,15 @@ class TransportationManagerImpl {
         alive: true,
         nextPossibleSpawn: 0,
         fadeIn: true,
-      })).catch((e: any) => console.error('[Transport] Balrog spawn failed:', e));
+      })).then(() => {
+        this.balrogPending[oId] = false;
+        this.balrogSeen[oId] = true;
+        const mob = mapleMap.findMonsterByOId?.(oId);
+        if (mob && remembered && remembered.hp > 0) mob.hp = remembered.hp;
+      }).catch((e: any) => {
+        this.balrogPending[oId] = false;
+        console.error('[Transport] Balrog spawn failed:', e);
+      });
     }
   }
 

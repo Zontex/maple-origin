@@ -161,7 +161,7 @@ function getItemDescSync(itemId: number): string {
 }
 
 // Resolve deferred #t and #c codes in text (call after ensureItemNames)
-export function resolveItemCodes(text: string, questManager?: any): string {
+export function resolveItemCodes(text: string, questManager?: any, contextQuestId?: number): string {
   return text
     .replace(/#h0#/g, () =>
       questManager?.character?.name || (window as any).charecter?.name || 'Player')
@@ -172,7 +172,36 @@ export function resolveItemCodes(text: string, questManager?: any): string {
       }
       return '0';
     })
-    .replace(/#m(\d+)#?/g, (_, id) => getMapNameSync(parseInt(id)));
+    .replace(/#m(\d+)#?/g, (_, id) => getMapNameSync(parseInt(id)))
+    // Quest progress counter: #a{questId}{reqIndex}# (531 of these across
+    // QuestInfo — every hunt/collection quest description ends with one).
+    // GMS renders the live count; we show "cur / req". A bare one-digit code
+    // (#a1#) indexes into the context quest instead of embedding an id.
+    .replace(/#a(\d+)#/g, (_, code) => {
+      if (!questManager) return '';
+      let qid = contextQuestId ?? 0;
+      let idx = parseInt(code);
+      if (code.length > 1) {
+        qid = parseInt(code.slice(0, -1));
+        idx = parseInt(code.slice(-1));
+      }
+      if (!qid || !idx) return '';
+      const reqs = QuestData.requirements.get(qid)?.complete;
+      if (!reqs) return '';
+      // Counters index the completion requirements, mobs first then items —
+      // the order they appear in Check.img
+      const list: { kind: 'mob' | 'item'; id: number; count: number }[] = [
+        ...(reqs.mobs || []).map((m: any) => ({ kind: 'mob' as const, id: m.id, count: m.count })),
+        ...(reqs.items || []).map((i: any) => ({ kind: 'item' as const, id: i.id, count: i.count })),
+      ];
+      const target = list[idx - 1];
+      if (!target) return '';
+      const active = questManager.activeQuests?.get(qid);
+      const cur = target.kind === 'mob'
+        ? (active?.mobProgress?.get(target.id) || 0)
+        : Math.min(questManager.getItemCount(target.id), target.count);
+      return `${cur} / ${target.count}`;
+    });
 }
 
 // Strip MapleStory text formatting codes
@@ -193,7 +222,12 @@ function stripFormatCodes(text: any): string {
     .replace(/#h\s*0?\s*#/g, '#h0#')
     .replace(/#p(\d+)#/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
     .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
-    .replace(/#a\d+#/g, '')   // quest progress counter (dynamic, strip)
+    .replace(/#a(\d+)#/g, '#a$1#')  // Keep progress counters — resolved live at display time
+    // Requirement lists are written as one run-on line — "Slime #a10431#
+    // #i4000004# #t4000004# ..." — but GMS puts each requirement on its own
+    // row. Break the line whenever a progress counter is directly followed
+    // by the next requirement's item icon.
+    .replace(/(#a\d+#(?:#k)?)[ \t]+(?=#[iv]\d+[:#])/g, '$1\n')
     .replace(/#t(\d+):?#/g, '#t$1#')  // Keep item name codes — resolved at display time after item names load
     .replace(/#m(\d+)#/g, '#m$1#')  // Keep map name codes — resolved at display time after map names load
     .replace(/#i(\d+):?#/g, '\x01ITEM:$1\x02')  // item icon placeholder — rendered at display time

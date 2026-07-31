@@ -5,10 +5,26 @@
 // drives this from CONTI_STATE/CONTI_MOVE packets; we derive it from the
 // wall-clock schedule so it needs no state.
 
+import PLAY_AUDIO from '../Audio/PlayAudio';
 import { CameraInterface } from '../Camera';
 import GameCanvas from '../GameCanvas';
 import WZManager from '../wz-utils/WZManager';
 import TransportationManager from './TransportationManager';
+
+// The only vessel cue in v83's sound data — Game.img and UI.img have nothing
+// ship-related at all. Loaded once and shared by every dock.
+let whistleAudio: any = null;
+let whistleLoading: Promise<any> | null = null;
+type ShipPhase = 'docked' | 'departing' | 'away' | 'arriving';
+
+function loadWhistle(): Promise<any> {
+  if (!whistleLoading) {
+    whistleLoading = WZManager.get('Sound.wz/Object.img/Whistle')
+      .then((node: any) => (whistleAudio = node?.nGetAudio?.() ?? null))
+      .catch(() => null);
+  }
+  return whistleLoading;
+}
 
 class ShipObject {
   mapId: number;
@@ -63,6 +79,7 @@ class ShipObject {
       ship.tMoveMs = node.nGet('tMove').nGet('nValue', 15) * 1000;
       ship.shipKind = node.nGet('shipKind').nGet('nValue', 0);
       ship.nextDelay = ship.frames[0].nGet('delay').nGet('nValue', 100);
+      if (ship.shipKind === 0) loadWhistle(); // warm it so the first horn isn't late
       return ship;
     } catch (e) {
       console.error(`[ShipObject] Failed to load shipObj for map ${mapId}:`, e);
@@ -71,6 +88,7 @@ class ShipObject {
   }
 
   update(msPerTick: number) {
+    this.updateHorn(this.getVisualState().phase);
     if (this.frames.length < 2) return;
     this.delay += msPerTick;
     if (this.delay > this.nextDelay) {
@@ -81,26 +99,42 @@ class ShipObject {
   }
 
   // Current x and visibility from the owning route's schedule
-  private getVisualState(): { visible: boolean; x: number } {
+  private getVisualState(): { visible: boolean; x: number; phase: ShipPhase } {
     if (this.shipKind === 1) {
-      return { visible: TransportationManager.isEnemyShipVisible(this.mapId), x: this.x };
+      const visible = TransportationManager.isEnemyShipVisible(this.mapId);
+      return { visible, x: this.x, phase: 'docked' };
     }
     const ph = TransportationManager.getDockShipPhase(this.mapId);
-    if (!ph) return { visible: true, x: this.x }; // unknown schedule — stay docked
+    if (!ph) return { visible: true, x: this.x, phase: 'docked' }; // unknown schedule — stay docked
 
     // Clamp the slide so it fits even at high dev travel rates
     const slideMs = Math.min(this.tMoveMs, (ph.cycleLenMs - ph.departPos) / 2);
     const pos = ph.cyclePos;
-    if (pos < ph.departPos) return { visible: true, x: this.x };
+    if (pos < ph.departPos) return { visible: true, x: this.x, phase: 'docked' };
     if (pos < ph.departPos + slideMs) {
       const p = (pos - ph.departPos) / slideMs;
-      return { visible: true, x: this.x + (this.x0 - this.x) * p };
+      return { visible: true, x: this.x + (this.x0 - this.x) * p, phase: 'departing' };
     }
     if (pos >= ph.cycleLenMs - slideMs) {
       const p = (pos - (ph.cycleLenMs - slideMs)) / slideMs;
-      return { visible: true, x: this.x0 + (this.x - this.x0) * p };
+      return { visible: true, x: this.x0 + (this.x - this.x0) * p, phase: 'arriving' };
     }
-    return { visible: false, x: this.x0 };
+    return { visible: false, x: this.x0, phase: 'away' };
+  }
+
+  // The whistle is the vessel's horn, not an arrival cue: it sounds both as the
+  // ship pulls away (what you hear from the platform when you missed it) and as
+  // it glides back in. `prevPhase` starts null so walking onto the dock mid-slide
+  // adopts the current phase instead of reading as a fresh edge.
+  private prevPhase: ShipPhase | null = null;
+  private updateHorn(phase: ShipPhase) {
+    const first = this.prevPhase === null;
+    const changed = phase !== this.prevPhase;
+    this.prevPhase = phase;
+    if (first || !changed) return;
+    if (phase !== 'departing' && phase !== 'arriving') return;
+    if (whistleAudio) PLAY_AUDIO(whistleAudio);
+    else loadWhistle().then(() => whistleAudio && PLAY_AUDIO(whistleAudio));
   }
 
   draw(canvas: GameCanvas, camera: CameraInterface) {

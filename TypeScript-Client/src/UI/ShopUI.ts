@@ -66,6 +66,9 @@ const ShopUI: any = {
 
   // NPC sprite
   npcSprite: null as HTMLImageElement | null,
+  // Mirrors the world NPC's flip so the portrait faces the same way as the
+  // person you clicked (life/f varies per placement)
+  npcFlipped: false,
   npcOrigin: { x: 0, y: 0 },
 
   // Buttons
@@ -88,6 +91,10 @@ const ShopUI: any = {
     this.shopItems = [];
     this.playerItems = [];
     this.npcSprite = null;
+    // Reached through the window global rather than an import — ShopUI is
+    // pulled in by MapState, and importing MapleMap here closes a cycle
+    const worldNpcs = (window as any).__MapleMap?.npcs || [];
+    this.npcFlipped = !!worldNpcs.find((n: any) => n.id === shopId)?.flipped;
 
     if (!this.loaded) {
       await this.loadAssets();
@@ -420,14 +427,16 @@ const ShopUI: any = {
       const w = this.npcSprite.width;
       const ox = this.npcOrigin.x || Math.floor(w / 2);
       const oy = this.npcOrigin.y || this.npcSprite.height;
-      // WZ NPC sprites are drawn facing left. The shop portrait faces the
-      // item list on the right, as in the original client — mirror it, with
-      // the origin reflected the same way NPC.draw does for flipped sprites.
+      // Mirror exactly as the NPC is mirrored out in the world, so the
+      // portrait matches the person you just clicked. Native facing varies
+      // per NPC (Pan is authored facing left, Natasha facing right), so a
+      // blanket flip either way is wrong — the map's own flip is the answer.
+      const flip = !!this.npcFlipped;
       canvas.drawImage({
         img: this.npcSprite,
-        dx: npcX - (w - ox),
+        dx: npcX - (flip ? w - ox : ox),
         dy: baselineY - oy,
-        flipped: true,
+        flipped: flip,
       });
     }
 

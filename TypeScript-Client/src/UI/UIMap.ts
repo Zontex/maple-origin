@@ -35,6 +35,9 @@ export interface UIMapInterface {
   dispHpFrac: number;
   dispMpFrac: number;
   dispExpFrac: number;
+  // Set by MapState while a job-intro cutscene plays — suppresses the whole
+  // bottom HUD so the scene shows uninterrupted
+  hudHidden: boolean;
   initialize: () => Promise<void>;
   addButtons: (canvas: GameCanvas) => void;
   doUpdate: (msPerTick: number, camera: any, canvas: GameCanvas) => void;
@@ -498,6 +501,15 @@ UIMap.drawNumbers = function (canvas, hp, maxHp, mp, maxMp, exp, maxExp) {
 };
 
 UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
+  // Job-intro cutscenes play full-screen: the status bar, chat log, mob
+  // gauge and menu popups all stay down so only the scene is visible. The
+  // cursor still draws — it is not part of the HUD and the player can still
+  // click through the scene.
+  if (this.hudHidden) {
+    UICommon.doRender(canvas, camera, lag, msPerTick, tdelta);
+    return;
+  }
+
   // Top-center mob HP gauge (drawn under the rest of the HUD)
   UIMobGage.draw(canvas);
   const barY = 529 + startUIPosition.y;

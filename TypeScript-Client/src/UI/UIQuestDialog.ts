@@ -381,7 +381,7 @@ export default class UIQuestDialog {
 
     // Resolve deferred #t and #c item codes now that item names are loaded
     const character = (window as any).charecter;
-    this.sayMessages = allMessages.map(msg => resolveItemCodes(msg, character?.questManager));
+    this.sayMessages = allMessages.map(msg => resolveItemCodes(msg, character?.questManager, this.questId));
     this.preloadInlineIcons(this.sayMessages);
     this.sayOriginalIndices = originalIndices ?? allMessages.map((_, i) => i);
     this.messageIndex = 0;
@@ -620,10 +620,10 @@ export default class UIQuestDialog {
             const qmRef = (window as any).charecter?.questManager;
             // Each Say.img yes entry is its own dialog page, navigated with Next/Prev (GMS behavior)
             if (questDialogues?.start?.yes?.length) {
-              this.sayMessages = questDialogues.start.yes.map(t => resolveItemCodes(t, qmRef));
+              this.sayMessages = questDialogues.start.yes.map(t => resolveItemCodes(t, qmRef, this.questId));
             } else {
               const questInfo = QuestData.quests.get(this.questId);
-              this.sayMessages = [resolveItemCodes(questInfo?.inProgressText || 'Quest accepted!', qmRef)];
+              this.sayMessages = [resolveItemCodes(questInfo?.inProgressText || 'Quest accepted!', qmRef, this.questId)];
             }
             this.preloadInlineIcons(this.sayMessages);
             this.sayOriginalIndices = [];
@@ -637,7 +637,7 @@ export default class UIQuestDialog {
             if (questDialogues?.start?.no?.length) {
               this.accepted = true;
               const qmRef = (window as any).charecter?.questManager;
-              this.sayMessages = questDialogues.start.no.map(t => resolveItemCodes(t, qmRef));
+              this.sayMessages = questDialogues.start.no.map(t => resolveItemCodes(t, qmRef, this.questId));
               this.preloadInlineIcons(this.sayMessages);
               this.sayOriginalIndices = [];
               this.messageIndex = 0;
@@ -815,7 +815,7 @@ export default class UIQuestDialog {
 
     if (wrong !== undefined) {
       const qmRef = (window as any).charecter?.questManager;
-      this.quizReply = resolveItemCodes(wrong, qmRef);
+      this.quizReply = resolveItemCodes(wrong, qmRef, this.questId);
       this.buildPagesForCurrentMessage();
       this.recalcLayout();
       return;

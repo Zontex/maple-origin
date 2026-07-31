@@ -138,11 +138,28 @@ export default class QuestManager {
   // server-side before running end scripts. Mob kills and positive item counts
   // must be met; count-0 item entries are skipped (Cosmic treats missing/zero
   // count as always-met — e.g. Roger's Apple relies on the script's own check).
+  /**
+   * Completion-side prerequisite quests. Wrapper quests hinge on this:
+   * Lucas's "Chief's Introduction" (1040) completes only once Mai's four
+   * trainings (1041-1044) are all done — ignoring it let 1040 be turned in
+   * immediately, and since Mai's chain requires 1040 IN PROGRESS, the
+   * premature completion dead-locked the whole training center.
+   */
+  private meetsCompleteQuestReqs(reqs: any): boolean {
+    if (reqs.complete?.quests) {
+      for (const q of reqs.complete.quests) {
+        if (this.getQuestState(q.id) !== q.state) return false;
+      }
+    }
+    return true;
+  }
+
   canRunEndScript(questId: number): boolean {
     const active = this.activeQuests.get(questId);
     if (!active) return false;
     const reqs = QuestData.requirements.get(questId);
     if (!reqs) return false;
+    if (!this.meetsCompleteQuestReqs(reqs)) return false;
 
     if (reqs.complete.mobs) {
       for (const mob of reqs.complete.mobs) {
@@ -163,6 +180,8 @@ export default class QuestManager {
 
     const reqs = QuestData.requirements.get(questId);
     if (!reqs) return false;
+
+    if (!this.meetsCompleteQuestReqs(reqs)) return false;
 
     // Script-based quests — completable (the endscript runs when clicked in the
     // NPC's quest listing) as soon as the WZ completion reqs are met, exactly
@@ -383,6 +402,10 @@ export default class QuestManager {
   }
 
   forfeitQuest(questId: number): void {
+    // The one quest state change that was missing a save hook — forfeiting
+    // worked in RAM but was never persisted, so the quest returned on the
+    // next refresh
+    (window as any).__mySocket?.requestSave?.();
     this.activeQuests.delete(questId);
     this.untrackQuest(questId);
     this.fulfilledState.delete(questId);
@@ -537,6 +560,17 @@ export default class QuestManager {
         if (storedId === id) {
           total += item.quantity || 1;
         }
+      }
+    }
+    // WORN equips count too — Cosmic's haveItem scans the EQUIPPED inventory
+    // alongside the tabs. Quests that require wearable items expect you to
+    // wear them: the training shirt (1042003) gates Mai's 1016 and Yoona's
+    // whole quiz line, all of which vanished the moment the shirt was
+    // equipped because only the bag was counted.
+    const equipped = (this.character as any).equippedItemIds;
+    if (equipped) {
+      for (const eid of Object.values(equipped)) {
+        if (Number(eid) === id) total += 1;
       }
     }
     return total;
