@@ -10,6 +10,9 @@ import {Position} from '../Effects/DamageIndicator';
 import MapleButton from './MapleButton';
 import UIDevTools from './UIDevTools';
 
+// Gap between the NPC portrait and its name tag
+const NAME_TAG_GAP = 2;
+
 /**
  * @todo truncate long name, showing ellipsis
  * @todo block clicking on other UIs in click manager
@@ -151,17 +154,26 @@ export default class UINpcTalk {
         dy: this.y + this.top?.nGetImage().height + this.fillCount * this.fill?.nGetImage().height,
       });
 
+      // Portrait and name tag are one group, centred vertically in the
+      // dialog body rather than pinned to the top with the tag drifting to
+      // mid-height on its own. Same fix as UIQuestDialog.
+      const standNode: any = this.speaker?.stand?.[0];
+      const spriteSize = GUIUtil.wzSize(standNode);
+      const tagSize = GUIUtil.wzSize(this.nameTag);
+      const bodyTop = this.y + GUIUtil.wzSize(this.top).height;
+      const bodyH = this.fillCount * GUIUtil.wzSize(this.fill).height;
+      const groupH = spriteSize.height + NAME_TAG_GAP + tagSize.height;
+      const groupY = bodyTop + Math.max(0, Math.floor((bodyH - groupH) / 2));
+
       canvas.drawImage({
-        img: this.speaker?.stand?.[0].nGetImage(),
-        dx: this.x + leftPadding + Math.floor(this.nameTag?.nGetImage().width / 2) - Math.floor(this.speaker?.stand?.[0].nGetImage().width / 2),
-        dy: this.y + this.top?.nGetImage().height,
+        img: standNode?.nGetImage(),
+        dx: this.x + leftPadding + Math.floor(tagSize.width / 2) - Math.floor(spriteSize.width / 2),
+        dy: groupY,
       });
-      const midHeight = Math.floor((this.top?.nGetImage().height + this.fillCount * this.fill?.nGetImage().height) / 2);
-      const finalHeight = (this.speaker?.stand?.[0].nGetImage().height > midHeight ? this.speaker?.stand?.[0].nGetImage().height : midHeight);
       canvas.drawImage({
         img: this.nameTag?.nGetImage(),
         dx: this.x + leftPadding,
-        dy: this.y + this.top?.nGetImage().height + finalHeight,
+        dy: groupY + spriteSize.height + NAME_TAG_GAP,
       });
 
       canvas.drawText({

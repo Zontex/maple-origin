@@ -23,6 +23,8 @@ const TEXT_RIGHT_PAD = 20;
 const TEXT_MAX_W = DIALOG_WIDTH - TEXT_LEFT - TEXT_RIGHT_PAD;
 const LINE_H = 16;
 const TEXT_TOP_OFFSET = 48;
+// Gap between the NPC portrait and its name tag
+const NAME_TAG_GAP = 2;
 
 // Max lines of text that fit in the dialog before we need to paginate
 const MAX_TEXT_LINES = 12;
@@ -874,15 +876,22 @@ export default class UIQuestDialog {
     if (this.speakerImg) {
       const nameTagImgEl = this.nameTagImg?.nGetImage();
       const tagW = GUIUtil.wzSize(this.nameTagImg).width || 121;
+      const tagH = GUIUtil.wzSize(this.nameTagImg).height || 19;
       const spriteW = GUIUtil.wzSize(this.speakerNode).width || this.speakerImg.width;
-      const spriteX = this.x + LEFT_PADDING + Math.floor(tagW / 2) - Math.floor(spriteW / 2);
-      canvas.drawImage({ img: this.speakerImg, dx: spriteX, dy: this.y + TOP_H });
-
-      // Name tag sits directly beneath the portrait, as in the original
-      // client. This was anchored to half the dialog height instead, so the
-      // taller the dialog grew the further the tag drifted from the sprite.
       const spriteH = GUIUtil.wzSize(this.speakerNode).height || this.speakerImg.height;
-      const tagY = this.y + TOP_H + spriteH + 2;
+
+      // Portrait and name tag are one group, centred vertically in the
+      // dialog body — not pinned to the top. A dialog grown tall by a long
+      // message or a selection list otherwise left them stranded up in the
+      // corner with the whole left column empty beneath them.
+      const bodyH = FILL_H * this.fillCount;
+      const groupH = spriteH + NAME_TAG_GAP + tagH;
+      const groupY = this.y + TOP_H + Math.max(0, Math.floor((bodyH - groupH) / 2));
+
+      const spriteX = this.x + LEFT_PADDING + Math.floor(tagW / 2) - Math.floor(spriteW / 2);
+      canvas.drawImage({ img: this.speakerImg, dx: spriteX, dy: groupY });
+
+      const tagY = groupY + spriteH + NAME_TAG_GAP;
       if (nameTagImgEl) {
         canvas.drawImage({
           img: nameTagImgEl,
