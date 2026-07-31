@@ -763,6 +763,12 @@ class InventoryMenuSprite extends DragableMenu {
 
   // Handle dragging an item out of the inventory
   handleItemDrag(item: any, slotIndex: number) {
+    // Checked before any state is set, not just before beginPending. This
+    // window keeps its own drag flags and draws its own carried icon, so a
+    // press landing on a window stacked above this one still produced a
+    // second ghost here — two things dragging off one click.
+    if (!this.ownsPoint(this.GameCanvas.mouseX, this.GameCanvas.mouseY)) return;
+
     ClickManager.isDraggingItem = true;
     this.isDragging = true;
     this.draggingItem = item;
@@ -794,7 +800,7 @@ class InventoryMenuSprite extends DragableMenu {
     // Also register with global DragManager for hotkey bar drops. Only when
     // this window owns the point — overlapping menus each read the mouse for
     // themselves, so without it two windows start a drag off one press.
-    if (iconImg && this.ownsPoint(startX, startY)) {
+    if (iconImg) {
       DragManager.beginPending('item', item.itemId, iconImg, startX, startY);
     }
 
