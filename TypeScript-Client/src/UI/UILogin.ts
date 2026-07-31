@@ -696,8 +696,14 @@ UILogin.initialize = async function (canvas: GameCanvas) {
 
   this.newCharStats = Random.generateDiceRollStats();
 
+  // Plain world coordinates — FrameAnimation.draw already subtracts the camera.
+  // This used to be `-830 - Camera.y`, which only ever worked on boot: main.ts
+  // awaits the first setState before starting the game loop, so Camera.y was
+  // still 0 and the term cancelled out. Returning here from the game (QUIT
+  // GAME) runs initialize() while the loop is easing the camera, baking a
+  // stale offset that laid the world-select scroll across the login screen.
   const dx = Math.floor(-215);
-  const dy = Math.floor(-830 - Camera.y);
+  const dy = Math.floor(-830);
   this.scrollOpenAnimation = new FrameAnimation(this.uiLogin.nGet('WorldSelect')?.nGet('scroll').nGet(0), dx, dy);
   this.scrollContentFadeIn = {
     active: false,

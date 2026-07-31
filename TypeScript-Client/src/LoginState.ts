@@ -51,6 +51,17 @@ const LoginState: LoginState = {
     this._canvas = canvas ?? null;
     canvas?.setInternalSize(LOGIN_NATIVE_WIDTH, LOGIN_NATIVE_HEIGHT);
     MyCharacter.deactivate();
+
+    // Coming back from the game (QUIT GAME), not just booting. MapleMap.load
+    // never clears an existing PlayerCharacter and the renderer draws it
+    // regardless of deactivate(), so the player would stand around on the
+    // login map.
+    MapleMap.PlayerCharacter = null;
+
+    // Start from the same camera the boot path uses, so returning here eases
+    // into the login screen instead of sliding in from the last map position.
+    Camera.doReset();
+
     await MapleMap.load("MapLogin");
 
     // Start character preload in background — don't block login screen render.

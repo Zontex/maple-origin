@@ -206,6 +206,19 @@ async function quitToLogin(canvas: GameCanvas) {
     clearDevSession();
   } catch {}
 
+  // The chat box is a real DOM input parented to the game wrapper, not
+  // something the canvas owns. UIMap.initialize() only nulls the reference, so
+  // without removing the element it survives on top of the login screen — and
+  // another one is created every time the player re-enters the world.
+  try {
+    UIMap.chat?.remove();
+    UIMap.chat = null;
+  } catch (e) {
+    console.error("[Quit] chat cleanup failed", e);
+  }
+
+  UIGameMenu.hide();
+
   try {
     MySocket.disconnect();
   } catch (e) {
