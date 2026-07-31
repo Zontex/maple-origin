@@ -15,6 +15,9 @@ export enum DamageIndicatorType {
   PlayerHitMob = "PlayerHitMob",
   PlayerCritialHitMob = "PlayerCritialHitMob",
   MobHitPlayer = "MobHitPlayer",
+  // HP/MP gained — chairs, and anything else that heals. Blue digits, the
+  // set v83 ships alongside the red/critical/violet damage numbers.
+  Recovery = "Recovery",
 }
 
 export class DamageIndicator {
@@ -46,6 +49,10 @@ export class DamageIndicator {
       [DamageIndicatorType.MobHitPlayer]: {
         firstNumberNode: basicEffectWzNode.NoViolet1,
         otherNumberNode: basicEffectWzNode.NoViolet0,
+      },
+      [DamageIndicatorType.Recovery]: {
+        firstNumberNode: basicEffectWzNode.NoBlue1,
+        otherNumberNode: basicEffectWzNode.NoBlue0,
       },
     };
   }
