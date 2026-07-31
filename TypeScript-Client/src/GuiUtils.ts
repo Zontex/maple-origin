@@ -81,10 +81,57 @@ const imageInView = function (
   return GUIUtil.rectanglesOverlap(r1, r2);
 };
 
+/**
+ * Steps across a 9-patch edge or fill, calling cb at each tile position.
+ *
+ * These loops step by a source image's own width/height, which is 0 until
+ * the image decodes — and stepping by 0 never terminates, which hangs the
+ * whole tab, not just the frame. A non-positive step draws nothing and the
+ * next frame retries once the image is ready.
+ *
+ * @param {int} start - First tile position.
+ * @param {int} end - Exclusive end position.
+ * @param {int} step - Tile size; non-positive means "not ready, skip".
+ * @param {function} cb - Called with each tile position.
+ */
+const tileRange = function (
+  start: number,
+  end: number,
+  step: number,
+  cb: (v: number) => void
+) {
+  if (!(step > 0)) return;
+  for (let v = start; v < end; v += step) cb(v);
+};
+
+/**
+ * Width/height of a WZ canvas node, preferring the dimensions baked into the
+ * JSON. Those are correct the instant the file parses, whereas
+ * nGetImage().width is 0 until the image decodes — long enough that layout
+ * and hit-test rectangles computed once at construction got baked wrong and
+ * never recovered. Resolves UOLs and falls back to the image if a node lacks
+ * the metadata.
+ */
+const wzSize = function (node: any): { width: number; height: number } {
+  const n = node?.nTagName === "uol" ? node.nResolveUOL() : node;
+  if (!n) return { width: 0, height: 0 };
+  if (n.nWidth !== undefined && n.nHeight !== undefined) {
+    return { width: n.nWidth, height: n.nHeight };
+  }
+  // Fall back to the image only for $canvas nodes — nGetImage() on an
+  // $imgdir corrupts rendering, so a node without dimensions and without a
+  // canvas tag simply has no size
+  if (n.nTagName !== "canvas") return { width: 0, height: 0 };
+  const img = n.nGetImage?.();
+  return { width: img?.width ?? 0, height: img?.height ?? 0 };
+};
+
 const GUIUtil = {
   pointInRectangle,
   rectanglesOverlap,
   imageInView,
+  tileRange,
+  wzSize,
 };
 
 export default GUIUtil;

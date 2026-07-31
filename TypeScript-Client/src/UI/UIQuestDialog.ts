@@ -9,6 +9,7 @@ import MapleInput from './MapleInput';
 import type { ScriptDialogType } from '../Quest/QuestScriptEngine';
 import type { SelectionOption } from '../NpcScriptEngine';
 import config from '../Config';
+import GUIUtil from '../GuiUtils';
 import UIDevTools from './UIDevTools';
 
 // UtilDlgEx known dimensions
@@ -36,6 +37,9 @@ export default class UIQuestDialog {
   private bottomImg: any = null;
   private nameTagImg: any = null;
   private speakerImg: any = null;
+  // The WZ node behind speakerImg — carries correct dimensions immediately,
+  // whereas speakerImg.height is 0 until the sprite decodes
+  private speakerNode: any = null;
   private basicNode: any = null;  // Basic.img — generic OK/Cancel/Yes/No buttons
   private listInProgressImg: HTMLImageElement | null = null;   // list0: "QUEST IN PROGRESS" (123x15)
   private listAvailableImg: HTMLImageElement | null = null;    // list1: "QUEST AVAILABLE" (105x18)
@@ -250,7 +254,8 @@ export default class UIQuestDialog {
       const linkId = npcFile.info.link.nValue;
       npcFile = await WZManager.get(`Npc.wz/${`${linkId}`.padStart(7, '0')}.img`);
     }
-    this.speakerImg = npcFile?.stand?.[0]?.nGetImage?.() || null;
+    this.speakerNode = npcFile?.stand?.[0] || null;
+    this.speakerImg = this.speakerNode?.nGetImage?.() || null;
 
     // Ensure item/map names are loaded for #t and #m format codes
     await ensureItemNames();
@@ -300,7 +305,8 @@ export default class UIQuestDialog {
         const linkId = npcFile.info.link.nValue;
         npcFile = await WZManager.get(`Npc.wz/${`${linkId}`.padStart(7, '0')}.img`);
       }
-      this.speakerImg = npcFile?.stand?.[0]?.nGetImage?.() || null;
+      this.speakerNode = npcFile?.stand?.[0] || null;
+      this.speakerImg = this.speakerNode?.nGetImage?.() || null;
     }
 
     // Preload item icons referenced in text via \x01ITEM:id\x02 markers
@@ -427,6 +433,24 @@ export default class UIQuestDialog {
     return this.messageIndex >= this.sayMessages.length - 1;
   }
 
+  /**
+   * Whether the selection list is actually on screen.
+   *
+   * recalcLayout and draw MUST agree on this. They used to test different
+   * conditions — layout reserved space whenever selections was non-empty,
+   * while draw also required a 'simple' script dialog. After picking an
+   * option from a sendSimple the dialog type becomes 'next', so the options
+   * stopped rendering but still reserved their full height: Robin's 17-item
+   * menu left 280px of blank space in every following dialog.
+   */
+  private get selectionsVisible(): boolean {
+    return (
+      this.selections.length > 0 &&
+      ((this.scriptMode && this.scriptDialogType === 'simple') ||
+        (!this.scriptMode && this.isLastPage))
+    );
+  }
+
   private recalcLayout() {
     // fillCount based on NPC sprite height AND text height
     const currentLines = this.pages[this.currentPage] || [''];
@@ -438,18 +462,23 @@ export default class UIQuestDialog {
 
     this.fillCount = 6;
     if (this.speakerImg) {
-      const nameTagH = this.nameTagImg?.nGetImage?.()?.height || 19;
-      const spriteNeeded = this.speakerImg.height + nameTagH + 5;
+      const nameTagH = GUIUtil.wzSize(this.nameTagImg).height || 19;
+      const spriteNeeded = GUIUtil.wzSize(this.speakerNode).height + nameTagH + 5;
       while (this.fillCount * FILL_H < spriteNeeded) {
         this.fillCount++;
       }
     }
-    // Account for selection options height (including header images)
+    // Account for selection options height (including header images), but
+    // only when they will actually be drawn — see selectionsVisible
     let headersH = 0;
-    for (const sel of this.selections) {
-      if (sel.headerType) headersH += 22; // ~18px image + 4px gap
+    if (this.selectionsVisible) {
+      for (const sel of this.selections) {
+        if (sel.headerType) headersH += 22; // ~18px image + 4px gap
+      }
     }
-    const selectionsH = this.selections.length > 0 ? this.selections.length * LINE_H + 8 + headersH : 0;
+    const selectionsH = this.selectionsVisible
+      ? this.selections.length * LINE_H + 8 + headersH
+      : 0;
     // Account for rewards section height in static quest dialogs
     let rewardsH = 0;
     if (!this.scriptMode && this.questId && this.isLastPage && this.isLastMessage && this.quizReply === null && !this.accepted) {
@@ -844,23 +873,27 @@ export default class UIQuestDialog {
     // Draw NPC sprite + name tag
     if (this.speakerImg) {
       const nameTagImgEl = this.nameTagImg?.nGetImage();
-      const tagW = nameTagImgEl?.width || 121;
-      const spriteX = this.x + LEFT_PADDING + Math.floor(tagW / 2) - Math.floor(this.speakerImg.width / 2);
+      const tagW = GUIUtil.wzSize(this.nameTagImg).width || 121;
+      const spriteW = GUIUtil.wzSize(this.speakerNode).width || this.speakerImg.width;
+      const spriteX = this.x + LEFT_PADDING + Math.floor(tagW / 2) - Math.floor(spriteW / 2);
       canvas.drawImage({ img: this.speakerImg, dx: spriteX, dy: this.y + TOP_H });
 
-      const midHeight = Math.floor((TOP_H + FILL_H * this.fillCount) / 2);
-      const finalHeight = Math.max(this.speakerImg.height, midHeight);
+      // Name tag sits directly beneath the portrait, as in the original
+      // client. This was anchored to half the dialog height instead, so the
+      // taller the dialog grew the further the tag drifted from the sprite.
+      const spriteH = GUIUtil.wzSize(this.speakerNode).height || this.speakerImg.height;
+      const tagY = this.y + TOP_H + spriteH + 2;
       if (nameTagImgEl) {
         canvas.drawImage({
           img: nameTagImgEl,
           dx: this.x + LEFT_PADDING,
-          dy: this.y + TOP_H + finalHeight,
+          dy: tagY,
         });
         canvas.drawText({
           text: this.npcName,
           color: '#FFFFFF',
           x: this.x + LEFT_PADDING + Math.floor(tagW / 2),
-          y: this.y + TOP_H + finalHeight + 5,
+          y: tagY + 5,
           align: 'center',
         });
       }
@@ -1020,10 +1053,7 @@ export default class UIQuestDialog {
     }
 
     // Draw selection options — script 'simple' dialogs and WZ Say #L selections
-    const showSelections = this.selections.length > 0 &&
-      ((this.scriptMode && this.scriptDialogType === 'simple') ||
-       (!this.scriptMode && this.isLastPage));
-    if (showSelections) {
+    if (this.selectionsVisible) {
       textY += 4; // small gap before selections
       this.selectionRects = [];
       for (const sel of this.selections) {

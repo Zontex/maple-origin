@@ -62,6 +62,8 @@ const UIMiniMap = {
 
   // Cached offscreen canvas for the static frame (rebuilt on map change)
   _cachedFrame: null as HTMLCanvasElement | null,
+  // Set when _buildCache had to skip a sprite that hadn't decoded yet
+  _cacheIncomplete: false,
   _cachedW: 0,
   _cachedH: 0,
   // Layout values stored after cache build for icon positioning
@@ -234,9 +236,17 @@ UIMiniMap._buildCache = function () {
   offscreen.height = totalH;
   const ctx = offscreen.getContext('2d')!;
 
-  // Helper to draw an image at (x, y)
+  // Helper to draw an image at (x, y). This cache is built once per map and
+  // blitted every frame afterwards, so anything skipped here because it
+  // hadn't decoded yet would be missing from the minimap for the whole map —
+  // record the miss and rebuild next frame instead.
+  let incomplete = false;
   const draw = (img: HTMLImageElement, x: number, y: number) => {
-    if (img && img.width > 0) ctx.drawImage(img, x, y);
+    if (img && img.width > 0) {
+      ctx.drawImage(img, x, y);
+    } else if (img) {
+      incomplete = true;
+    }
   };
 
   // --- 9-patch frame ---
@@ -407,8 +417,11 @@ UIMiniMap._buildCache = function () {
 
   ctx.restore();
 
-  // Store cache and layout
+  // Store cache and layout. A partially-drawn cache is still used this frame
+  // (better than a blank minimap) but flagged so the next frame rebuilds it
+  // once the remaining sprites have decoded.
   this._cachedFrame = offscreen;
+  this._cacheIncomplete = incomplete;
   this._cachedW = totalW;
   this._cachedH = totalH;
   this._layout = {
@@ -432,8 +445,9 @@ UIMiniMap.update = function (_msPerTick: number) {
 UIMiniMap.render = function (canvas: GameCanvas, _camera: CameraInterface) {
   if (this.isHidden || !this.initialized || !this.frame || !this.mapData) return;
 
-  // Build cache if needed (once per map)
-  if (!this._cachedFrame) {
+  // Build cache if needed (once per map, or again while sprites are still
+  // decoding — otherwise a missing piece stays missing for the whole map)
+  if (!this._cachedFrame || this._cacheIncomplete) {
     this._buildCache();
   }
   const L = this._layout;

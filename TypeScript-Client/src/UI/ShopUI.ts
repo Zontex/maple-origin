@@ -1,4 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
+import GUIUtil from '../GuiUtils';
 import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import ClickManager from './ClickManager';
@@ -568,9 +569,9 @@ const ShopUI: any = {
       ctx.beginPath();
       ctx.rect(sx, top + arrowH, base.width, bottom - (top + arrowH));
       ctx.clip();
-      for (let ty = top + arrowH; ty < bottom; ty += base.height) {
+      GUIUtil.tileRange(top + arrowH, bottom, base.height, (ty) => {
         canvas.drawImage({ img: base, dx: sx, dy: ty });
-      }
+      });
       ctx.restore();
     }
     if (prev?.complete) canvas.drawImage({ img: prev, dx: sx, dy: top });

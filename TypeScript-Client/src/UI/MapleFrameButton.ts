@@ -1,5 +1,6 @@
 import { CameraInterface } from "../Camera";
 import GameCanvas from "../GameCanvas";
+import GUIUtil from "../GuiUtils";
 import MapleButton from "./MapleButton";
 
 class MapleFrameButton extends MapleButton {
@@ -55,12 +56,14 @@ class MapleFrameButton extends MapleButton {
 
   getRect(camera: CameraInterface) {
     const frame = this.img[0];
-    const image = frame.nGetImage();
+    // WZ metadata, not the decoded image — an undecoded sprite reports 0x0
+    // here, which makes the button silently unclickable
+    const size = GUIUtil.wzSize(frame);
     return {
       x: this.x - camera.x - frame.origin.nX,
       y: this.y - camera.y - frame.origin.nY,
-      width: image.width,
-      height: image.height,
+      width: size.width,
+      height: size.height,
     };
   }
 

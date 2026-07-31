@@ -1,6 +1,7 @@
 import WZManager from "./wz-utils/WZManager";
 import Random from "./Random";
 import GameCanvas from "./GameCanvas";
+import GUIUtil from "./GuiUtils";
 import { CameraInterface } from "./Camera";
 import QuestData from "./Quest/QuestData";
 
@@ -117,6 +118,14 @@ class NPC {
       .forEach((stance: any) => {
         this.stances[stance.nName] = this.loadStance(npcFile, stance.nName);
       });
+
+    // Start decoding all frames now — lazily-created images are skipped by
+    // drawImage until decoded, which makes the NPC blink on each frame's
+    // first render. Fire and forget: awaiting every decode blocks map load.
+    // Frames can be undefined when a UOL fails to resolve.
+    for (const s of Object.values(this.stances) as any[]) {
+      for (const f of s?.frames ?? []) void f?.nPreloadImage?.();
+    }
 
     // Load NPC strings
     this.strings = await this.loadStrings(this.id);
@@ -281,6 +290,13 @@ class NPC {
 
   draw(canvas: GameCanvas, camera: CameraInterface, lag: number, msPerTick: number, tdelta: number) {
     if (this.hide) return;
+
+    // Skip NPCs far outside the viewport (wide margin covers name tags,
+    // quest icons and chat balloons drawn around the sprite)
+    const screenX = this.x - camera.x;
+    const screenY = this.cy - camera.y;
+    if (screenX < -300 || screenX > 1100 || screenY < -300 || screenY > 900) return;
+
     // Draw the NPC's stance
     const currentFrame = this.stances[this.stance]?.frames[this.frame];
     if (!currentFrame) return;
@@ -375,6 +391,10 @@ class NPC {
     }
   }
 
+  // Cached name/func tag widths — text never changes, so measure once
+  private _nameTagWidth: number | null = null;
+  private _funcTagWidth: number | null = null;
+
   drawName(
     canvas: GameCanvas,
     camera: CameraInterface,
@@ -400,7 +420,10 @@ class NPC {
         fontWeight: "bold",
         align: "center" as const,
       };
-      const nameWidth = Math.ceil(canvas.measureText(nameOpts).width + tagPadding);
+      if (this._nameTagWidth === null) {
+        this._nameTagWidth = Math.ceil(canvas.measureText(nameOpts).width + tagPadding);
+      }
+      const nameWidth = this._nameTagWidth;
       const nameTagX = Math.ceil(this.x - camera.x - nameWidth / 2);
 
       canvas.drawRect({
@@ -423,7 +446,10 @@ class NPC {
         fontWeight: "bold",
         align: "center" as const,
       };
-      const funcWidth = Math.ceil(canvas.measureText(funcOpts).width + tagPadding);
+      if (this._funcTagWidth === null) {
+        this._funcTagWidth = Math.ceil(canvas.measureText(funcOpts).width + tagPadding);
+      }
+      const funcWidth = this._funcTagWidth;
       const funcTagX = Math.ceil(this.x - camera.x - funcWidth / 2);
 
       canvas.drawRect({
@@ -542,9 +568,9 @@ class NPC {
     ctx.beginPath();
     ctx.rect(bx + nwW, by, innerW, nwH);
     ctx.clip();
-    for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += n.width) {
+    GUIUtil.tileRange(bx + nwW, bx + nwW + innerW, n.width, (tx) => {
       canvas.drawImage({ img: n, dx: tx, dy: by });
-    }
+    });
     ctx.restore();
 
     // Bottom edge
@@ -552,9 +578,9 @@ class NPC {
     ctx.beginPath();
     ctx.rect(bx + nwW, by + totalH - s.height, innerW, s.height);
     ctx.clip();
-    for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += s.width) {
+    GUIUtil.tileRange(bx + nwW, bx + nwW + innerW, s.width, (tx) => {
       canvas.drawImage({ img: s, dx: tx, dy: by + totalH - s.height });
-    }
+    });
     ctx.restore();
 
     // Left edge
@@ -562,9 +588,9 @@ class NPC {
     ctx.beginPath();
     ctx.rect(bx, by + nwH, w.width, innerH);
     ctx.clip();
-    for (let ty = by + nwH; ty < by + nwH + innerH; ty += w.height) {
+    GUIUtil.tileRange(by + nwH, by + nwH + innerH, w.height, (ty) => {
       canvas.drawImage({ img: w, dx: bx, dy: ty });
-    }
+    });
     ctx.restore();
 
     // Right edge
@@ -572,9 +598,9 @@ class NPC {
     ctx.beginPath();
     ctx.rect(bx + totalW - e.width, by + nwH, e.width, innerH);
     ctx.clip();
-    for (let ty = by + nwH; ty < by + nwH + innerH; ty += e.height) {
+    GUIUtil.tileRange(by + nwH, by + nwH + innerH, e.height, (ty) => {
       canvas.drawImage({ img: e, dx: bx + totalW - e.width, dy: ty });
-    }
+    });
     ctx.restore();
 
     // Center fill
@@ -582,11 +608,11 @@ class NPC {
     ctx.beginPath();
     ctx.rect(bx + nwW, by + nwH, innerW, innerH);
     ctx.clip();
-    for (let fy = by + nwH; fy < by + nwH + innerH; fy += c.height) {
-      for (let fx = bx + nwW; fx < bx + nwW + innerW; fx += c.width) {
+    GUIUtil.tileRange(by + nwH, by + nwH + innerH, c.height, (fy) => {
+      GUIUtil.tileRange(bx + nwW, bx + nwW + innerW, c.width, (fx) => {
         canvas.drawImage({ img: c, dx: fx, dy: fy });
-      }
-    }
+      });
+    });
     ctx.restore();
 
     // Arrow pointing down to NPC

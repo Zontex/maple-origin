@@ -1,4 +1,5 @@
 import WZManager from "../../wz-utils/WZManager";
+import GUIUtil from "../../GuiUtils";
 import WZFiles from "../../Constants/enums/WZFiles";
 import GeneralMenuSprite from "./GeneralMenuSprite";
 import getEquipTypeById from "../../Constants/EquipType";
@@ -58,11 +59,12 @@ class StatsMenuSprite extends DragableMenu {
   }
 
   getRect(camera: CameraInterface) {
+    const size = GUIUtil.wzSize(this.StatsNode.backgrnd);
     return {
       x: this.x,
       y: this.y,
-      width: this.StatsNode.backgrnd.nGetImage().width,
-      height: this.StatsNode.backgrnd.nGetImage().height,
+      width: size.width,
+      height: size.height,
     };
   }
 
@@ -83,22 +85,18 @@ class StatsMenuSprite extends DragableMenu {
       })
     );
 
-    // i think the bug here only happned on vite refresh (not sure yet)
-    // console.log(
-    //   "this.StatsNode",
-    //   this.StatsNode.backgrnd.nGetImage().height,
-    //   this.StatsNode.backgrnd2.nGetImage().height,
-    //   this.StatsNode
-    // );
+    // These positions are computed once and never revisited. Reading them
+    // off nGetImage() meant they were 0 whenever the sprite hadn't decoded
+    // yet (the "only happens on vite refresh" bug noted here) — WZ node
+    // metadata is correct as soon as the JSON parses.
+    const bg = GUIUtil.wzSize(this.StatsNode.backgrnd);
+    const bg2 = GUIUtil.wzSize(this.StatsNode.backgrnd2);
 
     this.generalMenuSprites.push(
       await GeneralMenuSprite.fromOpts({
         wzImage: this.StatsNode.backgrnd2,
-        x: this.x + this.StatsNode.backgrnd.nGetImage().width - 10,
-        y:
-          this.y +
-          this.StatsNode.backgrnd.nGetImage().height -
-          this.StatsNode.backgrnd2.nGetImage().height,
+        x: this.x + bg.width - 10,
+        y: this.y + bg.height - bg2.height,
         z: 0,
       })
     );

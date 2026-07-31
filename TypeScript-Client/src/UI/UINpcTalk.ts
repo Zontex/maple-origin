@@ -1,5 +1,6 @@
 import WZManager from '../wz-utils/WZManager';
 import WZNode from '../wz-utils/WZNode';
+import GUIUtil from '../GuiUtils';
 import GameCanvas from '../GameCanvas';
 import {CameraInterface} from '../Camera';
 import {MapleStanceButton} from './MapleStanceButton';
@@ -79,8 +80,15 @@ export default class UINpcTalk {
     this.fill = this.utilDlgExNode.c;
     this.bottom = this.utilDlgExNode.s;
     this.nameTag = this.utilDlgExNode.bar;
-    this.width = this.top?.nGetImage().width;
-    this.height = this.top?.nGetImage().height + this.fillCount * this.fill?.nGetImage().height + this.bottom?.nGetImage().height;
+    // WZ node dimensions, not nGetImage().width — the latter is 0 until the
+    // image decodes, and these values are baked into x/y (and the close
+    // button's position) once here, so a zero centred the dialog wrong for
+    // the rest of its life
+    this.width = GUIUtil.wzSize(this.top).width;
+    this.height =
+      GUIUtil.wzSize(this.top).height +
+      this.fillCount * GUIUtil.wzSize(this.fill).height +
+      GUIUtil.wzSize(this.bottom).height;
 
     // Center on screen (800x600)
     this.x = Math.floor(400 - this.width / 2);
@@ -215,11 +223,20 @@ export default class UINpcTalk {
     this.text = text;
     let strId = `${npcId}`.padStart(7, "0");
     this.speaker = await WZManager.get(`Npc.wz/${strId}.img`);
-    while (this.speaker?.stand?.[0].nGetImage().height + this.nameTag?.nGetImage().height + 5 > this.fillCount * this.fill?.nGetImage().height) {
+    // All three of these were nGetImage().height, i.e. 0 before decode —
+    // which made this `5 > 0` forever and hung the tab on the first NPC
+    // dialog after a map load
+    const speakerH = GUIUtil.wzSize(this.speaker?.stand?.[0]).height;
+    const nameTagH = GUIUtil.wzSize(this.nameTag).height;
+    const fillH = GUIUtil.wzSize(this.fill).height;
+    while (fillH > 0 && speakerH + nameTagH + 5 > this.fillCount * fillH) {
       this.fillCount++;
     }
 
-    this.height = this.top?.nGetImage().height + this.fillCount * this.fill?.nGetImage().height + this.bottom?.nGetImage().height;
+    this.height =
+      GUIUtil.wzSize(this.top).height +
+      this.fillCount * fillH +
+      GUIUtil.wzSize(this.bottom).height;
 
     // Re-center on screen
     this.x = Math.floor(400 - this.width / 2);
