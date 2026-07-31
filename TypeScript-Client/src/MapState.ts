@@ -25,6 +25,29 @@ import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
 import UIGameOption from "./UI/UIGameOption";
+import UIKeyConfig from "./UI/UIKeyConfig";
+import KeyBindings, { BindableAction } from "./KeyBindings";
+
+// Bound-key helpers. Everything below asks for an ACTION, never a letter, so
+// rebinding takes effect immediately and the edge-triggered checks keep
+// working — previousActionState is keyed by action for the same reason.
+const previousActionState: Partial<Record<BindableAction, boolean>> = {};
+function actionDown(canvas: GameCanvas, action: BindableAction): boolean {
+  const key = KeyBindings.keyNameFor(action);
+  return !!key && canvas.isKeyDown(key);
+}
+/** True only on the frame the action's key goes down. */
+function actionPressed(canvas: GameCanvas, action: BindableAction): boolean {
+  return actionDown(canvas, action) && !previousActionState[action];
+}
+function latchActions(canvas: GameCanvas) {
+  for (const a of [
+    "jump", "attack", "pickup", "sit", "inventory", "stats",
+    "equipment", "skills", "questLog", "miniMap",
+  ] as BindableAction[]) {
+    previousActionState[a] = actionDown(canvas, a);
+  }
+}
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
@@ -486,7 +509,7 @@ MapStateInstance.doUpdate = function (
         !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen ||
         DirectionScene.isActive || UIGameMenu.isVisible ||
         UISystemOption.isVisible || UIGameOption.isVisible ||
-        UIChannelSelect.isVisible;
+        UIChannelSelect.isVisible || UIKeyConfig.isVisible;
 
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
@@ -502,39 +525,39 @@ MapStateInstance.doUpdate = function (
           MyCharacter.rightClick();
         }
         // Edge-triggered: a jump is one impulse per press. Physics.jump()
-        // assigns vy outright, so calling it on every frame ALT is held kept
-        // re-setting vy to full jump speed and gravity never got to bite —
+        // assigns vy outright, so calling it on every frame the key is held
+        // kept re-setting vy to full jump speed and gravity never got to bite —
         // the character rose at constant max speed off the ground, and flew
         // straight up a rope (the isClimbing branch has no airborne check).
-        if (canvas.isKeyDown("alt") && !this.previousKeyboardState.alt) {
+        if (actionPressed(canvas, "jump")) {
           MyCharacter.jump();
         }
-        if (canvas.isKeyDown("ctrl")) {
+        if (actionDown(canvas, "attack")) {
           MyCharacter.attack();
         }
-        if (canvas.isKeyDown("z")) {
+        if (actionDown(canvas, "pickup")) {
           MyCharacter.pickUp();
         }
       }
 
-      if (canvas.isKeyDown("s") && !this.previousKeyboardState.s && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "stats") && !DirectionScene.isActive) {
         this.statsMenu.setIsHidden(!this.statsMenu.isHidden);
       }
-      if (canvas.isKeyDown("i") && !this.previousKeyboardState.i && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "inventory") && !DirectionScene.isActive) {
         this.inventoryMenu.setIsHidden(!this.inventoryMenu.isHidden);
       }
-      if (canvas.isKeyDown("q") && !this.previousKeyboardState.q && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "questLog") && !DirectionScene.isActive) {
         this.questLog.setIsHidden(!this.questLog.isHidden);
       }
-      if (canvas.isKeyDown("m") && !this.previousKeyboardState.m) {
+      if (actionPressed(canvas, "miniMap")) {
         // v83: M toggles the minimap between full view and the collapsed
         // title strip — it can never be removed completely
         UIMiniMap.viewMode = UIMiniMap.viewMode === 'max' ? 'min' : 'max';
       }
-      if (canvas.isKeyDown("e") && !this.previousKeyboardState.e && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "equipment") && !DirectionScene.isActive) {
         this.equipMenu.setIsHidden(!this.equipMenu.isHidden);
       }
-      if (canvas.isKeyDown("k") && !(this.previousKeyboardState as any).k && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "skills") && !DirectionScene.isActive) {
         this.skillMenu.setIsHidden(!this.skillMenu.isHidden);
       }
 
@@ -548,6 +571,8 @@ MapStateInstance.doUpdate = function (
           MapleMap.npcDialog.setIsHidden(true);
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
+        } else if (UIKeyConfig.isVisible) {
+          UIKeyConfig.hide();
         } else if (UISystemOption.isVisible) {
           UISystemOption.hide();
         } else if (UIGameOption.isVisible) {
@@ -612,12 +637,8 @@ MapStateInstance.doUpdate = function (
       }
     }
 
-    this.previousKeyboardState.i = canvas.isKeyDown("i");
-    this.previousKeyboardState.s = canvas.isKeyDown("s");
-    this.previousKeyboardState.q = canvas.isKeyDown("q");
-    this.previousKeyboardState.m = canvas.isKeyDown("m");
-    this.previousKeyboardState.e = canvas.isKeyDown("e");
-    (this.previousKeyboardState as any).k = canvas.isKeyDown("k");
+    // Latch every bound action once per frame (see previousActionState).
+    latchActions(canvas);
     this.previousKeyboardState.esc = canvas.isKeyDown("esc");
     this.previousKeyboardState.enter = canvas.isKeyDown("enter");
     this.previousKeyboardState.alt = canvas.isKeyDown("alt");

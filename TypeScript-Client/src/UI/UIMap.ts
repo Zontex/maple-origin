@@ -16,6 +16,7 @@ import UIGameMenu from "./UIGameMenu";
 import UIChannelSelect from "./UIChannelSelect";
 import UISystemOption from "./UISystemOption";
 import UIGameOption from "./UIGameOption";
+import UIKeyConfig from "./UIKeyConfig";
 
 export interface UIMapInterface {
   statusBarLevelDigits: any[];
@@ -123,7 +124,7 @@ UIMap.addButtons = function (canvas) {
   syncQuickSlotArrows();
 
   addBtn(736, this.statusBarNode.KeySet, () => {
-    console.log("keyboard settings click!");
+    UIKeyConfig.toggle();
   });
   addBtn(704, this.statusBarNode.SkillKey, () => {
     if (MapState.skillMenu) {
@@ -170,6 +171,7 @@ UIMap.addButtons = function (canvas) {
   void UIChannelSelect.initialize(canvas);
   void UISystemOption.initialize(canvas);
   void UIGameOption.initialize(canvas);
+  void UIKeyConfig.initialize(canvas);
   // No server-side channels yet, so switching is a local selection only: the
   // player is told, and the choice is remembered for when the server grows
   // real channel support.
@@ -558,6 +560,8 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   UISystemOption.draw(canvas, camera, lag, msPerTick, tdelta);
   UIGameOption.doUpdate(canvas);
   UIGameOption.draw(canvas, camera, lag, msPerTick, tdelta);
+  UIKeyConfig.doUpdate(canvas);
+  UIKeyConfig.draw(canvas, camera, lag, msPerTick, tdelta);
 
   // Chat log above the status bar (under the cursor drawn by UICommon)
   UIChatLog.render(canvas);
