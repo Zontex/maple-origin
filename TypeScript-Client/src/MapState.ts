@@ -124,6 +124,23 @@ export function fadeToBlack() {
   if (chatInput) chatInput.style.visibility = 'hidden';
 }
 
+/**
+ * Toggle the whole bottom HUD for a cutscene.
+ *
+ * The canvas HUD is suppressed via UIMap.hudHidden, but the chat field is a
+ * real <input> layered over the canvas — skipping a draw call cannot hide
+ * it, so it needs its own visibility flip. Edge-triggered: touching the DOM
+ * every frame would fight the chat's own focus handling.
+ */
+let hudHiddenForCutscene = false;
+function setHudHiddenForCutscene(hidden: boolean) {
+  UIMap.hudHidden = hidden;
+  if (hidden === hudHiddenForCutscene) return;
+  hudHiddenForCutscene = hidden;
+  const chatInput = document.querySelector('.game-wrapper input') as HTMLInputElement | null;
+  if (chatInput) chatInput.style.visibility = hidden ? 'hidden' : 'visible';
+}
+
 async function initializeMapState(map = defaultMap, isFirstUpdate = false, portalName?: string | number) {
   const loadSeq = ++mapLoadSeq;
 
@@ -764,25 +781,32 @@ MapStateInstance.doRender = function (
       MyCharacter.drawDeathDialog(canvas);
     }
 
-    // Hotkey bar above status bar
-    UIHotkeyBar.render(canvas, camera);
+    // Job-intro cutscenes are full-screen: everything that frames the game
+    // stays down for the duration so only the scene shows
+    const inCutscene = DirectionScene.isActive;
+    setHudHiddenForCutscene(inCutscene);
 
-    // Buff icons at top-right of screen
-    if (MyCharacter.buffManager?.count > 0) {
-      const buffBarX = canvas.game.width - 30 - (MyCharacter.buffManager.count * 26);
-      MyCharacter.buffManager.renderBuffIcons(canvas, buffBarX, 5);
+    if (!inCutscene) {
+      // Hotkey bar above status bar
+      UIHotkeyBar.render(canvas, camera);
+
+      // Buff icons at top-right of screen
+      if (MyCharacter.buffManager?.count > 0) {
+        const buffBarX = canvas.game.width - 30 - (MyCharacter.buffManager.count * 26);
+        MyCharacter.buffManager.renderBuffIcons(canvas, buffBarX, 5);
+      }
+
+      // Minimap on top of game world
+      UIMiniMap.render(canvas, camera);
+
+      // Quest Helper widget + quest notice balloons
+      UIQuestAlarm.render(canvas);
     }
-
-    // Minimap on top of game world
-    UIMiniMap.render(canvas, camera);
-
-    // Quest Helper widget + quest notice balloons
-    UIQuestAlarm.render(canvas);
 
     // Direction cutscene overlay (job-experience rooms) above the world
     DirectionScene.render(canvas, camera);
 
-    // UIMap draws HUD + cursor
+    // UIMap draws HUD + cursor (HUD suppressed while hudHidden)
     UIMap.doRender(canvas, camera, lag, msPerTick, tdelta);
   }
 
