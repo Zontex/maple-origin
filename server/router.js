@@ -6,6 +6,19 @@ const { handleItemDrop, handleItemPickup } = require('./handlers/item');
 const { handleChatMessage } = require('./handlers/chat');
 const { handleReactorHit, handleReactorRespawn } = require('./handlers/reactor');
 const { handleRegister, handleLogin, handleGetWorlds, handleGetCharacters, handleCheckName, handleCreateCharacter, handleDeleteCharacter, handleSelectCharacter, handleSaveCharacter } = require('./handlers/auth');
+const { players } = require('./state');
+const { assignMapHost } = require('./hostManager');
+
+/**
+ * A client that believes it is not the mob host but is receiving no mob
+ * state asks us to re-state the authoritative answer. Cheap, and the only
+ * way out of a desync that previously needed a page reload.
+ */
+function handleHostCheck(playerId) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  assignMapHost(player.mapId, playerId);
+}
 
 function handleMessage(playerId, data) {
   switch (data.type) {
@@ -38,6 +51,9 @@ function handleMessage(playerId, data) {
       break;
     case 'mob_respawn':
       handleMobRespawn(playerId, data.data);
+      break;
+    case 'request_host_check':
+      handleHostCheck(playerId);
       break;
     case 'player_hit_by_mob':
       handlePlayerHitByMob(playerId, data.data);

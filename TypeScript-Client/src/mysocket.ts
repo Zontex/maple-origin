@@ -1319,10 +1319,40 @@ class MySocket {
 
   // --- Mob Sync ---
 
+  // Last time a mob_state_batch arrived; drives the stuck-host watchdog
+  _lastMobStateAt: number = 0;
+  _lastHostCheckAt: number = 0;
+
   handleMobHostAssign(data: any) {
     this.isMobHost = data.isHost;
+    this._lastMobStateAt = Date.now();
     console.log(`[MOB] I am ${data.isHost ? '' : 'NOT '}the mob host`);
     MapleMap.setMobHostMode(data.isHost);
+  }
+
+  /**
+   * Recover from a lost host assignment.
+   *
+   * A client that thinks it is not the host disables local mob AI and waits
+   * for mob_state_batch. If that assignment was wrong or never arrived, the
+   * wait never ends: mobs stand frozen and ignore attacks (damage requests
+   * are relayed to a host that isn't broadcasting) while still dealing
+   * contact damage, which is computed locally. That used to need a reload.
+   *
+   * So: if we are a non-host on a map that has mobs and none have reported
+   * in for a while, ask the server to restate who the host is.
+   */
+  checkMobHostAlive() {
+    if (!this.isConnected || this.isMobHost || !this.playerId) return;
+    if (!MapleMap.doneLoading || !MapleMap.monsters?.length) return;
+
+    const now = Date.now();
+    if (now - this._lastMobStateAt < 5000) return;
+    if (now - this._lastHostCheckAt < 5000) return;
+
+    this._lastHostCheckAt = now;
+    console.warn('[MOB] no mob state for 5s while not host — re-checking host assignment');
+    this.sendMessage({ type: 'request_host_check' });
   }
 
   // Host broadcasts mob state every ~66ms
@@ -1350,6 +1380,7 @@ class MySocket {
 
   // Non-host receives mob state batch — lerp positions, update stance
   handleMobStateBatch(data: any) {
+    this._lastMobStateAt = Date.now();
     if (this.isMobHost) return;
     if (Number(data.mapId) !== Number(MapleMap.id)) return;
     for (const mobState of data.mobs) {
@@ -1528,6 +1559,10 @@ class MySocket {
       try {
         if (this.isMobHost && this.isConnected) {
           this.sendMobStateBatch();
+        } else {
+          // Non-host: make sure we're not waiting on a host that will never
+          // broadcast (self-throttled to one request per 5s)
+          this.checkMobHostAlive();
         }
       } catch (error) {
         console.error("Error in mob broadcast loop:", error);
