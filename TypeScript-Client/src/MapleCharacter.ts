@@ -842,9 +842,8 @@ class MapleCharacter {
       this.chairFrame = frame;
       this.chairRecoveryHP = item?.info?.recoveryHP?.nValue ?? 0;
       this.chairRecoveryTimer = 0;
-      // Face the camera like the original rather than keeping the walk
-      // direction the player happened to stop on
-      this.flipped = false;
+      // Keep whichever way the character was already facing — sitting down
+      // should not spin them around, and the chair is drawn to match.
     } catch (e) {
       console.error('sitOnChair error:', e);
     }
@@ -2125,6 +2124,9 @@ isCloseToMob = (inAllDirections = true) => {
       img,
       dx: Math.round(this.pos.x - size.width / 2 - camera.x),
       dy: Math.round(this.pos.y - size.height - camera.y + CHAIR_BASE_OFFSET),
+      // Face the same way the character does, so sitting down while facing
+      // right leaves both of them facing right rather than snapping around.
+      flipped: this.flipped,
     });
   }
 

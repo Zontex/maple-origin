@@ -1,5 +1,6 @@
 import WZManager from "../wz-utils/WZManager";
 import ClickManager from "./ClickManager";
+import DragManager from "./DragManager";
 import { MapleStanceButton } from "./MapleStanceButton";
 import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
@@ -371,12 +372,21 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
   if (slot) {
     // An item on a key is cleared by clicking it — there is no palette for
     // items to go back to, they came from the inventory and still live there.
-    if (KeyBindings.itemBindings[slot.code] !== undefined) {
-      KeyBindings.clearItem(slot.code);
-      return;
-    }
-    if (KeyBindings.skillBindings[slot.code] !== undefined) {
-      KeyBindings.clearSkill(slot.code);
+    // An item or skill on a key is picked up and carried, the same as an
+    // action — a bare click used to wipe it, so brushing a key lost the
+    // binding. It only goes away if you drop it somewhere that is not a key.
+    const heldItem = KeyBindings.itemBindings[slot.code];
+    const heldSkill = KeyBindings.skillBindings[slot.code];
+    if (heldItem !== undefined || heldSkill !== undefined) {
+      const id = heldItem !== undefined ? heldItem : heldSkill!;
+      // Deliberately does NOT unbind here. The binding only moves once the
+      // drag lands on another key, because bindItem/bindSkill clear the old
+      // one themselves — so a press that turns out to be a plain click, or a
+      // drag let go over nothing, leaves the key exactly as it was.
+      DragManager.beginPending(
+        heldItem !== undefined ? "item" : "skill",
+        id, this.itemIcons[id] ?? null, mx, my
+      );
       return;
     }
     const action = KeyBindings.bindings[slot.code];
