@@ -12,7 +12,7 @@ import WZNode from '../wz-utils/WZNode';
 import FrameAnimation from './FrameAnimation';
 import MapleButton from './MapleButton';
 import UILoginNotice, { NoticeType, NoticeMessage } from './UILoginNotice';
-import MySocket from '../mysocket';
+import MySocket, { consumeDisconnected } from '../mysocket';
 import UILoginTOS from './UILoginTOS';
 import config from '../Config';
 import MapleStandingCharacter from '../MapleStandingCharacter';
@@ -756,6 +756,17 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     currentX: 0,
     alpha: 1,
   };
+
+  // Explain a lost connection that bounced the player back here. Done at the
+  // end of initialize so uiLoginNotice exists, and guarded because nothing
+  // about a notice should be able to stop the login screen coming up.
+  try {
+    if (consumeDisconnected()) {
+      this.showNotice(NoticeType.NORMAL, NoticeMessage.UNABLE_TO_CONNECT_GAME_SERVER);
+    }
+  } catch (e) {
+    console.error('Failed to show disconnect notice:', e);
+  }
 };
 
 UILogin.doUpdate = function (msPerTick, camera, canvas) {

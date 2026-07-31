@@ -25,10 +25,16 @@ import QuestData, { mobNames, getItemNameSync, ensureItemNames } from '../Quest/
  * MapleCharacter.playQuestClear() alongside the BasicEff QuestClear effect.
  */
 
-// v83 draws its UI text in Dotum, the Windows system font — not Arial, whose
-// rounder, wider glyphs are the giveaway. Prefer Dotum, then the Korean
-// gothics that ship with macOS/Windows, before falling back.
-const UI_FONT = "Dotum, DotumChe, AppleGothic, 'Malgun Gothic', Arial, sans-serif";
+// GMS renders its UI text in Arial, same as the rest of this codebase — do
+// not "improve" this with a Korean gothic fallback chain. AppleGothic ships
+// with macOS, so listing it ahead of Arial silently swapped the typeface on
+// exactly the machine we were comparing against.
+//
+// The residual difference from the original client is rasterisation, not
+// typeface: Windows draws Arial at 11px through GDI with almost no
+// antialiasing, while a browser canvas antialiases heavily. Only a bitmap
+// glyph atlas would close that gap; a bundled webfont would not.
+const UI_FONT = "Arial";
 // GMS uses one flat near-black throughout the helper — no red for unmet
 // counts, no coloured strike-through. Anything lighter washes out against
 // the panel's 33%-opaque body with the map showing through.

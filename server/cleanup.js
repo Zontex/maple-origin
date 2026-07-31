@@ -23,6 +23,9 @@ function startCleanupTasks(wss) {
   // Remove inactive players every 30s
   setInterval(() => {
     const now = Date.now();
+    // lastUpdate is now refreshed by the client's frame heartbeat, so this
+    // measures "the tab stopped rendering", not "the player stopped moving".
+    // Standing still no longer counts towards being kicked.
     const inactiveTimeout = 600000; // 10 minutes
 
     for (const [id, player] of players.entries()) {

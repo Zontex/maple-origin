@@ -6,6 +6,39 @@ const { handleItemDrop, handleItemPickup } = require('./handlers/item');
 const { handleChatMessage } = require('./handlers/chat');
 const { handleReactorHit, handleReactorRespawn } = require('./handlers/reactor');
 const { handleRegister, handleLogin, handleGetWorlds, handleGetCharacters, handleCheckName, handleCreateCharacter, handleDeleteCharacter, handleSelectCharacter, handleSaveCharacter } = require('./handlers/auth');
+const { players } = require('./state');
+const { sendToPlayer } = require('./network');
+const { assignMapHost } = require('./hostManager');
+
+/**
+ * A client that believes it is not the mob host but is receiving no mob
+ * state asks us to re-state the authoritative answer. Cheap, and the only
+ * way out of a desync that previously needed a page reload.
+ */
+function handleHostCheck(playerId) {
+  const player = players.get(playerId);
+  if (!player) return;
+  // A host-check from an unregistered client means it lost (or never
+  // completed) registration — dropping the request silently left it asking
+  // every 5s forever while its mobs stayed frozen. Tell it to re-register;
+  // handlePlayerInfo will assign the host from there.
+  if (!player.info) {
+    sendToPlayer(player.ws, { type: 'reregister' });
+    return;
+  }
+  assignMapHost(player.mapId, playerId);
+}
+
+/**
+ * Frame-driven liveness ping, sent once a second from the client's render
+ * loop. This is the signal isLive() and the inactivity sweep should use:
+ * player_update only fires when the player moves, so standing still was
+ * indistinguishable from a dead tab.
+ */
+function handleHeartbeat(playerId) {
+  const player = players.get(playerId);
+  if (player) player.lastUpdate = Date.now();
+}
 
 function handleMessage(playerId, data) {
   switch (data.type) {
@@ -38,6 +71,12 @@ function handleMessage(playerId, data) {
       break;
     case 'mob_respawn':
       handleMobRespawn(playerId, data.data);
+      break;
+    case 'request_host_check':
+      handleHostCheck(playerId);
+      break;
+    case 'heartbeat':
+      handleHeartbeat(playerId);
       break;
     case 'player_hit_by_mob':
       handlePlayerHitByMob(playerId, data.data);

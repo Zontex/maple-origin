@@ -11,6 +11,36 @@ import config from "./Config";
 
 let nextDropId = 1;
 
+// Survives the reload that returns a disconnected player to login, so the
+// login screen can show the "unable to connect" notice
+const DISCONNECTED_FLAG = 'maple:disconnected';
+
+/** True when this page load followed a lost-connection reload. */
+export function wasDisconnected(): boolean {
+  try {
+    return sessionStorage.getItem(DISCONNECTED_FLAG) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Read and clear the flag — call once, from whoever shows the notice. */
+export function consumeDisconnected(): boolean {
+  const hit = wasDisconnected();
+  if (hit) {
+    try {
+      sessionStorage.removeItem(DISCONNECTED_FLAG);
+    } catch {}
+  }
+  return hit;
+}
+
+export function markDisconnected() {
+  try {
+    sessionStorage.setItem(DISCONNECTED_FLAG, '1');
+  } catch {}
+}
+
 interface PlayerState {
   id: string;
   x: number;
@@ -493,6 +523,12 @@ class MySocket {
         case "player_id":
           this.handlePlayerId(data);
           break;
+        case "reregister":
+          // Server got a request from us but has no player.info — our
+          // registration was lost (reconnect, server restart). Re-send it.
+          console.warn('[Socket] Server asked us to re-register');
+          this.sendPlayerInfo();
+          break;
         case "player_joined":
           this.handlePlayerJoined(data);
           break;
@@ -657,10 +693,14 @@ class MySocket {
         this.connectSocket();
       }, this.reconnectInterval);
     } else {
-      console.error("Max reconnect attempts reached. Please refresh the page.");
-      if (this.connectionStatusElement) {
-        this.connectionStatusElement.innerText = '❌ Connection failed - Please refresh';
-      }
+      // Out of retries. GMS drops you to the login screen with a notice
+      // rather than leaving you standing in a world that no longer updates —
+      // mobs frozen, nothing syncing, and previously no way back short of a
+      // manual reload. Reloading guarantees clean state; the flag survives it
+      // so the login screen can explain what happened.
+      console.error('Connection lost — returning to the login screen');
+      markDisconnected();
+      window.location.reload();
     }
   }
   
@@ -1319,10 +1359,65 @@ class MySocket {
 
   // --- Mob Sync ---
 
+  // Last time a mob_state_batch arrived; drives the stuck-host watchdog
+  _lastMobStateAt: number = 0;
+  _lastMobStateSig: string = '';
+  _lastHostCheckAt: number = 0;
+  _lastHeartbeatAt: number = 0;
+
+  /**
+   * Called once per rendered frame from Gameloop, throttled to 1/s.
+   *
+   * The server used to infer liveness from player_update, which the client
+   * only sends when the player actually moves — so standing still looked
+   * identical to a crashed tab, and an idle host had mob hosting taken away
+   * from it. A frame-driven heartbeat distinguishes the two: a backgrounded
+   * tab stops rendering and goes quiet, an idle player keeps ticking.
+   */
+  notifyFrame() {
+    if (!this.isConnected || !this.playerId) return;
+    const now = Date.now();
+    if (now - this._lastHeartbeatAt < 1000) return;
+    this._lastHeartbeatAt = now;
+    this.sendMessage({ type: 'heartbeat' });
+  }
+
   handleMobHostAssign(data: any) {
     this.isMobHost = data.isHost;
+    this._lastMobStateAt = Date.now();
     console.log(`[MOB] I am ${data.isHost ? '' : 'NOT '}the mob host`);
     MapleMap.setMobHostMode(data.isHost);
+  }
+
+  /**
+   * Recover from a lost host assignment.
+   *
+   * A client that thinks it is not the host disables local mob AI and waits
+   * for mob_state_batch. If that assignment was wrong or never arrived, the
+   * wait never ends: mobs stand frozen and ignore attacks (damage requests
+   * are relayed to a host that isn't broadcasting) while still dealing
+   * contact damage, which is computed locally. That used to need a reload.
+   *
+   * So: if we are a non-host on a map that has mobs and none have reported
+   * in for a while, ask the server to restate who the host is.
+   */
+  checkMobHostAlive() {
+    if (!this.isConnected || this.isMobHost || !this.playerId) return;
+    if (!MapleMap.doneLoading || !MapleMap.monsters?.length) return;
+
+    const now = Date.now();
+    if (now - this._lastMobStateAt < 5000) return;
+    if (now - this._lastHostCheckAt < 5000) return;
+
+    this._lastHostCheckAt = now;
+    const mobs = MapleMap.monsters || [];
+    const remote = mobs.filter((m: any) => m.isRemote).length;
+    console.warn(
+      `[MOB] mob state stale for ${Math.round((now - this._lastMobStateAt) / 1000)}s ` +
+        `while not host — requesting re-check. ` +
+        `player=${this.playerId} map=${MapleMap.id} mobs=${mobs.length} remote=${remote}`
+    );
+    this.sendMessage({ type: 'request_host_check' });
   }
 
   // Host broadcasts mob state every ~66ms
@@ -1350,6 +1445,19 @@ class MySocket {
 
   // Non-host receives mob state batch — lerp positions, update stance
   handleMobStateBatch(data: any) {
+    // Only a batch whose contents actually CHANGED counts as the host being
+    // alive. A host whose game loop stalled keeps broadcasting through
+    // setInterval (which survives tab backgrounding, unlike rAF) and so
+    // keeps sending byte-identical frozen state — the watchdog used to see
+    // those arriving and conclude all was well while mobs stood still.
+    const sig = data.mobs
+      .map((m: any) => `${m.oId}:${Math.round(m.x)}:${Math.round(m.y)}:${m.stance}:${m.hp}`)
+      .join('|');
+    if (sig !== this._lastMobStateSig) {
+      this._lastMobStateSig = sig;
+      this._lastMobStateAt = Date.now();
+    }
+
     if (this.isMobHost) return;
     if (Number(data.mapId) !== Number(MapleMap.id)) return;
     for (const mobState of data.mobs) {
@@ -1494,6 +1602,18 @@ class MySocket {
     setInterval(() => {
       try {
         if (!this.isConnected || !this.playerId || !MyCharacter) return;
+
+        // Deferred registration retries HERE, unconditionally — not inside
+        // sendPlayerUpdate, which only runs when the player moves. Gated
+        // behind movement, a player who reconnected mid-map-load stayed
+        // unregistered until they happened to jump: the server had no
+        // player.info for them, silently dropped their request_host_check
+        // watchdog pleas, and every mob sat frozen in remote mode. This was
+        // the "mobs frozen until I restart the backend and jump" bug — the
+        // jump was the part that fixed it.
+        if (this._needsRegistration) {
+          this.sendPlayerInfo();
+        }
         
         // Only send updates when the position or state has changed
         const posChanged = (
@@ -1527,7 +1647,16 @@ class MySocket {
     setInterval(() => {
       try {
         if (this.isMobHost && this.isConnected) {
+          // A mob left in remote mode while we're the host never moves and
+          // never will — nothing is broadcasting to it. Cheap to re-assert.
+          for (const mob of MapleMap.monsters || []) {
+            if ((mob as any).isRemote) (mob as any).isRemote = false;
+          }
           this.sendMobStateBatch();
+        } else {
+          // Non-host: make sure we're not waiting on a host that will never
+          // broadcast (self-throttled to one request per 5s)
+          this.checkMobHostAlive();
         }
       } catch (error) {
         console.error("Error in mob broadcast loop:", error);

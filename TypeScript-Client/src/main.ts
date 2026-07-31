@@ -5,7 +5,7 @@ import Timer from "./Timer";
 import WZManager from "./wz-utils/WZManager";
 import Camera from "./Camera";
 import SessionManager from "./SessionManager";
-import MySocket from "./mysocket";
+import MySocket, { wasDisconnected } from "./mysocket";
 import StateManager from "./StateManager";
 import LoginState from "./LoginState";
 import GameCanvas from "./GameCanvas";
@@ -37,8 +37,12 @@ const startGame = async () => {
   // Dev auto-login: skip login screen on HMR reload. All network steps
   // inside reject on timeout, so a hung server connection can never leave
   // the game on a black screen — worst case we fall back to normal login.
+  // Skipped after a disconnect, which would otherwise silently drop the
+  // player straight back into the session they were just kicked out of.
+  // UILogin.initialize shows the notice; doing it here would mean importing
+  // UILogin into the boot path and letting a UI error black-screen the game.
   let autoLoggedIn = false;
-  if (hasDevSession()) {
+  if (!wasDisconnected() && hasDevSession()) {
     autoLoggedIn = await tryAutoLogin(canvas);
   }
 
@@ -50,4 +54,10 @@ const startGame = async () => {
   Loop.gameLoop();
 };
 
-startGame();
+// Anything thrown before Loop.gameLoop() leaves a black screen with no clue
+// what happened, so surface it loudly and still start the loop — a login
+// screen that renders is recoverable, a dead canvas is not.
+startGame().catch((e) => {
+  console.error('[BOOT] startGame failed:', e);
+  document.title = `BOOT FAILED: ${(e as any)?.message || e}`;
+});

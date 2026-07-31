@@ -37,11 +37,17 @@ function assignMapHost(mapId, newJoinerId) {
       // A stale host keeps hostship only while no live player can take over
       (isLive(hostPlayer) || !liveCandidateExists);
     if (hostValid) {
-      // Host is valid — tell new joiner they're NOT the host
-      if (newJoinerId && newJoinerId !== currentHost) {
+      // Answer the joiner unconditionally, including when the joiner IS the
+      // current host. Skipping that case assumed the client already knew,
+      // but a client that missed or dropped its assignment then never heard
+      // again — mobs frozen and unattackable until a full page reload.
+      if (newJoinerId) {
         const joiner = players.get(newJoinerId);
         if (joiner) {
-          sendToPlayer(joiner.ws, { type: 'mob_host_assign', isHost: false });
+          sendToPlayer(joiner.ws, {
+            type: 'mob_host_assign',
+            isHost: newJoinerId === currentHost,
+          });
         }
       }
       return;
@@ -61,7 +67,9 @@ function assignMapHost(mapId, newJoinerId) {
   }
 
   if (newHost) {
-    if (mapHosts.get(mapId) === newHost) return;
+    // Re-send even when the winner is unchanged: reaching here means the
+    // previous assignment was found invalid, so the client's view of it
+    // cannot be trusted either.
     mapHosts.set(mapId, newHost);
     const hostPlayer = players.get(newHost);
     if (hostPlayer) {
@@ -73,8 +81,13 @@ function assignMapHost(mapId, newJoinerId) {
         sendToPlayer(player.ws, { type: 'mob_host_assign', isHost: false });
       }
     }
-    console.log(`Map ${mapId}: assigned mob host to ${newHost}`);
+    const age = Date.now() - (players.get(newHost)?.lastUpdate || 0);
+    console.log(
+      `Map ${mapId}: assigned mob host to ${newHost} ` +
+        `(was ${currentHost || 'none'}, heartbeat ${age}ms ago, live=${isLive(players.get(newHost))})`
+    );
   } else {
+    if (currentHost) console.log(`Map ${mapId}: no eligible mob host, clearing ${currentHost}`);
     mapHosts.delete(mapId);
   }
 }

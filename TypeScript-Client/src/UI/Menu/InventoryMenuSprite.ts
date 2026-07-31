@@ -736,6 +736,8 @@ class InventoryMenuSprite extends DragableMenu {
                 this.consumeItem(item, slotIndex);
               } else if (this.currentTab === MapleInventoryType.EQUIP) {
                 this.equipItem(item, slotIndex);
+              } else if (this.currentTab === MapleInventoryType.SETUP) {
+                this.useSetupItem(item);
               }
               return true;
             }
@@ -1025,6 +1027,27 @@ class InventoryMenuSprite extends DragableMenu {
   }
 
   // Consume a use-tab item (double-click)
+  /**
+   * Setup tab double-click. Only chairs (3010000-3019999) do anything in
+   * v83 — the rest of the tab is decorations and mega-phones we don't
+   * implement. Sitting is toggled: double-clicking the chair you're already
+   * on stands you up.
+   */
+  useSetupItem(item: any) {
+    const id = item?.itemId;
+    const chr: any = this.charecter;
+    if (!chr || !Number.isFinite(id)) return;
+    if (id < 3010000 || id >= 3020000) return;
+
+    if (chr.chairId === id) {
+      chr.standUpFromChair();
+      return;
+    }
+    // Can't sit mid-air, on a rope, while attacking or dead
+    if (chr.isDead || chr.isInClimbingRope || !chr.pos?.fh) return;
+    chr.sitOnChair(id);
+  }
+
   consumeItem(item: any, slotIndex: number) {
     if (!item || !this.charecter) return;
 

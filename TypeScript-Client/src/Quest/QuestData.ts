@@ -197,6 +197,23 @@ function stripSelectionCodes(text: string): string {
 // also ends at the next #L, a line break (literal \r\n or real), or end of text.
 const SAY_SELECTION_RE = /#L(\d+)#((?:(?!#l|#L\d+#|\\r|\\n|\r|\n)[\s\S])*)(?:#l)?/g;
 
+/**
+ * Tidy the text left behind after #L selection markup is removed.
+ *
+ * Each option sits on its own line, so replacing the markup with '' leaves
+ * that line break behind — a menu of 17 options left 17 blank lines, which
+ * both padded out the message and pushed the rendered option list hundreds
+ * of pixels down the dialog. Runs of blank lines collapse to one so
+ * deliberate paragraph breaks survive; leading and trailing ones go.
+ */
+export function collapseBlankLines(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function parseSayMessage(raw: string): { text: string; selections: QuestSelectionOption[] } {
   const selections: QuestSelectionOption[] = [];
   const remaining = raw.replace(SAY_SELECTION_RE, (_, idx, label) => {
@@ -207,7 +224,10 @@ function parseSayMessage(raw: string): { text: string; selections: QuestSelectio
     return '';
   });
   // Any stray selection markup left over is stripped so it never renders raw
-  return { text: stripSelectionCodes(stripFormatCodes(remaining)), selections };
+  const text = collapseBlankLines(
+    stripSelectionCodes(stripFormatCodes(remaining))
+  );
+  return { text, selections };
 }
 
 class QuestDataManager {
