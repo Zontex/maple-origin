@@ -40,6 +40,10 @@ import { CameraInterface } from "./Camera";
 // latter being QuestClear plus the over-the-character effect.
 const FULFILLED_SOUND = "Sound.wz/UI.img/Invite";
 
+// Standing height of a v83 character sprite, used as the vertical extent of
+// a melee swing
+const ATTACK_BODY_H = 60;
+
 class MapleCharacter {
   opts: any;
   active: boolean = true;
@@ -969,28 +973,42 @@ async executeAttackDamage() {
 
   const isCharacterFacingRight = this.flipped;
 
+  // Vertical reach is the attacker's own body, not a flat tolerance. pos.y
+  // is the foothold contact point and sprites extend upward from it, so a
+  // body spans [y - height, y]. The old `Math.abs(dy) <= 100` reached a
+  // whole platform below, letting you hit mobs on the floor underneath.
+  // Comparing spans instead still allows sloped ground and mobs of any
+  // height, because it only asks whether the two bodies actually overlap.
+  const myTop = this.pos.y - ATTACK_BODY_H;
+  const myBottom = this.pos.y;
+  const overlapsVertically = (targetY: number, targetH: number) => {
+    const h = targetH > 0 ? targetH : ATTACK_BODY_H;
+    return targetY - h <= myBottom && targetY >= myTop;
+  };
+
   // Find monsters in melee range facing the right direction
   const monsters = this.map?.monsters.filter((monster: Monster) => {
     if (monster.dying) return false;
     const dx = monster.pos.x - this.pos.x;
-    const dy = monster.pos.y - this.pos.y;
     if (isCharacterFacingRight && dx < -20) return false;
     if (!isCharacterFacingRight && dx > 20) return false;
     const monsterHalfWidth = (monster.width || 50) / 2;
     const effectiveDistance = Math.max(0, Math.abs(dx) - monsterHalfWidth);
-    return effectiveDistance <= attackRange && Math.abs(dy) <= 100;
+    return (
+      effectiveDistance <= attackRange &&
+      overlapsVertically(monster.pos.y, monster.height)
+    );
   }) || [];
 
   // Check reactor hits
   const reactorsHit = this.map?.reactors?.filter((reactor: any) => {
     if (reactor.destroyed) return false;
     const dx = reactor.x - this.pos.x;
-    const dy = reactor.y - this.pos.y;
     if (isCharacterFacingRight && dx < -20) return false;
     if (!isCharacterFacingRight && dx > 20) return false;
     const halfW = (reactor.width || 48) / 2;
     const hDist = Math.max(0, Math.abs(dx) - halfW);
-    return hDist <= attackRange && Math.abs(dy) <= 100;
+    return hDist <= attackRange && overlapsVertically(reactor.y, reactor.height);
   }) || [];
 
   for (const reactor of reactorsHit) {
