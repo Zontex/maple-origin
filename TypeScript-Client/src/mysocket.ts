@@ -7,6 +7,7 @@ import Monster from "./Monster";
 import Inventory from "./Inventory/Inventory";
 import Stats from "./Stats/Stats";
 import DropItemSprite from "./DropItem/DropItemSprite";
+import config from "./Config";
 
 let nextDropId = 1;
 
@@ -133,6 +134,13 @@ class MySocket {
   }
 
   private resolveServerUrl() {
+    // An explicit VITE_WEBSOCKET_URL (TypeScript-Client/.env) always wins —
+    // it's the only way to point the client at a backend on a different host
+    // than the one serving the page.
+    if (config.websocketUrl) {
+      this.serverUrl = config.websocketUrl;
+      return;
+    }
     if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
       this.serverUrl = `ws://${window.location.hostname}:3001`;
       if (window.location.protocol === 'https:') {
