@@ -36,9 +36,9 @@ export default class Reactor {
   private currentState: number = 0;
   private maxState: number = 0;
   destroyed: boolean = false;
-  respawnScheduled: boolean = false;
-  // Absolute deadline for a reactor restored from a previous visit. 0 means
-  // "knocked down this visit", which schedules a full reactorTime as usual.
+  // Wall-clock time this reactor is due back, stamped when it breaks and
+  // carried across map changes. 0 means it is standing, or that reactorTime
+  // says it never returns.
   respawnAt: number = 0;
   private pendingDestroy: boolean = false;
   private pendingAdvance: number = -1;
@@ -273,6 +273,10 @@ export default class Reactor {
 
   private destroy(): void {
     this.destroyed = true;
+    // Stamp the deadline at the moment of the break. Wall-clock rather than a
+    // countdown so it survives leaving the map, and set here rather than by
+    // whoever schedules the respawn so every client agrees on when it is due.
+    this.respawnAt = this.reactorTime > 0 ? Date.now() + this.reactorTime * 1000 : 0;
 
     // Only the player who hit the reactor creates drops
     if (!this._isRemoteHit) {
@@ -355,7 +359,6 @@ export default class Reactor {
 
   reset(): void {
     this.destroyed = false;
-    this.respawnScheduled = false;
     this.respawnAt = 0;
     this.pendingDestroy = false;
     this.pendingAdvance = -1;

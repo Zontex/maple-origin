@@ -540,8 +540,6 @@ let respawnAccumulator = 0;
 MapleMap.clearRespawnTimers = function () {
   monsterSpawnDefs = [];
   respawnAccumulator = 0;
-  for (const timer of reactorRespawnTimers) clearTimeout(timer);
-  reactorRespawnTimers = [];
   reactorSpawnDefs = [];
 };
 
@@ -596,7 +594,6 @@ MapleMap.loadMonsters = async function (wzNode) {
 
 // --- Reactor loading ---
 let reactorSpawnDefs: any[] = [];
-let reactorRespawnTimers: any[] = [];
 
 MapleMap.loadReactors = async function (wzNode) {
   reactorSpawnDefs = [];
@@ -808,23 +805,24 @@ MapleMap.update = function (msPerTick) {
   this.mobProjectiles = (this.mobProjectiles || []).filter((p: any) => !p.destroyed);
   this.mobProjectiles.forEach((p: any) => p.update(msPerTick));
 
-  // Reactor respawn handling
-  // Reactor respawn — only the mob host handles timers, broadcasts to others
-  for (const reactor of this.reactors) {
-    if (reactor.destroyed && !reactor.respawnScheduled && reactor.reactorTime > 0) {
-      reactor.respawnScheduled = true;
-      if (!isMobHost) continue; // Non-host waits for reactor_respawn message
-      const r = reactor;
-      // A reactor restored from an earlier visit carries its original
-      // deadline — schedule what is left of it, not another full term
-      const delay = r.respawnAt
-        ? Math.max(0, r.respawnAt - Date.now())
-        : reactor.reactorTime * 1000;
-      const timer = setTimeout(() => {
-        r.reset();
-        try { (window as any).__mySocket?.sendReactorRespawn(r.oId); } catch {}
-      }, delay);
-      reactorRespawnTimers.push(timer);
+  // Reactor respawn — driven by the deadline stamped at the break, not by a
+  // setTimeout. The timer version had two ways to never fire: it was armed
+  // only for the mob host (a non-host set respawnScheduled and then waited
+  // forever for a broadcast), and every timer was cleared on map change, so
+  // walking out re-armed nothing. Both were hidden while re-entering a map
+  // rebuilt its reactors from scratch; once state persisted, "broken" became
+  // permanent. Comparing wall-clock deadlines needs neither timer nor host,
+  // and every client reaches the same conclusion on its own.
+  {
+    const now = Date.now();
+    for (const reactor of this.reactors) {
+      if (!reactor.destroyed || !reactor.respawnAt || now < reactor.respawnAt) continue;
+      reactor.reset();
+      // The host still announces it, so a client that missed the break (and
+      // therefore has no deadline of its own) is brought back in sync
+      if (isMobHost) {
+        try { (window as any).__mySocket?.sendReactorRespawn(reactor.oId); } catch {}
+      }
     }
   }
 

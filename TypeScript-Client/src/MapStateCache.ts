@@ -36,6 +36,10 @@ interface MonsterSnapshot {
 
 interface MapSnapshot {
   savedAt: number;
+  // Which *instance* of the map this describes, for maps the original client
+  // instances rather than keeps (see setInstanceTokenProvider). null for
+  // ordinary maps, which have exactly one instance and always match.
+  token: string | null;
   reactors: ReactorSnapshot[];
   monsters: MonsterSnapshot[];
 }
@@ -53,6 +57,25 @@ const MAX_AGE_MS = 60 * 60 * 1000;
 class MapStateCache {
   // Insertion-ordered: Map preserves it, so the first key is the oldest.
   private snapshots = new Map<number, MapSnapshot>();
+
+  // Some maps are instanced in the original client — the boat deck and cabin
+  // are rebuilt for every sailing and torn down on docking, so nothing you did
+  // aboard one voyage is there on the next. Modelling that as an opaque token
+  // keeps this module from knowing anything about transport: it only asks
+  // "same instance?" and drops the snapshot when the answer changes.
+  // Registered from outside to avoid an import cycle — TransportationManager
+  // reads this cache to restore the Balrog.
+  private instanceToken: ((mapId: number) => string | null) | null = null;
+  setInstanceTokenProvider(fn: (mapId: number) => string | null) {
+    this.instanceToken = fn;
+  }
+  private tokenFor(mapId: number): string | null {
+    try {
+      return this.instanceToken?.(mapId) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   // Snapshot the map being left. Called before load() clears its collections.
   capture(map: any) {
@@ -108,7 +131,12 @@ class MapStateCache {
     }
 
     this.snapshots.delete(mapId); // re-insert so it counts as most recent
-    this.snapshots.set(mapId, { savedAt: Date.now(), reactors, monsters });
+    this.snapshots.set(mapId, {
+      savedAt: Date.now(),
+      token: this.tokenFor(mapId),
+      reactors,
+      monsters,
+    });
 
     while (this.snapshots.size > MAX_MAPS) {
       const oldest = this.snapshots.keys().next().value;
@@ -121,6 +149,12 @@ class MapStateCache {
     const snap = this.snapshots.get(mapId);
     if (!snap) return null;
     if (Date.now() - snap.savedAt > MAX_AGE_MS) {
+      this.snapshots.delete(mapId);
+      return null;
+    }
+    // A different sailing is a different map as far as the original client is
+    // concerned — nothing carries over
+    if (snap.token !== this.tokenFor(mapId)) {
       this.snapshots.delete(mapId);
       return null;
     }

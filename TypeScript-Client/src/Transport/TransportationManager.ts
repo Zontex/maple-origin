@@ -215,6 +215,27 @@ class TransportationManagerImpl {
     return route ? this.getPhase(route) : null;
   }
 
+  // Identifies WHICH voyage a ride map belongs to, or null for an ordinary
+  // map. In the original client the deck and cabin are instanced: every
+  // sailing builds a fresh copy and docking destroys it, which is why the
+  // Ellinia cabin's box is always there when you board despite carrying a
+  // one-hour reactorTime — the map it was broken on no longer exists. We have
+  // one persistent map object instead, so the token stands in for the
+  // instance: state carries across the deck/cabin door within a voyage, and
+  // is dropped the moment the cycle rolls over.
+  getInstanceToken(mapId: number): string | null {
+    for (const route of TRANSPORT_ROUTES) {
+      const onRide = route.legs.some(
+        (l) => l.deckMap === mapId || l.cabinMaps?.includes(mapId)
+      );
+      if (onRide) return `${route.key}:${this.getPhase(route).cycleIndex}`;
+    }
+    // Timed rides are instanced per boarding rather than per cycle
+    const ride = TIMED_RIDES.find((r) => r.rideMap === mapId);
+    if (ride) return `${ride.routeKey}:${this.mapEnteredAt}`;
+    return null;
+  }
+
   isEnemyShipVisible(mapId: number): boolean {
     return ENEMY_SHIP_MAPS.has(mapId) && this.haveBalrog('Boats');
   }

@@ -61,6 +61,15 @@ import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
 import DirectionScene from "./Effects/DirectionScene";
 import TransportationManager from "./Transport/TransportationManager";
+import MapStateCache from "./MapStateCache";
+
+// Ride maps are instanced per voyage in the original client — the deck and
+// cabin are rebuilt each sailing — so remembered map state must not survive a
+// cycle rollover. Wired here rather than inside the cache to keep it ignorant
+// of transport, and inside TransportationManager would be an import cycle.
+MapStateCache.setInstanceTokenProvider((mapId) =>
+  TransportationManager.getInstanceToken(mapId)
+);
 
 // henesys 100000000
 // 100020100 - maps with pigs - useful to test fast things with mobs
