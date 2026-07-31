@@ -539,6 +539,17 @@ export default class QuestManager {
         }
       }
     }
+    // WORN equips count too — Cosmic's haveItem scans the EQUIPPED inventory
+    // alongside the tabs. Quests that require wearable items expect you to
+    // wear them: the training shirt (1042003) gates Mai's 1016 and Yoona's
+    // whole quiz line, all of which vanished the moment the shirt was
+    // equipped because only the bag was counted.
+    const equipped = (this.character as any).equippedItemIds;
+    if (equipped) {
+      for (const eid of Object.values(equipped)) {
+        if (Number(eid) === id) total += 1;
+      }
+    }
     return total;
   }
 
