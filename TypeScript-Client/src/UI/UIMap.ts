@@ -14,6 +14,7 @@ import UIHotkeyBar from "./UIHotkeyBar";
 import UIChatLog from "./UIChatLog";
 import UIGameMenu from "./UIGameMenu";
 import UIChannelSelect from "./UIChannelSelect";
+import UISystemOption from "./UISystemOption";
 
 export interface UIMapInterface {
   statusBarLevelDigits: any[];
@@ -166,6 +167,7 @@ UIMap.addButtons = function (canvas) {
   // background and the panel starts hidden, so nothing can be clicked early.
   void UIGameMenu.initialize(canvas);
   void UIChannelSelect.initialize(canvas);
+  void UISystemOption.initialize(canvas);
   // No server-side channels yet, so switching is a local selection only: the
   // player is told, and the choice is remembered for when the server grows
   // real channel support.
@@ -187,7 +189,7 @@ UIMap.addButtons = function (canvas) {
         console.log("game option — not implemented yet");
         break;
       case "systemOption":
-        console.log("system option — not implemented yet");
+        UISystemOption.show();
         break;
     }
   };
@@ -550,6 +552,8 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   UIGameMenu.draw(canvas, camera, lag, msPerTick, tdelta);
   UIChannelSelect.doUpdate(canvas);
   UIChannelSelect.draw(canvas, camera, lag, msPerTick, tdelta);
+  UISystemOption.doUpdate(canvas);
+  UISystemOption.draw(canvas, camera, lag, msPerTick, tdelta);
 
   // Chat log above the status bar (under the cursor drawn by UICommon)
   UIChatLog.render(canvas);

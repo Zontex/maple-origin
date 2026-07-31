@@ -23,6 +23,7 @@ import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
 import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
+import UISystemOption from "./UI/UISystemOption";
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
@@ -533,6 +534,8 @@ MapStateInstance.doUpdate = function (
           MapleMap.npcDialog.setIsHidden(true);
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
+        } else if (UISystemOption.isVisible) {
+          UISystemOption.hide();
         } else if (UIChannelSelect.isVisible) {
           UIChannelSelect.hide();
         } else if (UIGameMenu.isVisible) {
