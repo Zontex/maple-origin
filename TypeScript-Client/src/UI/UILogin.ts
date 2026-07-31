@@ -46,6 +46,11 @@ interface UILoginInterface {
   _lastCharClickTime: number;
   /** One-shot latch so a held double-click only enters the game once. */
   _enteringGame: boolean;
+  /** True while the mouse is still held from a slot click already handled.
+   *  canvas.clicked stays true for the whole press, so without this the slot
+   *  handler re-runs every frame and frame 2 of an ordinary click looks like a
+   *  double-click against frame 1 — a single click entered the game. */
+  _slotClickHeld: boolean;
   drawMask: (canvas: GameCanvas) => void;
   worlds: any[];
   selectedWorldId: number | null;
@@ -1237,8 +1242,15 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
       }
     } catch (e) {}
 
-    // Click detection — check if mouse clicked on any slot
-    if (canvas.clicked) {
+    // Click detection — check if mouse clicked on any slot.
+    // Edge-triggered: canvas.clicked is true from mousedown right through to
+    // mouseup, so this must fire once per press. Left level-triggered, frame 2
+    // of an ordinary click saw the selection frame 1 had just made and scored
+    // it as a double-click, so one click selected and entered in ~16ms.
+    if (!canvas.clicked) {
+      this._slotClickHeld = false;
+    } else if (!this._slotClickHeld) {
+      this._slotClickHeld = true;
       const mx = canvas.mouseX;
       const my = canvas.mouseY;
       for (let i = 0; i < TOTAL_SLOTS; i++) {
@@ -2030,6 +2042,7 @@ UILogin.loadCharactersFromServer = async function () {
   this.charSelected = false;
   this._lastCharClickTime = 0;
   this._enteringGame = false;
+  this._slotClickHeld = false;
 
   for (const c of charList) {
     try {

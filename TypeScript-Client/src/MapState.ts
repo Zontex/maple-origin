@@ -34,6 +34,28 @@ import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
 import UIGameOption from "./UI/UIGameOption";
+import UIKeyConfig from "./UI/UIKeyConfig";
+import KeyBindings, { ACTIONS, BindableAction } from "./KeyBindings";
+
+// Bound-key helpers. Everything below asks for an ACTION, never a letter, so
+// rebinding takes effect immediately and the edge-triggered checks keep
+// working — previousActionState is keyed by action for the same reason.
+const previousActionState: Partial<Record<BindableAction, boolean>> = {};
+function actionDown(canvas: GameCanvas, action: BindableAction): boolean {
+  const key = KeyBindings.keyNameFor(action);
+  return !!key && canvas.isKeyDown(key);
+}
+/** True only on the frame the action's key goes down. */
+function actionPressed(canvas: GameCanvas, action: BindableAction): boolean {
+  return actionDown(canvas, action) && !previousActionState[action];
+}
+function latchActions(canvas: GameCanvas) {
+  // Driven off ACTIONS rather than a hand-written list so a newly bindable
+  // action cannot be left unlatched and fire on every frame it is held.
+  for (const { action } of ACTIONS) {
+    previousActionState[action] = actionDown(canvas, action);
+  }
+}
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
@@ -72,6 +94,7 @@ export interface MapState extends UIState {
     k: boolean;
     esc: boolean;
     enter: boolean;
+    alt: boolean;
   };
 }
 
@@ -350,6 +373,7 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     k: false,
     esc: false,
     enter: false,
+    alt: false,
   } as any;
 
   await initializeMapState(map, true);
@@ -493,7 +517,7 @@ MapStateInstance.doUpdate = function (
         !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen ||
         DirectionScene.isActive || UIGameMenu.isVisible ||
         UISystemOption.isVisible || UIGameOption.isVisible ||
-        UIChannelSelect.isVisible;
+        UIChannelSelect.isVisible || UIKeyConfig.isVisible;
 
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
@@ -508,36 +532,60 @@ MapStateInstance.doUpdate = function (
         if (canvas.isKeyDown("right")) {
           MyCharacter.rightClick();
         }
-        if (canvas.isKeyDown("alt")) {
+        // Edge-triggered: a jump is one impulse per press. Physics.jump()
+        // assigns vy outright, so calling it on every frame the key is held
+        // kept re-setting vy to full jump speed and gravity never got to bite —
+        // the character rose at constant max speed off the ground, and flew
+        // straight up a rope (the isClimbing branch has no airborne check).
+        if (actionPressed(canvas, "jump")) {
           MyCharacter.jump();
         }
-        if (canvas.isKeyDown("ctrl")) {
+        if (actionDown(canvas, "attack")) {
           MyCharacter.attack();
         }
-        if (canvas.isKeyDown("z")) {
+        if (actionDown(canvas, "pickup")) {
           MyCharacter.pickUp();
         }
       }
 
-      if (canvas.isKeyDown("s") && !this.previousKeyboardState.s && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "stats") && !DirectionScene.isActive) {
         this.statsMenu.setIsHidden(!this.statsMenu.isHidden);
       }
-      if (canvas.isKeyDown("i") && !this.previousKeyboardState.i && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "inventory") && !DirectionScene.isActive) {
         this.inventoryMenu.setIsHidden(!this.inventoryMenu.isHidden);
       }
-      if (canvas.isKeyDown("q") && !this.previousKeyboardState.q && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "questLog") && !DirectionScene.isActive) {
         this.questLog.setIsHidden(!this.questLog.isHidden);
       }
-      if (canvas.isKeyDown("m") && !this.previousKeyboardState.m) {
+      if (actionPressed(canvas, "miniMap")) {
         // v83: M toggles the minimap between full view and the collapsed
         // title strip — it can never be removed completely
         UIMiniMap.viewMode = UIMiniMap.viewMode === 'max' ? 'min' : 'max';
       }
-      if (canvas.isKeyDown("e") && !this.previousKeyboardState.e && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "equipment") && !DirectionScene.isActive) {
         this.equipMenu.setIsHidden(!this.equipMenu.isHidden);
       }
-      if (canvas.isKeyDown("k") && !(this.previousKeyboardState as any).k && !DirectionScene.isActive) {
+      if (actionPressed(canvas, "skills") && !DirectionScene.isActive) {
         this.skillMenu.setIsHidden(!this.skillMenu.isHidden);
+      }
+      if (actionPressed(canvas, "keyConfig") && !DirectionScene.isActive) {
+        UIKeyConfig.toggle();
+      }
+      if (actionPressed(canvas, "sit") && !DirectionScene.isActive) {
+        // v83 sits on a seat defined in the map; this client has no map
+        // seats, so the key drives the chair system instead — stand up if
+        // seated, otherwise sit on the first chair in the Setup tab.
+        const chr: any = MyCharacter;
+        if (chr.chairId) {
+          chr.standUpFromChair();
+        } else if (!chr.isDead && !chr.isInClimbingRope && chr.pos?.fh) {
+          // Same guards the inventory double-click applies: no sitting
+          // mid-air, on a rope or while dead.
+          const chair = chr.inventory?.setup?.find(
+            (it: any) => it && it.itemId >= 3010000 && it.itemId < 3020000
+          );
+          if (chair) chr.sitOnChair(chair.itemId);
+        }
       }
 
       // Edge-triggered: ESC now toggles the game menu, and without this a held
@@ -550,6 +598,8 @@ MapStateInstance.doUpdate = function (
           MapleMap.npcDialog.setIsHidden(true);
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
+        } else if (UIKeyConfig.isVisible) {
+          UIKeyConfig.hide();
         } else if (UISystemOption.isVisible) {
           UISystemOption.hide();
         } else if (UIGameOption.isVisible) {
@@ -614,14 +664,11 @@ MapStateInstance.doUpdate = function (
       }
     }
 
-    this.previousKeyboardState.i = canvas.isKeyDown("i");
-    this.previousKeyboardState.s = canvas.isKeyDown("s");
-    this.previousKeyboardState.q = canvas.isKeyDown("q");
-    this.previousKeyboardState.m = canvas.isKeyDown("m");
-    this.previousKeyboardState.e = canvas.isKeyDown("e");
-    (this.previousKeyboardState as any).k = canvas.isKeyDown("k");
+    // Latch every bound action once per frame (see previousActionState).
+    latchActions(canvas);
     this.previousKeyboardState.esc = canvas.isKeyDown("esc");
     this.previousKeyboardState.enter = canvas.isKeyDown("enter");
+    this.previousKeyboardState.alt = canvas.isKeyDown("alt");
     // Release the Enter that confirmed a game-menu entry, so the next press is
     // free to open the chat again.
     if (!canvas.isKeyDown("enter")) UIGameMenu.swallowEnter = false;
