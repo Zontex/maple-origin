@@ -29,6 +29,11 @@ export interface UIMapInterface {
   statusBarNode: any;
   buttons: Set<any>;
   numbers: any;
+  // Displayed gauge fractions, eased toward the real values so the bars
+  // slide instead of snapping (see easeGauge)
+  dispHpFrac: number;
+  dispMpFrac: number;
+  dispExpFrac: number;
   initialize: () => Promise<void>;
   addButtons: (canvas: GameCanvas) => void;
   doUpdate: (msPerTick: number, camera: any, canvas: GameCanvas) => void;
@@ -242,7 +247,39 @@ async function quitToLogin(canvas: GameCanvas) {
   await StateManager.setState(LoginState, canvas);
 }
 
+/**
+ * Ease a gauge's displayed fraction toward its real value.
+ *
+ * The bars used to be drawn straight from hp/mp/exp, so any change snapped:
+ * a chair's +50 or a mob's hit repainted the bar between one frame and the
+ * next with nothing to see. Moving a share of the remaining distance each
+ * tick gives the slide the original has, and scaling that share by msPerTick
+ * keeps it frame-rate independent. Below a small threshold it lands exactly,
+ * so the bar never creeps forever a hair away from full.
+ */
+function easeGauge(current: number, target: number, msPerTick: number): number {
+  if (!Number.isFinite(current)) return target;
+  const diff = target - current;
+  if (Math.abs(diff) < 0.002) return target;
+  const rate = Math.min(1, (msPerTick / 1000) * 6);
+  return current + diff * rate;
+}
+
 UIMap.doUpdate = function (msPerTick, camera, canvas) {
+  // Displayed gauge fractions, eased toward the real ones
+  const maxHp = MyCharacter.effectiveMaxHp || 1;
+  const maxMp = MyCharacter.effectiveMaxMp || 1;
+  const maxExp = MyCharacter.maxExp || 1;
+  this.dispHpFrac = easeGauge(this.dispHpFrac, MyCharacter.hp / maxHp, msPerTick);
+  this.dispMpFrac = easeGauge(this.dispMpFrac, MyCharacter.mp / maxMp, msPerTick);
+  // EXP only ever grows within a level; on level-up it resets, and easing
+  // backwards across that would drain the whole bar for no reason
+  const expFrac = MyCharacter.exp / maxExp;
+  this.dispExpFrac =
+    expFrac < (this.dispExpFrac ?? 0)
+      ? expFrac
+      : easeGauge(this.dispExpFrac, expFrac, msPerTick);
+
   if (this.firstUpdate) {
     console.log("First update");
     this.chat = new MapleInput(canvas, {
@@ -510,7 +547,13 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   const maxHp = MyCharacter.effectiveMaxHp;
   const maxMp = MyCharacter.effectiveMaxMp;
 
-  const numHpGrays = 105 - Math.floor((hp / maxHp) * 105);
+  // Bars follow the eased fractions so a heal or a hit slides instead of
+  // snapping; the numbers stay exact, as in the original
+  const hpFrac = this.dispHpFrac ?? hp / maxHp;
+  const mpFrac = this.dispMpFrac ?? mp / maxMp;
+  const expFrac = this.dispExpFrac ?? exp / maxExp;
+
+  const numHpGrays = 105 - Math.floor(hpFrac * 105);
   for (let i = 0; i < numHpGrays; i += 1) {
     canvas.drawImage({
       img: this.barGray,
@@ -519,7 +562,7 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
     });
   }
 
-  const numMpGrays = 105 - Math.floor((mp / maxMp) * 105);
+  const numMpGrays = 105 - Math.floor(mpFrac * 105);
   for (let i = 0; i < numMpGrays; i += 1) {
     canvas.drawImage({
       img: this.barGray,
@@ -529,7 +572,7 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   }
 
   const expBarLength = 115;
-  const numExpGrays = expBarLength - Math.floor((exp / maxExp) * expBarLength);
+  const numExpGrays = expBarLength - Math.floor(expFrac * expBarLength);
   for (let i = 0; i < numExpGrays; i += 1) {
     canvas.drawImage({
       img: this.barGray,
