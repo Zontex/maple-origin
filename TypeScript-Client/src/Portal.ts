@@ -3,6 +3,15 @@ import GameCanvas from "./GameCanvas";
 import WZManager from "./wz-utils/WZManager";
 import WZNode from "./wz-utils/WZNode";
 
+// Geometry of `Map.wz/MapHelper.img/portal/game/pv` frame 0 — the sprite every
+// drawn portal uses, and therefore the game's own idea of how big a portal's
+// entry area is. Hardcoded rather than read from the node so an undrawn portal
+// does not have to load MapHelper just to know its own bounds.
+const PORTAL_WIDTH = 87;
+const PORTAL_HEIGHT = 182;
+const PORTAL_ORIGIN_X = 43;
+const PORTAL_ORIGIN_Y = 173;
+
 class Portal {
   isNormalPortal = false;
   wzNode: any;
@@ -130,14 +139,24 @@ class Portal {
 
     this.setFrame(0);
 
-    // Invisible/non-drawn portals still need a collision rect
-    // so checkForPortal() can detect the player standing in them
+    // Invisible/non-drawn portals still need a collision rect so
+    // checkForPortal() can detect the player standing in them. It has to be
+    // the SAME box a drawn portal gets: a type-1 portal is a type-2 portal
+    // without the graphic, and nothing about being invisible should shrink
+    // where it can be entered. A drawn portal's rect comes from the `pv`
+    // sprite (87x182, origin 43,173), so it reaches 9px BELOW the portal's y
+    // — and that slack is load-bearing. Portal y is authored at the doorway
+    // while the player stands on the foothold under it, which sits a few px
+    // lower (Ellinia boat: in00 y=164 over ground y=166, under00 y=477 over
+    // ground y=481). The old 40x40 box stopped dead at y, so on the ship —
+    // where every portal is invisible — standing in the doorway missed by
+    // 2px and you had to jump to lift your feet into it.
     if (!this.frames && (this.toMap !== 999999999 || this.script)) {
       this.rect = {
-        x: this.x - 20,
-        y: this.y - 40,
-        width: 40,
-        height: 40,
+        x: this.x - PORTAL_ORIGIN_X,
+        y: this.y - PORTAL_ORIGIN_Y,
+        width: PORTAL_WIDTH,
+        height: PORTAL_HEIGHT,
       };
     }
   }

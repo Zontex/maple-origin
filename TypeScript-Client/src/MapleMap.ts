@@ -20,6 +20,7 @@ import QuestScriptEngine from './Quest/QuestScriptEngine';
 import NpcScriptEngine, { stripScriptCodes } from './NpcScriptEngine';
 import QuestData from './Quest/QuestData';
 import Reactor from './Reactor';
+import MapStateCache from './MapStateCache';
 import UIMiniMap from './UI/UIMiniMap';
 import UIShipClock from './UI/UIShipClock';
 import ShipObject from './Transport/ShipObject';
@@ -107,6 +108,17 @@ _setMapleMap(MapleMap);
 const minLoadTimeInSeconds = 1;
 
 MapleMap.load = async function (id: number | string) {
+  // Remember what we did to the map we are leaving before any of it is torn
+  // down, so coming back does not rewind it (dead mobs, smashed reactors).
+  // Must run while `this.id` is still the OLD map — hence before the
+  // assignment immediately below.
+  MapStateCache.capture(this);
+
+  // Adopt the new id here rather than after the loaders run: loadMonsters and
+  // loadReactors ask the cache what they remember about `this.id`, and with
+  // the assignment further down they were asking about the map we just left
+  this.id = id;
+
   // Clear respawn timers from previous map
   this.clearRespawnTimers?.();
 
@@ -199,8 +211,6 @@ MapleMap.load = async function (id: number | string) {
   AudioManager.playBackgroundMusic(this.wzNode.info.bgm.nValue);
 
   Timer.doReset();
-
-  this.id = id;
 
   // Dialog/engine init in parallel (independent)
   const [npcDialog, questDialog] = await Promise.all([
@@ -561,7 +571,25 @@ MapleMap.loadMonsters = async function (wzNode) {
       nextPossibleSpawn: 0,
     };
     monsterSpawnDefs.push(spawnDef);
+
+    // Re-entering a map we have been on: a mob still inside its respawn
+    // window stays down, and a survivor comes back hurt and where we left it
+    // rather than healed at its spawn point
+    const remembered = MapStateCache.getMonsterState(Number(this.id), spawnDef.oId);
+    if (remembered && !remembered.alive) {
+      spawnDef.alive = false;
+      spawnDef.nextPossibleSpawn = remembered.nextPossibleSpawn;
+      continue;
+    }
+    if (remembered) {
+      spawnDef.x = remembered.x;
+      spawnDef.y = remembered.y;
+    }
     await this.spawnMonster(spawnDef);
+    if (remembered && remembered.hp > 0) {
+      const mob = this.findMonsterByOId(spawnDef.oId);
+      if (mob) mob.hp = remembered.hp;
+    }
   }
   currentMonsters = this.monsters;
 };
@@ -607,6 +635,13 @@ MapleMap.loadReactors = async function (wzNode) {
         }
       }
       if (bestLayer !== null) reactor.layer = bestLayer;
+
+      // A reactor we smashed stays smashed until its own timer is up. Without
+      // this, the boat cabin's box (reactorTime 3600) could be farmed as fast
+      // as you could walk out the door and back in
+      const remembered = MapStateCache.getReactorState(Number(this.id), reactor.oId);
+      if (remembered) reactor.restoreDestroyed(remembered.respawnAt);
+
       this.reactors.push(reactor);
     } catch (e) {
       console.warn(`[MapleMap] Failed to load reactor ${id}:`, e);
@@ -780,10 +815,15 @@ MapleMap.update = function (msPerTick) {
       reactor.respawnScheduled = true;
       if (!isMobHost) continue; // Non-host waits for reactor_respawn message
       const r = reactor;
+      // A reactor restored from an earlier visit carries its original
+      // deadline — schedule what is left of it, not another full term
+      const delay = r.respawnAt
+        ? Math.max(0, r.respawnAt - Date.now())
+        : reactor.reactorTime * 1000;
       const timer = setTimeout(() => {
         r.reset();
         try { (window as any).__mySocket?.sendReactorRespawn(r.oId); } catch {}
-      }, reactor.reactorTime * 1000);
+      }, delay);
       reactorRespawnTimers.push(timer);
     }
   }

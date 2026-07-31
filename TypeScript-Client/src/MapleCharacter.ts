@@ -1945,8 +1945,15 @@ isCloseToMob = (inAllDirections = true) => {
     const { fadeToBlack } = await import('./MapState');
     fadeToBlack();
 
-    if (!this.map!.isTown) {
-      await this.map!.load(this.map!.getNearbyTownMapId());
+    // Death sends you to the map's own `returnMap`, not to "the nearest town".
+    // Those usually agree — a town's returnMap points at itself and a field's
+    // points at its town — but the boat maps are marked `town=1` in the WZ
+    // while their returnMap is the dock you sailed from (Ellinia's ship:
+    // town=1, returnMap=101000300). Gating on isTown therefore skipped the
+    // warp entirely and the Balrog left you respawning on its own deck.
+    const returnMap = Number(this.map!.wzNode?.info?.returnMap?.nValue);
+    if (Number.isFinite(returnMap) && returnMap > 0 && returnMap !== Number(this.map!.id)) {
+      await this.map!.load(returnMap);
     }
 
     const spawnLocation = this.map!.getCenterFootholdLocation();

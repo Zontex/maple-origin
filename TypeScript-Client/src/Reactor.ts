@@ -37,6 +37,9 @@ export default class Reactor {
   private maxState: number = 0;
   destroyed: boolean = false;
   respawnScheduled: boolean = false;
+  // Absolute deadline for a reactor restored from a previous visit. 0 means
+  // "knocked down this visit", which schedules a full reactorTime as usual.
+  respawnAt: number = 0;
   private pendingDestroy: boolean = false;
   private pendingAdvance: number = -1;
   private _isRemoteHit: boolean = false; // True if hit was triggered by network
@@ -338,9 +341,22 @@ export default class Reactor {
     }
   }
 
+  // Come back already destroyed, carrying the deadline from the visit that
+  // broke it — the clock kept running while we were on another map, so this
+  // must not restart it. Jumped straight to the final state with no hit
+  // animation or drops: those already happened, to someone who was there.
+  restoreDestroyed(respawnAt: number): void {
+    this.destroyed = true;
+    this.respawnAt = respawnAt;
+    this.currentState = this.maxState;
+    this.frame = 0;
+    this.frameTimer = 0;
+  }
+
   reset(): void {
     this.destroyed = false;
     this.respawnScheduled = false;
+    this.respawnAt = 0;
     this.pendingDestroy = false;
     this.pendingAdvance = -1;
     this.hitAnimState = -1;
