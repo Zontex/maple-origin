@@ -4,14 +4,39 @@ const WebSocket = require('ws');
 const { players, mapHosts } = require('./state');
 const { sendToPlayer } = require('./network');
 
+// A host whose game loop has stalled (backgrounded tab, crashed page) keeps
+// its socket open and its setInterval mob broadcasts running, but stops
+// sending player_updates — those only fire when the rAF-driven game state
+// changes. Such a host broadcasts frozen mobs forever, so treat it as
+// invalid whenever a live replacement exists on the map.
+const HOST_STALE_MS = 10000;
+
+function isLive(player) {
+  return (
+    !!player &&
+    player.ws.readyState === WebSocket.OPEN &&
+    Date.now() - (player.lastUpdate || 0) < HOST_STALE_MS
+  );
+}
+
 function assignMapHost(mapId, newJoinerId) {
   mapId = Number(mapId);
+
+  const liveCandidateExists = [...players.values()].some(
+    (p) => Number(p.mapId) === mapId && p.info && isLive(p)
+  );
 
   // Check if current host is still valid
   const currentHost = mapHosts.get(mapId);
   if (currentHost) {
     const hostPlayer = players.get(currentHost);
-    if (hostPlayer && hostPlayer.ws.readyState === WebSocket.OPEN && Number(hostPlayer.mapId) === mapId) {
+    const hostValid =
+      hostPlayer &&
+      hostPlayer.ws.readyState === WebSocket.OPEN &&
+      Number(hostPlayer.mapId) === mapId &&
+      // A stale host keeps hostship only while no live player can take over
+      (isLive(hostPlayer) || !liveCandidateExists);
+    if (hostValid) {
       // Host is valid — tell new joiner they're NOT the host
       if (newJoinerId && newJoinerId !== currentHost) {
         const joiner = players.get(newJoinerId);
@@ -23,16 +48,20 @@ function assignMapHost(mapId, newJoinerId) {
     }
   }
 
-  // Find a new host — first player on this map
+  // Find a new host — prefer players with a live game loop
   let newHost = null;
   for (const [id, player] of players.entries()) {
     if (Number(player.mapId) === mapId && player.ws.readyState === WebSocket.OPEN && player.info) {
-      newHost = id;
-      break;
+      if (isLive(player)) {
+        newHost = id;
+        break;
+      }
+      if (!newHost) newHost = id;
     }
   }
 
   if (newHost) {
+    if (mapHosts.get(mapId) === newHost) return;
     mapHosts.set(mapId, newHost);
     const hostPlayer = players.get(newHost);
     if (hostPlayer) {

@@ -1,9 +1,25 @@
 // Periodic cleanup — inactive players and dead connection detection
 
-const { players } = require('./state');
+const { players, mapHosts } = require('./state');
 const { broadcastToMap } = require('./network');
+const { assignMapHost } = require('./hostManager');
 
 function startCleanupTasks(wss) {
+  // Host revalidation every 5s — a host whose game loop stalled
+  // (backgrounded tab, crashed page) stops sending player_updates while its
+  // mob broadcasts keep firing frozen positions; hand hostship to a live
+  // player. assignMapHost is a no-op while the current host is healthy.
+  setInterval(() => {
+    const activeMaps = new Set();
+    for (const player of players.values()) {
+      const mapId = Number(player.mapId);
+      if (Number.isFinite(mapId) && mapId > 0) activeMaps.add(mapId);
+    }
+    for (const mapId of activeMaps) assignMapHost(mapId);
+    for (const mapId of [...mapHosts.keys()]) {
+      if (!activeMaps.has(mapId)) mapHosts.delete(mapId);
+    }
+  }, 5000);
   // Remove inactive players every 30s
   setInterval(() => {
     const now = Date.now();
