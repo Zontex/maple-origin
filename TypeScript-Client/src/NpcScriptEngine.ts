@@ -1,4 +1,4 @@
-import { npcNames, mobNames, QuestState, ensureItemNames } from './Quest/QuestData';
+import { npcNames, mobNames, QuestState, ensureItemNames, collapseBlankLines } from './Quest/QuestData';
 import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
 import ShopUI from './UI/ShopUI';
@@ -148,14 +148,18 @@ const SELECTION_RE = /#L(\d+)#((?:(?!#l|#L\d+#|\\r|\\n|\r|\n)[\s\S])*)(?:#l)?/g;
 
 function parseSelections(text: string, mapNameResolver?: (id: number) => string): { body: string; selections: SelectionOption[] } {
   const selections: SelectionOption[] = [];
-  const body = text.replace(SELECTION_RE, (_, idx, label) => {
+  const raw = text.replace(SELECTION_RE, (_, idx, label) => {
     selections.push({
       index: parseInt(idx),
       label: stripFormatCodes(label, mapNameResolver).trim(),
     });
     return '';
   });
-  return { body, selections };
+
+  // Body is returned raw — callers collapse blank lines only after
+  // stripFormatCodes has run, otherwise leftover codes like a trailing #k
+  // keep the empty lines around them alive
+  return { body: raw, selections };
 }
 
 // Strip MapleStory format codes from text (no selection parsing)
@@ -428,7 +432,11 @@ export default class NpcScriptEngine {
       sendSimple(text: string) {
         const { body, selections } = parseSelections(text, mapNameResolver);
         engine.pendingDialog = {
-          text: stripFormatCodes(body, mapNameResolver),
+          // Removing #L..#l leaves each option's line break behind: Robin's
+          // 17 travel questions left 17 blank lines, which padded the
+          // message out and pushed the option list ~270px down the dialog —
+          // far enough that the NPC underneath could no longer be clicked
+          text: collapseBlankLines(stripFormatCodes(body, mapNameResolver)),
           type: 'simple',
           selections,
         };
