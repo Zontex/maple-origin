@@ -1322,6 +1322,24 @@ class MySocket {
   // Last time a mob_state_batch arrived; drives the stuck-host watchdog
   _lastMobStateAt: number = 0;
   _lastHostCheckAt: number = 0;
+  _lastHeartbeatAt: number = 0;
+
+  /**
+   * Called once per rendered frame from Gameloop, throttled to 1/s.
+   *
+   * The server used to infer liveness from player_update, which the client
+   * only sends when the player actually moves — so standing still looked
+   * identical to a crashed tab, and an idle host had mob hosting taken away
+   * from it. A frame-driven heartbeat distinguishes the two: a backgrounded
+   * tab stops rendering and goes quiet, an idle player keeps ticking.
+   */
+  notifyFrame() {
+    if (!this.isConnected || !this.playerId) return;
+    const now = Date.now();
+    if (now - this._lastHeartbeatAt < 1000) return;
+    this._lastHeartbeatAt = now;
+    this.sendMessage({ type: 'heartbeat' });
+  }
 
   handleMobHostAssign(data: any) {
     this.isMobHost = data.isHost;
@@ -1558,6 +1576,11 @@ class MySocket {
     setInterval(() => {
       try {
         if (this.isMobHost && this.isConnected) {
+          // A mob left in remote mode while we're the host never moves and
+          // never will — nothing is broadcasting to it. Cheap to re-assert.
+          for (const mob of MapleMap.monsters || []) {
+            if ((mob as any).isRemote) (mob as any).isRemote = false;
+          }
           this.sendMobStateBatch();
         } else {
           // Non-host: make sure we're not waiting on a host that will never

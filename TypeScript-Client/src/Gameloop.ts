@@ -47,6 +47,11 @@ class GameLoop {
     requestAnimationFrame(() => this.gameLoop());
 
     Timer.update();
+    // Liveness heartbeat. Driven from here on purpose: rAF stops in a
+    // background tab while setInterval keeps running, so this is what tells
+    // the server whether our game loop is actually alive. Reached through
+    // the window global to avoid an import cycle (mysocket -> MapleMap -> …).
+    (window as any).__mySocket?.notifyFrame?.();
     this.lag += Timer.delta;
     // Cap catch-up: rAF pauses in background tabs, so after minutes away an
     // uncapped lag would run thousands of update ticks in one frame and hang

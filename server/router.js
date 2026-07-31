@@ -20,6 +20,17 @@ function handleHostCheck(playerId) {
   assignMapHost(player.mapId, playerId);
 }
 
+/**
+ * Frame-driven liveness ping, sent once a second from the client's render
+ * loop. This is the signal isLive() and the inactivity sweep should use:
+ * player_update only fires when the player moves, so standing still was
+ * indistinguishable from a dead tab.
+ */
+function handleHeartbeat(playerId) {
+  const player = players.get(playerId);
+  if (player) player.lastUpdate = Date.now();
+}
+
 function handleMessage(playerId, data) {
   switch (data.type) {
     case 'player_info':
@@ -54,6 +65,9 @@ function handleMessage(playerId, data) {
       break;
     case 'request_host_check':
       handleHostCheck(playerId);
+      break;
+    case 'heartbeat':
+      handleHeartbeat(playerId);
       break;
     case 'player_hit_by_mob':
       handlePlayerHitByMob(playerId, data.data);
