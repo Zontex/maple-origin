@@ -775,7 +775,13 @@ class InventoryMenuSprite extends DragableMenu {
     // both Item.wz items and Character.wz equips
     let iconImg: HTMLImageElement | null = null;
     try {
-      const iconNode = item.node?.info?.iconRaw ?? item.node?.iconRaw;
+      // iconRaw first, then icon. Not every item has iconRaw — chairs are one
+      // — and without the fallback the icon came back null, which skipped
+      // beginPending entirely, so those items could not be dragged onto a
+      // quickslot or a key at all. ShopUI has always used the same fallback.
+      const iconNode =
+        item.node?.info?.iconRaw ?? item.node?.info?.icon ??
+        item.node?.iconRaw ?? item.node?.icon;
       if (iconNode?.nGetImage) {
         iconImg = iconNode.nGetImage();
         this.draggingIcon = iconImg;
@@ -784,8 +790,10 @@ class InventoryMenuSprite extends DragableMenu {
       this.draggingIcon = null;
     }
 
-    // Also register with global DragManager for hotkey bar drops
-    if (iconImg) {
+    // Also register with global DragManager for hotkey bar drops. Only when
+    // this window owns the point — overlapping menus each read the mouse for
+    // themselves, so without it two windows start a drag off one press.
+    if (iconImg && this.ownsPoint(startX, startY)) {
       DragManager.beginPending('item', item.itemId, iconImg, startX, startY);
     }
 

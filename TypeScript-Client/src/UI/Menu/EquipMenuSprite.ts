@@ -214,6 +214,7 @@ class EquipMenuSprite extends DragableMenu {
   /** Start dragging a worn item — DragManager renders the cursor ghost */
   beginEquipDrag(slotIdx: number, itemId: number, mouseX: number, mouseY: number) {
     const icon = this.charecter.equippedItemIcons?.[slotIdx] ?? null;
+    if (!this.ownsPoint(mouseX, mouseY)) return;
     DragManager.beginPending('item', itemId, icon, mouseX, mouseY);
     this._dragSlot = slotIdx;
 

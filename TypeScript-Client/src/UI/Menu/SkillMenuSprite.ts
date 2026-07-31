@@ -516,6 +516,10 @@ class SkillMenuSprite extends DragableMenu {
     const playerLevel = this.charecter?.skillManager?.getSkillLevel(skill.id) ?? 0;
     if (playerLevel <= 0) return; // can't drag unlearned skills
     if (!skill.icon) return;
+    // Only if this window is the one actually under the cursor — otherwise a
+    // drag started in the inventory on top of it also started a skill drag,
+    // and this one, being drawn last, overwrote it.
+    if (!this.ownsPoint(canvas.mouseX, canvas.mouseY)) return;
 
     DragManager.beginPending('skill', skill.id, skill.icon, canvas.mouseX, canvas.mouseY);
   }

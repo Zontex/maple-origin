@@ -54,6 +54,8 @@ function actionPressed(canvas: GameCanvas, action: BindableAction): boolean {
  * eight quickslot keys gets used — a chair on X, for instance. Edge-triggered
  * per key, so holding it does not re-fire.
  */
+/** Held across frames so a press raises a window once, not every frame. */
+let menuFocusLatched = false;
 const previousItemKeyState: Record<number, boolean> = {};
 function checkItemKeys(canvas: GameCanvas) {
   for (const codeStr of Object.keys(KeyBindings.itemBindings)) {
@@ -78,6 +80,7 @@ function latchActions(canvas: GameCanvas) {
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
+import DragableMenu from "./UI/Menu/DragableMenu";
 import DirectionScene from "./Effects/DirectionScene";
 import TransportationManager from "./Transport/TransportationManager";
 
@@ -365,6 +368,9 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
   });
 
   this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu];
+  // Same array, same order as the draw pass — so "later in the list" means
+  // "drawn on top", which is what click ownership is decided on.
+  DragableMenu.setStack(this.UIMenus);
 
   // Initialize hotkey bar (visible by default so players can use skill slots)
   UIHotkeyBar.initialize();
@@ -758,6 +764,18 @@ MapStateInstance.doUpdate = function (
     UIMiniMap.update(msPerTick);
     UIQuestAlarm.update(msPerTick, canvas);
     DebugDrag.update(canvas.mouseX, canvas.mouseY, canvas.clicked);
+
+    // A press raises the window under it before anything reads the click, so
+    // the window you clicked is both on top and the one that responds.
+    // Latched: canvas.clicked stays true for the whole press.
+    if (canvas.clicked) {
+      if (!menuFocusLatched) {
+        menuFocusLatched = true;
+        DragableMenu.raiseAt(canvas.mouseX, canvas.mouseY);
+      }
+    } else {
+      menuFocusLatched = false;
+    }
 
     this.UIMenus.forEach((menu) => {
       menu.update(msPerTick, camera, canvas);
