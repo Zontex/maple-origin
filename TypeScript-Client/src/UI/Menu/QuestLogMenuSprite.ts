@@ -738,7 +738,7 @@ class QuestLogMenuSprite extends DragableMenu {
       description = questInfo.completionText || 'Quest completed.';
     }
     const qmGlobal = (window as any).charecter?.questManager;
-    description = resolveItemCodes(description, qmGlobal);
+    description = resolveItemCodes(description, qmGlobal, this.selectedQuestId);
     // Replace inline ITEM markers with item names (icons not supported in text-only renderer)
     description = description.replace(/\x01ITEM:(\d+)\x02/g, (_, id) => getItemNameSync(parseInt(id)) || `Item #${id}`);
 
