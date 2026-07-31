@@ -973,6 +973,20 @@ MapleMap.render = function (
     drop.draw(canvas, camera);
   });
 
+  // NPC overhead UI — chat balloons and quest notices — above every map
+  // layer and front background, so a clerk behind a shop sign still talks
+  // over it like the original client
+  for (const npc of this.npcs) {
+    try {
+      npc.drawOverlays(canvas, camera);
+    } catch (e) {
+      if (!(npc as any)._overlayErrorLogged) {
+        (npc as any)._overlayErrorLogged = true;
+        console.error('[MapleMap] NPC overlay draw failed:', e);
+      }
+    }
+  }
+
   // Station departure clock (world-space) / timed-ride countdown
   UIShipClock.draw(canvas, camera);
 
