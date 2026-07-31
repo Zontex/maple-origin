@@ -160,7 +160,14 @@ class MapleCharacter {
   climbingIsLadder: boolean = false;
   /** y-extent of the rope currently held, so the climb can be stopped at its
    *  ends instead of running past them. */
-  climbRopeBounds: { y1: number; y2: number } | null = null;
+  climbRopeBounds: { y1: number; y2: number; x: number; xRange: number } | null = null;
+  /**
+   * A rope the character has just pushed off sideways, ignored for grabbing
+   * until they are clear of its box. Without it, holding up after a jump+left
+   * /right re-grabs the same rope on the very next frame — the character
+   * never gets away and the jump looks like it did nothing.
+   */
+  ropeJumpLock: { y1: number; y2: number; x: number; xRange: number } | null = null;
   isDead: boolean = false;
   maxCloseToMobDistance: number = 0;
   mobHitMinOverlapPercentage: number = 0;
@@ -931,15 +938,75 @@ class MapleCharacter {
     );
   }
 
-  async jump() {
-    if (this.stance !== "jump") {
-      const jumpNode: any = await WZManager.get("Sound.wz/Game.img/Jump");
-      const jumpAudio = jumpNode.nGetAudio();
-      PLAY_AUDIO(jumpAudio);
-    }
+  /**
+   * Whether the jump key should actually produce a jump this frame.
+   *
+   * `sidewaysHeld` has to be passed in rather than read off `pos.left`/
+   * `pos.right`, because climbRope() clears the direction flags the instant a
+   * rope is grabbed — by the time the character is on a ladder they are false.
+   */
+  canJump(sidewaysHeld: boolean): boolean {
+    // On a ladder or rope it takes jump + left/right to push off, which is
+    // what Physics.jump()'s climbing branch does — it throws the character up
+    // and away in the direction held. Jump on its own stays put, and so does
+    // jump+up: holding up re-grabs the rope through checkForLadder on the
+    // very next frame, so it fired the jump over and over and never left.
+    if (this.pos.isClimbing || this.isInClimbingRope) return sidewaysHeld;
 
+    // Swimming is a held-key kick by design and paces itself in
+    // Physics.jump() (the `vy > -80` gate), so the landing rule below — which
+    // would never be true in open water — must not apply to it.
+    if (this.pos.swimming) return true;
+
+    // Crouched: cancelled outright.
+    if (this.pos.fh && this.pos.down) return false;
+
+    // Otherwise only off the ground, and only once the character has stopped
+    // rising. The foothold alone is not enough of a guard: physics can
+    // re-acquire it for a frame or two on the way up, and a held key would
+    // then re-launch at full speed before gravity ever bit — which is exactly
+    // how holding the key used to fly. Requiring vy >= 0 means the next jump
+    // cannot start until this one has landed.
+    return !!this.pos.fh && this.pos.vy >= 0;
+  }
+
+  /** Jump if the current state allows it. See canJump for the rules. */
+  tryJump(sidewaysHeld: boolean) {
+    if (!this.canJump(sidewaysHeld)) return;
+    this.jump();
+  }
+
+  jump() {
+    // Captured before pos.jump(), which clears isClimbing.
+    const pushedOffRope =
+      (this.pos.isClimbing || this.isInClimbingRope) && this.climbRopeBounds;
+    const alreadyJumping = this.stance === "jump";
+
+    // Physics first, sound second. This used to await the WZ sound load
+    // before touching physics, so every frame inside that await still saw the
+    // pre-jump state, passed the same checks and queued another jump — one
+    // press pushed off a rope twice.
     this.pos.jump();
     this.isInClimbingRope = false;
+
+    if (pushedOffRope) {
+      // The jump starts from inside the rope's own grab box, so lock it out
+      // until the character is clear — see ropeJumpLock.
+      this.ropeJumpLock = pushedOffRope;
+      this.isClimbMoving = false;
+      this.climbRopeBounds = null;
+    }
+
+    if (!alreadyJumping) void this.playJumpSound();
+  }
+
+  private async playJumpSound() {
+    try {
+      const jumpNode: any = await WZManager.get("Sound.wz/Game.img/Jump");
+      PLAY_AUDIO(jumpNode.nGetAudio());
+    } catch (e) {
+      console.warn("[MapleCharacter] jump sound failed", e);
+    }
   }
 
  /**
@@ -1552,12 +1619,24 @@ isCloseToMob = (inAllDirections = true) => {
 
   checkForLadder(direction: ClimbDirections) {
     const isUp = direction === ClimbDirections.UP;
+    const lock = this.ropeJumpLock;
     const ladderRope = this.map!.wzNode.ladderRope.nChildren.find(
       (ladderRope: any) => {
         // its ladder or rope
         const isLadder = ladderRope.nGet("l").nValue === 1;
 
         const xRange = isLadder ? 15 : 8;
+
+        // A rope just pushed off is off limits until the character is clear
+        // of it (the lock is dropped in update()), so holding up through the
+        // jump cannot snatch them straight back onto it.
+        if (
+          lock &&
+          lock.x === ladderRope.x.nValue &&
+          lock.y1 === ladderRope.y1.nValue
+        ) {
+          return false;
+        }
 
         // The grab box is deliberately lopsided, and which way depends on the
         // direction asked for. A rope's y1 sits 2px below the foothold it
@@ -1596,7 +1675,12 @@ isCloseToMob = (inAllDirections = true) => {
       // Ladders and ropes use different climb stances (ladder: rungs grip,
       // rope: hands on the rope) — remember which one was grabbed
       this.climbingIsLadder = ladderRope.nGet("l").nValue === 1;
-      this.climbRopeBounds = { y1: ropeTop, y2: ropeBottom };
+      this.climbRopeBounds = {
+        y1: ropeTop,
+        y2: ropeBottom,
+        x: ladderRope.x.nValue,
+        xRange: this.climbingIsLadder ? 15 : 8,
+      };
       this.pos.x = ladderRope.x.nValue;
       // That slack means you can grab from just outside the rope's span, so
       // start the climb at the end you caught hold of — otherwise the
@@ -1780,6 +1864,18 @@ isCloseToMob = (inAllDirections = true) => {
    * two and acquire the foothold they are actually standing on.
    */
   releaseRope() {
+    const bounds = this.climbRopeBounds;
+    // Leaving at the head: lift clear of the rope top first. y1 sits 2px
+    // BELOW the platform the rope hangs from, so letting go anywhere in that
+    // 2px band leaves the character just under the lip with nothing above to
+    // land on, and they drop the entire shaft instead of stepping off. Which
+    // side of the lip they landed on came down to which frame the release
+    // happened to fall on. Lifting above y1 makes it land on the platform
+    // every time; if there is no platform up there they fall anyway, which
+    // is what should happen at the top of a free-hanging rope.
+    if (bounds && this.pos.y < bounds.y1) {
+      this.pos.y = bounds.y1 - GRAB_SLACK;
+    }
     this.isInClimbingRope = false;
     this.isClimbMoving = false;
     this.climbRopeBounds = null;
@@ -2431,6 +2527,19 @@ isCloseToMob = (inAllDirections = true) => {
         this.pos.vx = 0;
         this.pos.vy = 0;
         this.pos.fh = null;
+      }
+    }
+
+    // Drop the post-push-off lock once the character is outside the box of
+    // the rope they jumped from, at which point up can grab it again.
+    if (this.ropeJumpLock) {
+      const L = this.ropeJumpLock;
+      if (
+        Math.abs(this.pos.x - L.x) > L.xRange ||
+        this.pos.y < L.y1 - GRAB_SLACK ||
+        this.pos.y > L.y2 + GRAB_SLACK
+      ) {
+        this.ropeJumpLock = null;
       }
     }
 

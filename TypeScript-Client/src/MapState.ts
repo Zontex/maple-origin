@@ -532,13 +532,15 @@ MapStateInstance.doUpdate = function (
         if (canvas.isKeyDown("right")) {
           MyCharacter.rightClick();
         }
-        // Edge-triggered: a jump is one impulse per press. Physics.jump()
-        // assigns vy outright, so calling it on every frame the key is held
-        // kept re-setting vy to full jump speed and gravity never got to bite —
-        // the character rose at constant max speed off the ground, and flew
-        // straight up a rope (the isClimbing branch has no airborne check).
-        if (actionPressed(canvas, "jump")) {
-          MyCharacter.jump();
+        // Held, not edge-triggered: holding jump while walking keeps hopping,
+        // re-firing each time the last jump lands. What stops that flying is
+        // the landed check in canJump, not the key edge — Physics.jump()
+        // assigns vy outright, so anything that lets it run while the
+        // character is still rising re-launches at full speed every frame.
+        if (actionDown(canvas, "jump")) {
+          MyCharacter.tryJump(
+            canvas.isKeyDown("left") || canvas.isKeyDown("right")
+          );
         }
         if (actionDown(canvas, "attack")) {
           MyCharacter.attack();

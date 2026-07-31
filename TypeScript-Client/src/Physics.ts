@@ -42,8 +42,17 @@ const swim_speed_dec = 0.9;
 const walk_drag = 80000;
 const walk_force = 140000;
 const default_walk_speed = 125;
-const slide_down_speed = 300;
+// Sliding down used to be twice the climbing speed, which made descents feel
+// like dropping rather than climbing. Both directions move at one rate now.
 const slide_up_speed = 150;
+const slide_down_speed = slide_up_speed;
+
+// Pushing off a rope with jump + left/right. The vertical kick is a fraction
+// of a standing jump (a rope push-off should not out-jump solid ground) and
+// the horizontal one is a multiple of walk speed, so the character clears the
+// ladder instead of dribbling back onto it.
+const rope_jump_v = 0.85;
+const rope_jump_h = 1.4;
 
 const speedFactor = 90;
 
@@ -91,13 +100,18 @@ class Physics {
     let y = this.y;
     if (this.isClimbing) {
       flying = true;
-      vy = shoe_walk_jump * jump_speed * (flying ? -0.7 : -1);
-      const fmax = this.walk_speed * shoe_walk_speed;
-      vx = this.left
-        ? Math.max(Math.min(vx, -fmax * 0.8), -fmax)
-        : this.right
-        ? Math.min(Math.max(vx, fmax * 0.8), fmax)
-        : vx;
+      vy = shoe_walk_jump * jump_speed * -rope_jump_v;
+      // Set outright rather than clamped against the current vx: climbing
+      // leaves vx at 0, so clamping could only ever reach the low end of the
+      // range and the push-off barely left the rope.
+      const fmax = this.walk_speed * shoe_walk_speed * rope_jump_h;
+      vx = this.left ? -fmax : this.right ? fmax : vx;
+      // Pushing off leaves the character airborne, so drop the foothold the
+      // way the grounded branch does. It was kept, and since climbing never
+      // refreshes it the value was stale — a held jump key then saw "on the
+      // ground" for the whole rise and fired a second, full-strength jump the
+      // moment vy crossed zero at the apex.
+      fh = null;
     } else if (fh) {
       if (
         this.down &&
