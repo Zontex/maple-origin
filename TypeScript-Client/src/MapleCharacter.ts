@@ -44,6 +44,10 @@ const FULFILLED_SOUND = "Sound.wz/UI.img/Invite";
 // a melee swing
 const ATTACK_BODY_H = 60;
 
+// Nudge for the chair's base relative to the character's foothold contact
+// point. Positive sinks it into the floor, negative lifts it.
+const CHAIR_BASE_OFFSET = 0;
+
 class MapleCharacter {
   opts: any;
   active: boolean = true;
@@ -108,6 +112,14 @@ class MapleCharacter {
   bodyStartPoistion: any = { x: 0, y: 0 };
   spriteBottomY: number = 0; // lowest drawn pixel relative to pos.y (mounts extend below the feet)
   // Taming mob riding — the mount animates on its own clock while the body
+  // Setup-item chair being sat on; 0 when standing. The sprite comes from
+  // Item.wz/Install/<prefix>.img/<id>/effect/0 and draws behind the body
+  // (its `z` is -1), and info/recoveryHP is applied on a 10s tick.
+  chairId: number = 0;
+  chairFrame: any = null;
+  chairRecoveryHP: number = 0;
+  chairRecoveryTimer: number = 0;
+
   // holds the 'sit' stance attached at the mount's navel point
   mountStance: string = "stand1";
   mountFrame: number = 0;
@@ -766,10 +778,68 @@ class MapleCharacter {
   }
 
   /**
-   * GMS notification when an in-progress quest's requirements become
-   * fulfilled — the QuestAlert light-burst over the character + jingle
-   * (same effect the original client plays at that moment).
+   * Sit on a Setup-tab chair. The chair graphic is the item's `effect/0`
+   * canvas; the body just holds the existing `sit` stance (the same one
+   * mounts use), so nothing new is needed from Character.wz.
    */
+  async sitOnChair(itemId: number) {
+    try {
+      const padded = `${itemId}`.padStart(8, '0');
+      const prefix = padded.substring(0, 4);
+      const item: any = await WZManager.get(`Item.wz/Install/${prefix}.img/${padded}`);
+      const frame = item?.effect?.['0'];
+      if (!frame?.nGetImage) {
+        console.warn(`[Chair] item #${itemId} has no effect/0 sprite`);
+        return;
+      }
+      this.chairId = itemId;
+      this.chairFrame = frame;
+      this.chairRecoveryHP = item?.info?.recoveryHP?.nValue ?? 0;
+      this.chairRecoveryTimer = 0;
+      // Face the camera like the original rather than keeping the walk
+      // direction the player happened to stop on
+      this.flipped = false;
+    } catch (e) {
+      console.error('sitOnChair error:', e);
+    }
+  }
+
+  /** Leave the chair. Safe to call when not sitting. */
+  standUpFromChair() {
+    if (!this.chairId) return;
+    this.chairId = 0;
+    this.chairFrame = null;
+    this.chairRecoveryHP = 0;
+    this.chairRecoveryTimer = 0;
+  }
+
+  /**
+   * Chairs restore info/recoveryHP every 10 seconds while seated — the
+   * whole point of them in v83.
+   */
+  updateChair(msPerTick: number) {
+    if (!this.chairId || this.chairRecoveryHP <= 0) return;
+    if (this.hp >= this.maxHp) {
+      this.chairRecoveryTimer = 0;
+      return;
+    }
+    this.chairRecoveryTimer += msPerTick;
+    if (this.chairRecoveryTimer < 10000) return;
+    this.chairRecoveryTimer -= 10000;
+
+    const before = this.hp;
+    this.hp = Math.min(this.maxHp, this.hp + this.chairRecoveryHP);
+    const gained = this.hp - before;
+    if (gained > 0) {
+      // Blue rising number, the same indicator damage uses
+      this.DamageIndicator?.addDamageIndicator(
+        DamageIndicatorType.Recovery,
+        { x: this.pos.x, y: this.pos.y - 40 },
+        gained
+      );
+    }
+  }
+
   /**
    * Requirements-met feedback. Sound only — the announcement itself is the
    * red balloon over the quest notifier, and GMS doesn't also play the
@@ -1838,6 +1908,28 @@ isCloseToMob = (inAllDirections = true) => {
     }
   }
 
+  /**
+   * Chair sprite. Drawn before the body because the item's `effect/z` is -1,
+   * i.e. behind the character.
+   *
+   * Placed by its base rather than by `pos - origin`. These canvases carry a
+   * negative origin.y (-16 on the Relaxer), which under the usual convention
+   * puts the whole sprite below the character's feet — the chair ended up
+   * floating well under them. Standing it on the foothold and centring it
+   * horizontally is what actually matches the original.
+   */
+  drawChair(canvas: any, camera: any) {
+    if (!this.chairId || !this.chairFrame) return;
+    const img = this.chairFrame.nGetImage?.();
+    if (!img) return;
+    const size = GUIUtil.wzSize(this.chairFrame);
+    canvas.drawImage({
+      img,
+      dx: Math.round(this.pos.x - size.width / 2 - camera.x),
+      dy: Math.round(this.pos.y - size.height - camera.y + CHAIR_BASE_OFFSET),
+    });
+  }
+
   drawTombstone(canvas: any, camera: any) {
     if (!this.tombstoneNode) return;
     if (!this.tombstoneActive && !this.tombstoneDone) return;
@@ -2095,6 +2187,8 @@ isCloseToMob = (inAllDirections = true) => {
       this.buffManager.update(msPerTick);
     }
 
+    this.updateChair(msPerTick);
+
     // Update chat balloon timer
     if (this.showChatBalloon) {
       this.chatBalloonTimer += msPerTick;
@@ -2331,8 +2425,10 @@ isCloseToMob = (inAllDirections = true) => {
     const riding = stance === "sit" && !!effectiveEquips[19];
     effectiveEquips[19] = undefined;
     effectiveEquips[20] = undefined;
-    if (riding) {
-      // v83 hides the weapon while riding (weapons have no 'sit' frames)
+    if (riding || stance === "sit") {
+      // v83 hides the weapon in the sit stance — weapons have no 'sit'
+      // frames, so it would otherwise fall back to a standing pose and hang
+      // in mid-air across the body. Applies to chairs as well as mounts.
       effectiveEquips[10] = undefined;
     }
     const [hat, faceAcc, ...equips] = effectiveEquips;
@@ -2537,8 +2633,25 @@ isCloseToMob = (inAllDirections = true) => {
       const walkStance = this.weaponWalkType === 2 ? Stance.walk2 : Stance.walk1;
       // Airborne in a swim map = swimming (fly stance), otherwise jumping
       const airStance = this.map?.isSwimMap ? Stance.fly : Stance.jump;
+      // Anything that isn't sitting still gets you out of the chair, the
+      // same way the original does — walking, jumping off, crouching,
+      // attacking, grabbing a rope or dying
+      if (
+        this.chairId &&
+        (this.isDead ||
+          this.isInAttack ||
+          this.isInClimbingRope ||
+          !this.pos.fh ||
+          this.pos.down ||
+          this.pos.left !== this.pos.right)
+      ) {
+        this.standUpFromChair();
+      }
+
       if (this.isDead) {
         this.setStance(Stance.dead);
+      } else if (this.chairId) {
+        this.setStance("sit");
       } else if (this.isRiding && !this.isInClimbingRope) {
         // v83 riding: the body holds 'sit' while the mount supplies the
         // movement animation (stand1/walk1/jump)
@@ -2590,6 +2703,7 @@ isCloseToMob = (inAllDirections = true) => {
     }
   
     // Draw tombstone behind character when dead
+    this.drawChair(canvas, camera);
     this.drawTombstone(canvas, camera);
 
     const characterIsFlipped = !!this.flipped;
