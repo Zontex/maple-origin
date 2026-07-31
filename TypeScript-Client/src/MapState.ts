@@ -541,6 +541,11 @@ MapStateInstance.doUpdate = function (
           MyCharacter.tryJump(
             canvas.isKeyDown("left") || canvas.isKeyDown("right")
           );
+        } else {
+          // Letting go re-arms the rope push-off. Catching a rope disarms it,
+          // so a jump key that was already held when the rope was caught
+          // cannot launch until it has been released and pressed again.
+          MyCharacter.ropePushArmed = true;
         }
         if (actionDown(canvas, "attack")) {
           MyCharacter.attack();

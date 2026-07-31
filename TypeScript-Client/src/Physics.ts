@@ -90,6 +90,24 @@ class Physics {
         ? default_walk_speed
         : walkSpeed + speedFactor;
   }
+  /**
+   * Whether down + jump has anywhere to drop to: standing on a foothold that
+   * allows it, with another foothold somewhere below the character.
+   *
+   * Shared with the jump-gating in MapleCharacter so the two cannot disagree
+   * about what counts as a ledge — if this is false, down+jump must do
+   * nothing at all rather than falling through to a normal jump upward.
+   */
+  canDropThrough(): boolean {
+    const fh = this.fh;
+    if (!fh || fh.cantThrough || fh.forbid) return false;
+    const x = this.x;
+    const y = this.y;
+    return (getMapleMap().footholdList || []).some((f: any) => {
+      return f.id != fh.id && f.x1 < x && f.x2 > x && f.y1 > y && f.y2 > y;
+    });
+  }
+
   jump() {
     let fh = this.fh;
     let djump = this.djump;
@@ -113,14 +131,7 @@ class Physics {
       // moment vy crossed zero at the apex.
       fh = null;
     } else if (fh) {
-      if (
-        this.down &&
-        !fh.cantThrough &&
-        !fh.forbid &&
-        (getMapleMap().footholdList || []).some((f: any) => {
-          return f.id != fh.id && f.x1 < x && f.x2 > x && f.y1 > y && f.y2 > y;
-        })
-      ) {
+      if (this.down && this.canDropThrough()) {
         djump = fh;
         vx = 0;
         vy = -jump_speed * down_jump_multiplier;

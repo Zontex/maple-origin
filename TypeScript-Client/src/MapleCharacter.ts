@@ -168,6 +168,14 @@ class MapleCharacter {
    * never gets away and the jump looks like it did nothing.
    */
   ropeJumpLock: { y1: number; y2: number; x: number; xRange: number } | null = null;
+  /**
+   * Whether a rope push-off is allowed yet. Catching a rope disarms it and
+   * letting go of the jump key re-arms it (MapState drives that), so the
+   * launch always needs a press taken *after* the grab. Without it, walking
+   * into a ladder with jump already held grabbed the rope and flung the
+   * character straight back off it in the same breath.
+   */
+  ropePushArmed: boolean = true;
   isDead: boolean = false;
   maxCloseToMobDistance: number = 0;
   mobHitMinOverlapPercentage: number = 0;
@@ -951,15 +959,26 @@ class MapleCharacter {
     // and away in the direction held. Jump on its own stays put, and so does
     // jump+up: holding up re-grabs the rope through checkForLadder on the
     // very next frame, so it fired the jump over and over and never left.
-    if (this.pos.isClimbing || this.isInClimbingRope) return sidewaysHeld;
+    if (this.pos.isClimbing || this.isInClimbingRope) {
+      return sidewaysHeld && this.ropePushArmed;
+    }
 
     // Swimming is a held-key kick by design and paces itself in
     // Physics.jump() (the `vy > -80` gate), so the landing rule below — which
     // would never be true in open water — must not apply to it.
     if (this.pos.swimming) return true;
 
-    // Crouched: cancelled outright.
-    if (this.pos.fh && this.pos.down) return false;
+    // Crouched: the only thing jump may do is drop through the platform, and
+    // only where there is actually something below to land on. Physics falls
+    // back to a normal jump upward when there is not, which is why crouching
+    // somewhere with nothing underneath used to launch the character.
+    if (this.pos.fh && this.pos.down) return this.pos.canDropThrough();
+
+    // Never twice off one take-off. The jump stance runs until the character
+    // lands and returns to standing or walking, so refusing while it plays
+    // means each hop needs a real landing first — no second jump in the air,
+    // and a held key cannot squeeze two out of one launch.
+    if (this.stance === Stance.jump) return false;
 
     // Otherwise only off the ground, and only once the character has stopped
     // rising. The foothold alone is not enough of a guard: physics can
@@ -1885,6 +1904,10 @@ isCloseToMob = (inAllDirections = true) => {
 
   // ClimbDirections enum
   climbRope(direction: ClimbDirections) {
+    // Only on a fresh catch, not on the re-grab that runs every frame while
+    // the up key is held — otherwise holding up would keep it disarmed and
+    // jump+left/right could never push off at all.
+    if (!this.isInClimbingRope) this.ropePushArmed = false;
     this.isClimbMoving = true;
     this.pos.down = false;
     this.pos.up = false;
