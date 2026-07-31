@@ -1,5 +1,14 @@
 import MapleMap from "./MapleMap";
-(window as any).__MapleMap = MapleMap;
+// Exposed through a getter, not a direct assignment. There is an import
+// cycle (mysocket -> MapleMap -> NpcScriptEngine -> MapState -> MapleMap),
+// so when MapleMap is the module that entered it, its own `const MapleMap`
+// has not been initialised by the time this file runs — reading the binding
+// here threw "Cannot access 'MapleMap' before initialization" and killed
+// the boot. A getter defers the read until something actually asks for it.
+Object.defineProperty(window, '__MapleMap', {
+  get: () => MapleMap,
+  configurable: true,
+});
 import MyCharacter from "./MyCharacter";
 import UIState from './UIState';
 import Camera, { CameraInterface } from "./Camera";
