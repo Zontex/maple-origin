@@ -39,6 +39,10 @@ interface UILoginInterface {
    *  by Enter in either credential field. Assigned during initialize(). */
   performLogin: (() => Promise<void>) | null;
   _loginInProgress: boolean;
+  /** Timestamp of the last character-slot click, for double-click detection. */
+  _lastCharClickTime: number;
+  /** One-shot latch so a held double-click only enters the game once. */
+  _enteringGame: boolean;
   drawMask: (canvas: GameCanvas) => void;
   worlds: any[];
   selectedWorldId: number | null;
@@ -175,6 +179,8 @@ UILogin.initialize = async function (canvas: GameCanvas) {
   this.charSelectScrollDelay = 0;
   this.charSelectScrollState = 'closed';
   this._loginInProgress = false;
+  this._lastCharClickTime = 0;
+  this._enteringGame = false;
   this.uiLogin = await WZManager.get('UI.wz/Login.img');
 
   // Load character select sound effect
@@ -1209,6 +1215,29 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
         if (mx >= slotX - 30 && mx <= slotX + 30 &&
             my >= charScreenY - 60 && my <= charScreenY + 10) {
           if (i < this.characters.length) {
+            // Second click on the already-selected slot enters the game, the
+            // same as the world list's double-click. Reuses the Start button's
+            // handler so both routes stay in step.
+            const now = Date.now();
+            const isDoubleClick =
+              this.charSelected &&
+              this.selectedCharIndex === i &&
+              now - (this._lastCharClickTime || 0) < 400;
+            this._lastCharClickTime = now;
+
+            if (isDoubleClick) {
+              // canvas.clicked stays true for as long as the button is held, so
+              // this block runs on every render frame of a single click. Latch
+              // it — without this, one double-click fires selectCharacter() and
+              // enterGame() once per frame (observed: 5 map loads from a 60ms
+              // hold). The latch is cleared when character select is re-entered.
+              if (!this._enteringGame && this.startButton && this.startButton.stance !== 'disabled') {
+                this._enteringGame = true;
+                void this.startButton.onClick(this.startButton);
+              }
+              break;
+            }
+
             // Deselect previous
             if (this.charSelected && this.selectedCharIndex !== i) {
               this.characters[this.selectedCharIndex]?.setStance('stand1', 0, true);
@@ -1968,6 +1997,8 @@ UILogin.loadCharactersFromServer = async function () {
   this.characters = [];
   this.selectedCharIndex = 0;
   this.charSelected = false;
+  this._lastCharClickTime = 0;
+  this._enteringGame = false;
 
   for (const c of charList) {
     try {
