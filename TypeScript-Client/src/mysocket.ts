@@ -11,6 +11,10 @@ import config from "./Config";
 
 let nextDropId = 1;
 
+// Survives the reload that returns a disconnected player to login, so the
+// login screen can show the "unable to connect" notice
+export const DISCONNECTED_FLAG = 'maple:disconnected';
+
 interface PlayerState {
   id: string;
   x: number;
@@ -657,10 +661,16 @@ class MySocket {
         this.connectSocket();
       }, this.reconnectInterval);
     } else {
-      console.error("Max reconnect attempts reached. Please refresh the page.");
-      if (this.connectionStatusElement) {
-        this.connectionStatusElement.innerText = '❌ Connection failed - Please refresh';
-      }
+      // Out of retries. GMS drops you to the login screen with a notice
+      // rather than leaving you standing in a world that no longer updates —
+      // mobs frozen, nothing syncing, and previously no way back short of a
+      // manual reload. Reloading guarantees clean state; the flag survives it
+      // so the login screen can explain what happened.
+      console.error('Connection lost — returning to the login screen');
+      try {
+        sessionStorage.setItem(DISCONNECTED_FLAG, '1');
+      } catch {}
+      window.location.reload();
     }
   }
   
