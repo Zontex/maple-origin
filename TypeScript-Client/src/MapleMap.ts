@@ -1312,9 +1312,11 @@ MapleMap.showDefaultNpcTalk = async function (npc: any) {
   const dLines: string[] = npc.strings?.questDialogues || [];
   if (dLines.length === 0) return;
 
-  // d-lines use the same #p/#t/#b format codes as script dialogue
-  const { ensureItemNames } = await import('./Quest/QuestData');
+  // d-lines use the same #p/#t/#b/#m format codes as script dialogue — both
+  // name tables must be loaded before stripping bakes the text
+  const { ensureItemNames, ensureMapNames } = await import('./Quest/QuestData');
   await ensureItemNames();
+  await ensureMapNames();
 
   const dialog = this.questDialog;
   const npcName = npc.strings?.name || '';

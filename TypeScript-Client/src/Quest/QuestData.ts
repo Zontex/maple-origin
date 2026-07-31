@@ -668,4 +668,4 @@ class QuestDataManager {
 
 const QuestData = new QuestDataManager();
 export default QuestData;
-export { mobNames, npcNames, itemNames, ensureItemNames, ensureMapNames, getItemNameSync, getItemDescSync };
+export { mobNames, npcNames, itemNames, ensureItemNames, ensureMapNames, getItemNameSync, getItemDescSync, getMapNameSync };
