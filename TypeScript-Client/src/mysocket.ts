@@ -1321,6 +1321,7 @@ class MySocket {
 
   // Last time a mob_state_batch arrived; drives the stuck-host watchdog
   _lastMobStateAt: number = 0;
+  _lastMobStateSig: string = '';
   _lastHostCheckAt: number = 0;
   _lastHeartbeatAt: number = 0;
 
@@ -1369,7 +1370,13 @@ class MySocket {
     if (now - this._lastHostCheckAt < 5000) return;
 
     this._lastHostCheckAt = now;
-    console.warn('[MOB] no mob state for 5s while not host — re-checking host assignment');
+    const mobs = MapleMap.monsters || [];
+    const remote = mobs.filter((m: any) => m.isRemote).length;
+    console.warn(
+      `[MOB] mob state stale for ${Math.round((now - this._lastMobStateAt) / 1000)}s ` +
+        `while not host — requesting re-check. ` +
+        `player=${this.playerId} map=${MapleMap.id} mobs=${mobs.length} remote=${remote}`
+    );
     this.sendMessage({ type: 'request_host_check' });
   }
 
@@ -1398,7 +1405,19 @@ class MySocket {
 
   // Non-host receives mob state batch — lerp positions, update stance
   handleMobStateBatch(data: any) {
-    this._lastMobStateAt = Date.now();
+    // Only a batch whose contents actually CHANGED counts as the host being
+    // alive. A host whose game loop stalled keeps broadcasting through
+    // setInterval (which survives tab backgrounding, unlike rAF) and so
+    // keeps sending byte-identical frozen state — the watchdog used to see
+    // those arriving and conclude all was well while mobs stood still.
+    const sig = data.mobs
+      .map((m: any) => `${m.oId}:${Math.round(m.x)}:${Math.round(m.y)}:${m.stance}:${m.hp}`)
+      .join('|');
+    if (sig !== this._lastMobStateSig) {
+      this._lastMobStateSig = sig;
+      this._lastMobStateAt = Date.now();
+    }
+
     if (this.isMobHost) return;
     if (Number(data.mapId) !== Number(MapleMap.id)) return;
     for (const mobState of data.mobs) {

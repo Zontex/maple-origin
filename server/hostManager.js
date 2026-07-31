@@ -81,8 +81,13 @@ function assignMapHost(mapId, newJoinerId) {
         sendToPlayer(player.ws, { type: 'mob_host_assign', isHost: false });
       }
     }
-    console.log(`Map ${mapId}: assigned mob host to ${newHost}`);
+    const age = Date.now() - (players.get(newHost)?.lastUpdate || 0);
+    console.log(
+      `Map ${mapId}: assigned mob host to ${newHost} ` +
+        `(was ${currentHost || 'none'}, heartbeat ${age}ms ago, live=${isLive(players.get(newHost))})`
+    );
   } else {
+    if (currentHost) console.log(`Map ${mapId}: no eligible mob host, clearing ${currentHost}`);
     mapHosts.delete(mapId);
   }
 }
