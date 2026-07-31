@@ -192,6 +192,8 @@ export default class QuestManager {
   }
 
   startQuest(questId: number): boolean {
+    // Quest state is part of the save payload — persist soon
+    (window as any).__mySocket?.requestSave?.();
     if (!this.canStartQuest(questId)) return false;
 
     // Repeatable quest restarting — clear the previous completion record
@@ -256,6 +258,8 @@ export default class QuestManager {
   }
 
   completeQuest(questId: number, pickedPropItemId?: number): boolean {
+    // Quest state is part of the save payload — persist soon
+    (window as any).__mySocket?.requestSave?.();
     if (!this.canCompleteQuest(questId)) {
       console.warn(`[Quest] Cannot complete quest ${questId} — requirements not met`);
       return false;
@@ -330,6 +334,8 @@ export default class QuestManager {
   // Force start a quest (used by script engine — bypasses requirement checks)
   // savedMobProgress: optional Record<mobId, killCount> to restore from DB
   forceStartQuest(questId: number, savedMobProgress?: Record<string, number>): void {
+    // Quest state is part of the save payload — persist soon
+    (window as any).__mySocket?.requestSave?.();
     if (this.activeQuests.has(questId) || this.completedQuests.has(questId)) return;
 
     const reqs = QuestData.requirements.get(questId);
@@ -353,6 +359,8 @@ export default class QuestManager {
 
   // Force complete a quest (used by script engine and DB restore — bypasses checks)
   forceCompleteQuest(questId: number, completedAt?: number): void {
+    // Quest state is part of the save payload — persist soon
+    (window as any).__mySocket?.requestSave?.();
     this.activeQuests.delete(questId);
     this.completedQuests.set(questId, completedAt ?? Date.now());
     this.untrackQuest(questId);

@@ -334,6 +334,24 @@ class MySocket {
     setTimeout(() => this.saveCharacterToServer(), 1000);
   }
 
+  _saveDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Coalesced event-driven save. Every gameplay change (item/meso pickup,
+   * HP/MP change, exp, equip, quest, purchase, sale) calls this; a burst of
+   * changes collapses into one full save ~2s after the first. Bounds data
+   * loss to ~2s without hammering the socket and DB at combat rates — a
+   * full save serializes the entire inventory, so firing it per damage
+   * tick would be 30 writes a second.
+   */
+  requestSave() {
+    if (this._saveDebounce) return;
+    this._saveDebounce = setTimeout(() => {
+      this._saveDebounce = null;
+      this.saveCharacterToServer();
+    }, 2000);
+  }
+
   // Save current character state to server
   saveCharacterToServer() {
     const charId = (MyCharacter as any)._serverCharId;
