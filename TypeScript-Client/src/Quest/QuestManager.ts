@@ -383,6 +383,10 @@ export default class QuestManager {
   }
 
   forfeitQuest(questId: number): void {
+    // The one quest state change that was missing a save hook — forfeiting
+    // worked in RAM but was never persisted, so the quest returned on the
+    // next refresh
+    (window as any).__mySocket?.requestSave?.();
     this.activeQuests.delete(questId);
     this.untrackQuest(questId);
     this.fulfilledState.delete(questId);

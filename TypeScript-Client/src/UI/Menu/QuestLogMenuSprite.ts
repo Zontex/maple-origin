@@ -348,7 +348,12 @@ class QuestLogMenuSprite extends DragableMenu {
         onClick: () => {
           if (this.selectedQuestId >= 0) {
             this.charecter?.questManager?.forfeitQuest(this.selectedQuestId);
+            // The quest is gone from the list, so the detail panel closes —
+            // clear the selection and rebuild so FORFEIT/QUEST HELPER vanish
+            // with it instead of floating over the map
+            this.selectedQuestId = -1;
             this.refreshQuestList();
+            this.rebuildButtons(canvas);
           }
         },
       });
@@ -390,7 +395,13 @@ class QuestLogMenuSprite extends DragableMenu {
     this.originalY = position.y;
   }
 
-  destroy() { this.destroyed = true; }
+  destroy() {
+    this.destroyed = true;
+    // Unregister from ClickManager — a destroyed menu's buttons otherwise
+    // stay clickable (and drawable) as ghosts after re-initialization
+    this.buttons.forEach(btn => ClickManager.removeButton(btn));
+    this.buttons = [];
+  }
 
   update(msPerTick: number) {
     if (this.isHidden) return;
