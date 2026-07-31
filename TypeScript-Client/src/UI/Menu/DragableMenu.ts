@@ -81,12 +81,15 @@ class DragableMenu {
   ownsPoint(x: number, y: number): boolean {
     if (!DragableMenu.hits(this, x, y)) return false;
     const stack = DragableMenu.stack;
-    const mine = stack.indexOf(this);
-    if (mine < 0) return true;
-    // Anything drawn after this menu is above it.
-    for (let i = stack.length - 1; i > mine; i--) {
-      if (DragableMenu.hits(stack[i], x, y)) return false;
+    // Topmost menu that covers the point wins, full stop. The previous
+    // version looked up its own index first and claimed ownership when that
+    // came back -1 — so if the stack ever held instances other than the live
+    // ones (it is rebuilt per map load), EVERY window fell through to "yes"
+    // and they all dragged at once, which is the overlap bug over again.
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (DragableMenu.hits(stack[i], x, y)) return stack[i] === this;
     }
+    // Nothing registered covers the point, so there is no one to defer to.
     return true;
   }
 }

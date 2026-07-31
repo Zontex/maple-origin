@@ -775,6 +775,11 @@ MapStateInstance.doUpdate = function (
     // A press raises the window under it before anything reads the click, so
     // the window you clicked is both on top and the one that responds.
     // Latched: canvas.clicked stays true for the whole press.
+    // Re-registered every tick rather than once at map load: the menu list is
+    // rebuilt when a map loads, and a stale stack means ownership is decided
+    // against instances nobody is looking at any more.
+    DragableMenu.setStack(this.UIMenus);
+
     if (canvas.clicked) {
       if (!menuFocusLatched) {
         menuFocusLatched = true;
