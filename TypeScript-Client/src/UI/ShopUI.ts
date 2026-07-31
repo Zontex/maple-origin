@@ -420,14 +420,15 @@ const ShopUI: any = {
       const w = this.npcSprite.width;
       const ox = this.npcOrigin.x || Math.floor(w / 2);
       const oy = this.npcOrigin.y || this.npcSprite.height;
-      // WZ NPC sprites are drawn facing left. The shop portrait faces the
-      // item list on the right, as in the original client — mirror it, with
-      // the origin reflected the same way NPC.draw does for flipped sprites.
+      // Drawn as authored, like the original client. An earlier version
+      // force-mirrored this on the assumption that every WZ NPC sprite faces
+      // left — they do not. Native facing varies per NPC (Maria's stand
+      // sprite faces right, the Henesys clerk's faces left), so a blanket
+      // flip just moved the problem to the other half of the roster.
       canvas.drawImage({
         img: this.npcSprite,
-        dx: npcX - (w - ox),
+        dx: npcX - ox,
         dy: baselineY - oy,
-        flipped: true,
       });
     }
 
