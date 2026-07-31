@@ -62,6 +62,12 @@ const WZManager: WZManager = {
   },
 
   async _doLoad(filename: string) {
+    // Already resident — re-parsing would rebuild the whole node tree and
+    // strand the old one in nChildren (a permanent leak of an entire .img)
+    if (this._loadedFiles.has(filename)) {
+      return;
+    }
+
     const json = await fetch(`wz_client/${filename}.json`).then((res) =>
       res.json()
     );
@@ -79,6 +85,14 @@ const WZManager: WZManager = {
       });
 
     const subtree = new WZNode(json, tree);
+    // Replace, don't append — assigning the key alone would leave any
+    // previous subtree referenced by nChildren forever
+    const existing = tree.nChildren.findIndex(
+      (c: any) => c.nName === subtree.nName
+    );
+    if (existing !== -1) {
+      tree.nChildren.splice(existing, 1);
+    }
     tree[subtree.nName] = subtree;
     tree.nChildren.push(subtree);
     this._loadedFiles.add(filename);
@@ -109,13 +123,17 @@ const WZManager: WZManager = {
    * @returns The WZNode if found, undefined otherwise.
    */
   async get(thePath) {
-    if (!this.pathExists(thePath)) {
-      const filename = `${thePath.split(".img")[0]}.img`;
+    // Gate on "is this .img loaded", NOT on "does this exact path exist".
+    // Callers routinely probe optional paths (a mob with no String.wz entry,
+    // a portal with no image name); with a pathExists gate every such miss
+    // re-fetched and re-parsed the entire .img and leaked the old tree.
+    const filename = `${thePath.split(".img")[0]}.img`;
+    if (!this._loadedFiles.has(filename)) {
       await this.load(filename);
     }
     let tree: any = this.cache;
     for (const p of thePath.split("/")) {
-      tree = tree[p];
+      tree = tree?.[p];
     }
     return tree;
   },

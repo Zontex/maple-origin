@@ -28,7 +28,13 @@ class WZNode {
     Object.entries(obj).forEach(([key, value]: [string, any]) => {
       if (key.charAt(0) !== "$") {
         const nKey = `n${key.charAt(0).toUpperCase()}${key.substr(1)}`;
-        this[nKey as keyof this] = isNaN(value) ? value : parseFloat(value);
+        // Only coerce genuinely numeric strings. isNaN("") is false, so the
+        // old `isNaN(v) ? v : parseFloat(v)` turned every empty WZ string
+        // into NaN — which then got interpolated straight into lookup paths
+        // (e.g. a portal with image="" asked for .../psh/NaN/portalContinue)
+        const numeric =
+          typeof value === "string" && value.trim() !== "" && !isNaN(value as any);
+        this[nKey as keyof this] = numeric ? parseFloat(value) : value;
       }
     });
 
@@ -57,8 +63,9 @@ class WZNode {
 
   nResolveUOL() {
     if (this.nTagName === "uol") {
+      // Broken UOL paths resolve to undefined instead of throwing mid-walk
       let ret = `${this.nValue}`.split("/").reduce((pointer: any, pathName) => {
-        return pathName === ".." ? pointer!.nParent : pointer[pathName];
+        return pathName === ".." ? pointer?.nParent : pointer?.[pathName];
       }, this.nParent);
 
       while (ret?.nTagName === "uol") {
@@ -93,6 +100,21 @@ class WZNode {
       this.nBasedata = img;
     }
     return this.nBasedata;
+  }
+
+  /**
+   * Creates and decodes this canvas node's image ahead of time. drawImage
+   * skips images that haven't finished decoding, so a frame first drawn
+   * lazily is invisible for its first few renders (sprite flicker). Safe
+   * no-op on non-canvas nodes and already-decoded images.
+   */
+  nPreloadImage(): Promise<void> {
+    if (this.nTagName !== "canvas") return Promise.resolve();
+    const img = this.nGetImage();
+    if (img instanceof HTMLImageElement && !img.complete) {
+      return img.decode().catch(() => {});
+    }
+    return Promise.resolve();
   }
 }
 
