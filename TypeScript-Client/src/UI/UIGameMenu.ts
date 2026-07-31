@@ -20,20 +20,24 @@ const PANEL_H = 140;
 // They are meant to overlap: each button's art carries its own 1-2px border,
 // exactly like the original client. Distributing them across the well pins the
 // first to the top and the last to the bottom (19, 41, 63, 84, 106).
-const BTN_X_INSET = 6;
+const WELL_LEFT = 3;
 const WELL_TOP = 19;
 const WELL_H = 112;
+const BTN_X_INSET = 6;
 const BTN_H = 25;
 
-// Distributed to fill the well exactly: first button flush with its top, last
-// flush with its bottom. That consumes all 112px, so there is no slack left to
-// spread into — the dark lines between entries are each button's own border
-// art, not empty space, and pushing past them puts the bottom entry on the
-// frame's border (measured in game: it ended at y=520 against a well bottom of
-// y=517).
+// The well is 87px wide and the button 81px, so centring leaves 3px of dark
+// showing between the button edge and the white frame on each side. Matching
+// that margin above the first entry and below the last one frames the stack
+// the same way all round; the entries overlap a little more to pay for it,
+// which their border art is drawn to absorb.
+const MARGIN = BTN_X_INSET - WELL_LEFT;
+
 function buttonY(index: number, count: number): number {
-  if (count <= 1) return WELL_TOP;
-  return WELL_TOP + Math.round((index * (WELL_H - BTN_H)) / (count - 1));
+  const top = WELL_TOP + MARGIN;
+  if (count <= 1) return top;
+  const span = WELL_H - MARGIN * 2 - BTN_H;
+  return top + Math.round((index * span) / (count - 1));
 }
 
 // Status bar art is 800x71 and sits flush with the bottom of the screen; the
