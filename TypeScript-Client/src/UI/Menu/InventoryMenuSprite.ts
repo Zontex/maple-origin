@@ -829,7 +829,26 @@ class InventoryMenuSprite extends DragableMenu {
         // this the cancel below killed the drag before the frame could bind
         // it, which is why an item could never be dropped onto a key.
         const onKey = UIKeyConfig.isOverKey?.(mouseX, mouseY) ?? false;
-        if (barSlot >= 0 || onKey) {
+        if (onKey) {
+          // Bind here, on the actual mouse-up, rather than leaving it for the
+          // next frame to notice. This handler is the release; deferring it
+          // made the drop depend on a later frame still seeing wasMouseUp,
+          // and when that frame missed it the icon stayed on the cursor and
+          // took a second click to place.
+          UIKeyConfig.handleDrop({
+            type: 'item',
+            id: this.draggingItem?.itemId,
+            icon: this.draggingIcon,
+            mouseX,
+            mouseY,
+          } as any);
+          DragManager.cancel();
+          this.draggingItem = null;
+          this.draggingIcon = null;
+          this.draggingSlotIndex = -1;
+          return;
+        }
+        if (barSlot >= 0) {
           this.draggingItem = null;
           this.draggingIcon = null;
           this.draggingSlotIndex = -1;
