@@ -11,12 +11,24 @@ import config from "../Config";
 const PANEL_W = 93;
 const PANEL_H = 140;
 
-// Measured against the 93x140 background: the buttons are inset 6px on each
-// side (93 - 81 = 12) and the five 25px rows fill the panel exactly below the
-// baked-in title bar (15 + 5*25 = 140).
+// Measured off the background art: the dark well inside the frame runs y=19
+// to y=130 (112px) and x=3 to x=89, so an 81px button centres at an inset of
+// 6px on each side.
+//
+// Five 25px buttons come to 125px and do not fit the 112px well -- stacking
+// them flush overflowed the frame by 13px and spilled past the bottom border.
+// They are meant to overlap: each button's art carries its own 1-2px border,
+// exactly like the original client. Distributing them across the well pins the
+// first to the top and the last to the bottom (19, 41, 63, 84, 106).
 const BTN_X_INSET = 6;
-const BTN_Y_START = 15;
+const WELL_TOP = 19;
+const WELL_H = 112;
 const BTN_H = 25;
+
+function buttonY(index: number, count: number): number {
+  if (count <= 1) return WELL_TOP;
+  return WELL_TOP + Math.round((index * (WELL_H - BTN_H)) / (count - 1));
+}
 
 // Status bar art is 800x71 and sits flush with the bottom of the screen; the
 // panel pops up directly above it.
@@ -105,7 +117,7 @@ UIGameMenu.initialize = async function (canvas: GameCanvas) {
   MENU_ITEMS.forEach((item, i) => {
     const button = new MapleStanceButton(canvas, {
       x: this.x + BTN_X_INSET,
-      y: this.y + BTN_Y_START + i * BTN_H,
+      y: this.y + buttonY(i, MENU_ITEMS.length),
       img: gameMenu.nGet(item.node).nChildren,
       isRelativeToCamera: true,
       isPartOfUI: true,
