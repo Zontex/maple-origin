@@ -5,6 +5,36 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased] - 2026-07-31
+
+### Added
+- **Game menu and option windows** (Daniel) — GAME MENU panel with keyboard navigation and a working QUIT GAME, plus CHANGE CHANNEL (client-side selection only), SYSTEM OPTION with functioning BGM/sound sliders, and GAME OPTION with allow/refuse toggles. Volume settings persist and are applied behind the audio path (`Settings.ts`), so `PLAY_AUDIO` scales every effect by the player's SOUND level
+- **Login screen polish** (Daniel) — press Enter to log in, double-click a character to enter the game, ID/password text lined up with their labels, and Chrome's password-manager breach popup suppressed
+- **`VITE_WEBSOCKET_URL`** (Daniel) — an explicit endpoint in `TypeScript-Client/.env` now wins when resolving the server URL, the only way to point the client at a backend on a different host than the one serving the page
+- **GMS quest-complete balloon** (`UIWindow.img/FadeYesNo/backgrnd4` + the `icon6` trophy) — anchored by its tail tip onto the status bar's alert button, announcing "requirements met, this can be claimed". It fires when the last kill or pickup lands, not on turn-in, and plays `Sound.wz/UI.img/Invite`; clearing the quest at the NPC keeps its own separate QuestClear sound and over-the-character effect
+- **`GameIn` cue on entering the world** — plays once the server accepts the selected character, so it runs while the map loads rather than after the screen has already changed
+
+### Changed
+- **Quest Helper rebuilt on real WZ assets** — the panel was drawing its own translucent background with `fillRect`, against the project's own rule. It now uses the `UIWindow.img/QuestAlarm` 9-slice (223 wide; ~73%-opaque title bar over a ~33% body, which is what lets the map show through), gained the `BtAuto` button wired to `QuestManager.autoTrack`, drags by its header, and renders requirements GMS-style as `10 / 10 Blue Snail Shell` in one flat colour instead of a red/struck-through mix. Quests with nothing to count no longer occupy a tracker slot
+- **NPC dialog portrait and name tag** are treated as one group and centred vertically in the dialog body, instead of the portrait being pinned to the top while the tag floated at half the dialog height
+
+### Fixed
+- **Mobs froze after leaving the game running** — `player.lastUpdate` was only refreshed by `player_update`, which the client sends solely when position or stance changes, so standing still was indistinguishable from a crashed tab. After 10s the server judged a healthy idle client stale and took mob hosting away from it; that client then waited forever for broadcasts nobody had reason to send. Liveness now comes from a once-a-second heartbeat driven by `requestAnimationFrame`, which still detects a genuinely backgrounded tab (rAF pauses while `setInterval` keeps running) without punishing an idle player. The same signal stops the 10-minute inactivity sweep kicking stationary players
+- **Mob-host desync needed a page reload** — a client only ever learns its role from `mob_host_assign`, and the server skipped that message in two cases: when a joining player already *was* the host, and when re-election produced the same winner (even though reaching that branch means the previous assignment had just been judged invalid). A client that missed its assignment stayed a non-host forever — mobs frozen and ignoring attacks while still dealing contact damage, which is computed locally. The server now always answers a joiner, and a starved non-host asks it to restate the answer after 5s
+- **NPC dialogs covered the NPC** — both selection parsers replaced `#L..#l` markup with an empty string but left the surrounding line break, so Robin's 17 travel questions left 17 blank lines that were drawn and counted into the layout. The option list was pushed ~270px down and the dialog grew to 706px, taller than the screen
+- **Quest dialogs reserved space for invisible options** — `recalcLayout` tested only `selections.length` while drawing additionally required a `simple` script dialog, so after picking from a 17-option menu every following page kept 280px of blank space
+- **WZ cache leak** — `WZManager.get()` gated on whether an exact path existed rather than whether the `.img` was loaded, so any probe of an optional path re-fetched and re-parsed the whole file, stranding a full duplicate tree in `nChildren`. This fired on every monster spawn missing a `String.wz/Mob.img` entry and on portals, which re-parsed 4.3MB of `MapHelper.img` each time. `WZNode` manufactured those misses: `isNaN("")` is false, so every empty WZ string became `NaN` and was interpolated straight into lookup paths. Measured after: 5 map changes grow the tree 2.0% with zero duplicates, against ~12% and climbing
+- **Tab froze on any console output after a disconnect** — `installRemoteLogging` routes `console.warn` through `remoteLog`, and `sendMessage` warns when the socket is down, so logging anything offline recursed until the stack blew, ~30x a second. The game logs per-frame during animation, so this pinned the main thread and threw mid-draw, which is why the player sprite vanished while still moving
+- **Zero-dimension UI hangs** — several 9-patch tiling loops stepped by a source image's own width or height, which is 0 until it decodes; stepping by 0 never terminates and killed the tab rather than the frame. Layout and hit rectangles baked once from `nGetImage().width` had the same problem silently and permanently (the "only happens on vite refresh" bug in the stats window). Both now read the WZ node's own dimensions
+- **Frame catch-up after a backgrounded tab** — `requestAnimationFrame` pauses in a background tab, so an uncapped lag accumulator ran thousands of update ticks in one frame and hung the page; catch-up is capped at 250ms
+- **Per-frame allocations** — physics rebuilt an array of every foothold on the map per entity per substep, and the render loop filtered four entity collections once per layer across 8 layers (32 throwaway arrays a frame). Both are now built once
+- **Dev server melted the CPU** — without `fsevents` the Vite watcher stat-polls everything it watches, and 22k+ converted WZ JSON files pushed static asset responses past 30s. The WZ trees are excluded from the watcher. The `immutable` cache header was also never applied: `server.headers` is set from inside Vite's static middleware, which runs after plugin middleware, so its `no-cache` overwrote it and every WZ file revalidated on every load
+- **Mob hosting from a stalled client** (also Daniel's `disconnect()` work) — a host whose game loop stalled kept its socket open and its broadcasts running, so mobs stood still for everyone on the map; hosts are revalidated every 5s and reassigned to a live player
+- **Pison's Florina Beach return warp** — the Cosmic saved-location API (`saveLocation` / `peekSavedLocation` / `getSavedLocation` / `clearSavedLocation`) was missing entirely, so the `-1` fallback never fired: the dialog rendered "Map 0" and the warp went nowhere. Also fixes the Mirror, Event, Happyville and Cygnus intro scripts, which share it
+- **Camera easing stalled a few pixels short of its target**, and quitting to login left game state behind (Daniel)
+
+---
+
 ## [Unreleased] - 2026-07-30
 
 ### Added
