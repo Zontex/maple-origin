@@ -364,6 +364,31 @@ export default class NpcScriptEngine {
         return { getId() { return jobId; }, id: jobId };
       },
       getMapId() { return character?.map?.mapId ?? 0; },
+      // Cosmic saved-location API (FLORINA, MIRROR, EVENT, ...): entry NPCs
+      // save the origin map before warping, exit NPCs read it to warp back.
+      // Stored on the character so it survives map changes (this engine is
+      // recreated per map). -1 = nothing saved, matching Cosmic scripts'
+      // `if (returnmap == -1)` fallback checks.
+      saveLocation(type: string) {
+        const c: any = character;
+        if (!c) return;
+        c.savedLocations = c.savedLocations || {};
+        c.savedLocations[type] = c.map?.mapId ?? 0;
+      },
+      peekSavedLocation(type: string) {
+        const v = (character as any)?.savedLocations?.[type];
+        return typeof v === 'number' && v > 0 ? v : -1;
+      },
+      getSavedLocation(type: string) {
+        const c: any = character;
+        const v = c?.savedLocations?.[type];
+        if (c?.savedLocations) delete c.savedLocations[type];
+        return typeof v === 'number' && v > 0 ? v : -1;
+      },
+      clearSavedLocation(type: string) {
+        const c: any = character;
+        if (c?.savedLocations) delete c.savedLocations[type];
+      },
       getClient() { return { getPlayer() { return playerObj; } }; },
       getBuddylist() { return { getCapacity() { return 20; } }; },
       setBuddyCapacity(n: number) { /* stub */ },
