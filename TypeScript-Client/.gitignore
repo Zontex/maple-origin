@@ -1,3 +1,5 @@
 dist
 node_modules
 .DS_Store
+# Local npm platform override (fixes global os=linux in ~/.npmrc)
+.npmrc

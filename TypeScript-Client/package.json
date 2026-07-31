@@ -14,5 +14,8 @@
     "vitejs",
     "vite"
   ],
-  "description": "Playground/reproduction sandbox for Vite.js"
+  "description": "Playground/reproduction sandbox for Vite.js",
+  "optionalDependencies": {
+    "fsevents": "^2.3.3"
+  }
 }
