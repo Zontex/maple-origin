@@ -94,9 +94,28 @@ class MapleCharacter {
   id: number = 0;
   name: string = "";
   gender: number = 0;
-  hp: number = 100;
+  // hp/mp are accessors so every change — damage, potions, chairs, scripts —
+  // schedules a save for the LOCAL player. Remote players' mirrors change
+  // constantly from network state and must not trigger saves.
+  private _hp: number = 100;
+  get hp(): number {
+    return this._hp;
+  }
+  set hp(v: number) {
+    if (v === this._hp) return;
+    this._hp = v;
+    if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
+  }
   maxHp: number = 100;
-  mp: number = 100;
+  private _mp: number = 100;
+  get mp(): number {
+    return this._mp;
+  }
+  set mp(v: number) {
+    if (v === this._mp) return;
+    this._mp = v;
+    if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
+  }
   maxMp: number = 100;
   exp: number = 0;
   fame: number = 0;
@@ -503,6 +522,7 @@ class MapleCharacter {
   }
 
   async attachEquip(slot: number, id: number) {
+    if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
     const realSlot = slot < 0 ? -(slot + 1) : slot;
     const firstThreeDigits = Math.floor(id / 10000);
     const equipMap: any = {
@@ -606,6 +626,7 @@ class MapleCharacter {
   }
 
   detachEquip(slot: number) {
+    if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
     const realSlot = slot < 0 ? -(slot + 1) : slot;
     this.equips[realSlot] = undefined;
     delete this.equippedItemIds[realSlot];
@@ -727,6 +748,8 @@ class MapleCharacter {
   addExp(exp: number, showEffect: boolean = false) {
     if (exp > 0 && showEffect) this.playIncExp();
     this.exp += exp;
+    // Exp (and any level-up further down) persists soon
+    if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
     if (exp > 0 && !this.isRemote) {
       import('./UI/UIChatLog').then(({ default: UIChatLog }) => {
         UIChatLog.system(`You have gained experience (+${exp})`);

@@ -1,4 +1,4 @@
-import { npcNames, mobNames, QuestState, ensureItemNames, collapseBlankLines } from './Quest/QuestData';
+import { npcNames, mobNames, QuestState, ensureItemNames, ensureMapNames, getMapNameSync, collapseBlankLines } from './Quest/QuestData';
 import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
 import ShopUI from './UI/ShopUI';
@@ -171,7 +171,16 @@ function stripFormatCodes(text: string, mapNameResolver?: (id: number) => string
     .replace(/#h\s*0?\s*#/g, () => (window as any).charecter?.name || 'Player')
     .replace(/#p(\d+)#/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
     .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
-    .replace(/#m(\d+)#/g, (_, id) => mapNameResolver?.(parseInt(id)) || `Map ${id}`)
+    // Fall back to QuestData's full String.wz/Map.img table before giving
+    // up: the per-script resolver only knows ids preloadMapNames scanned out
+    // of script SOURCE, so NPC default d-lines (no script) and map codes
+    // built at runtime by concatenation always missed it — Maria's d0 showed
+    // "Map 1010000" instead of the map name.
+    .replace(/#m(\d+)#/g, (_, id) => {
+      const n = parseInt(id);
+      const resolved = mapNameResolver?.(n);
+      return resolved && !resolved.startsWith('Map ') ? resolved : getMapNameSync(n);
+    })
     .replace(/#a\d+#/g, '')
     .replace(/#t(\d+):?#/g, (_, id) => getItemName(parseInt(id)).trim())
     .replace(/#i\d+:?#/g, '').replace(/#c\d+:?#/g, '')
@@ -250,6 +259,9 @@ export default class NpcScriptEngine {
     // Preload map names used by this NPC's script + item names for #t codes
     await this.preloadMapNames();
     await ensureItemNames();
+    // The #m fallback resolves through QuestData's map table synchronously,
+    // so it has to be populated before any text is stripped
+    await ensureMapNames();
 
     // NPC scripts call start() first, then action() on subsequent interactions
     await this.runScript('start', 0, 0, -1);

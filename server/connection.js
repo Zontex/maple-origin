@@ -23,7 +23,8 @@ function onConnection(ws) {
     lastBroadcast: 0,
   });
 
-  sendToPlayer(ws, { type: 'player_id', id: playerId });
+  // serverTime lets clients sync station clocks to the server's wall clock
+  sendToPlayer(ws, { type: 'player_id', id: playerId, serverTime: Date.now() });
 
   ws.on('pong', () => {
     ws.isAlive = true;

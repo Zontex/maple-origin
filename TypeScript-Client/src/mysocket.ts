@@ -233,7 +233,16 @@ class MySocket {
   }
 
   // Send login credentials, returns result via promise
+  // Kept for silent session resume after a reconnect — the server holds all
+  // auth state in RAM keyed to the connection, so every server restart or
+  // socket drop forgets who we are
+  _resumeUsername: string = '';
+  _resumePassword: string = '';
+  _resumeCharId: number = 0;
+
   sendLogin(username: string, password: string): Promise<{ success: boolean; error?: string; userId?: number }> {
+    this._resumeUsername = username;
+    this._resumePassword = password;
     return this._withTimeout(new Promise((resolve) => {
       this._loginCallback = resolve;
       this.sendMessage({ type: 'login', data: { username, password } });
@@ -274,10 +283,73 @@ class MySocket {
 
   // Select a character (load full data)
   selectCharacter(characterId: number): Promise<any> {
+    this._resumeCharId = characterId;
     return this._withTimeout(new Promise((resolve) => {
       this._selectCharCallback = resolve;
       this.sendMessage({ type: 'select_character', data: { characterId } });
     }), 'select_character');
+  }
+
+  /**
+   * Rebuild the server-side session after a reconnect.
+   *
+   * The server keeps userId/characterId in RAM keyed to the connection, so
+   * a server restart or dropped socket erases them while the client plays
+   * on believing everything is fine. The visible half of that was mobs
+   * freezing (no registration -> no host); the invisible half was WORSE:
+   * handleSaveCharacter requires player.characterId, so every auto-save
+   * after a reconnect was silently discarded — hours of progress gone on
+   * the next refresh.
+   *
+   * Re-login and re-select restore the server's identity for this
+   * connection. The character data the select returns is deliberately
+   * ignored — the DB is STALE (it missed our saves); applying it would
+   * overwrite live progress with old state. Instead we immediately save,
+   * pushing the in-RAM truth back to the DB.
+   */
+  _lastResumeAt: number = 0;
+
+  async resumeSession() {
+    // Throttle: a rejected save retriggers resume, and a resume ends in a
+    // save — if auth is genuinely broken that would spin. Once per 10s.
+    const now = Date.now();
+    if (now - this._lastResumeAt < 10000) return;
+    this._lastResumeAt = now;
+    try {
+      if (this._resumeUsername) {
+        const login = await this.sendLogin(this._resumeUsername, this._resumePassword);
+        if (login.success && this._resumeCharId) {
+          await this.selectCharacter(this._resumeCharId); // result ignored on purpose
+          console.log('[Socket] Session resumed — re-authenticated and character re-selected');
+        } else if (!login.success) {
+          console.error('[Socket] Session resume: re-login failed:', login.error);
+        }
+      }
+    } catch (e) {
+      console.error('[Socket] Session resume failed:', e);
+    }
+    this.sendPlayerInfo();
+    this.sendMessage({ type: 'get_player_list' });
+    // The DB missed every save since the drop — push current state now
+    setTimeout(() => this.saveCharacterToServer(), 1000);
+  }
+
+  _saveDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Coalesced event-driven save. Every gameplay change (item/meso pickup,
+   * HP/MP change, exp, equip, quest, purchase, sale) calls this; a burst of
+   * changes collapses into one full save ~2s after the first. Bounds data
+   * loss to ~2s without hammering the socket and DB at combat rates — a
+   * full save serializes the entire inventory, so firing it per damage
+   * tick would be 30 writes a second.
+   */
+  requestSave() {
+    if (this._saveDebounce) return;
+    this._saveDebounce = setTimeout(() => {
+      this._saveDebounce = null;
+      this.saveCharacterToServer();
+    }, 2000);
   }
 
   // Save current character state to server
@@ -508,10 +580,11 @@ class MySocket {
       return;
     }
 
-    // If already logged in (reconnect), register with game server
+    // Reconnect mid-game: the server forgot everything about us (auth AND
+    // registration are per-connection RAM). Rebuild the whole session, not
+    // just the world registration — without re-auth every save is dropped.
     if (this.isLoggedIn) {
-      this.sendPlayerInfo();
-      this.sendMessage({ type: "get_player_list" });
+      void this.resumeSession();
     }
   }
   
@@ -627,7 +700,14 @@ class MySocket {
           console.error("Server error:", data.message);
           break;
         case "save_character_result":
-          // Acknowledged — nothing to do
+          if (data.success === false) {
+            console.error('[Save] Server REJECTED save:', data.error);
+            if (data.error === 'not_authenticated') {
+              // Server restarted/reconnected under us — rebuild the session,
+              // which ends by re-saving the current state
+              void this.resumeSession();
+            }
+          }
           break;
         default:
           console.warn("Unknown message type:", data.type);
@@ -864,8 +944,15 @@ class MySocket {
     });
   }
   
+  // Server clock minus ours, captured at connect — station clocks add this
+  // to Date.now() so every player's board shows the same time
+  serverTimeOffset: number = 0;
+
   handlePlayerId(data: any) {
     this.playerId = data.id;
+    if (typeof data.serverTime === 'number') {
+      this.serverTimeOffset = data.serverTime - Date.now();
+    }
     console.log(`Assigned player ID: ${this.playerId}`);
     
     // Now that we have an ID, send full player info

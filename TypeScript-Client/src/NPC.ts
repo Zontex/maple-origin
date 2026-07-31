@@ -316,13 +316,26 @@ class NPC {
     // Name, func text
     this.drawName(canvas, camera, lag, msPerTick, tdelta);
 
-    // Quest indicator above NPC
-    this.drawQuestIndicator(canvas, camera);
-
     // MapleTV
     this.drawTvAd(canvas, camera, lag, msPerTick, tdelta);
 
-    // Chat balloon
+    // Chat balloon and quest indicator draw in drawOverlays, above every
+    // map layer — see MapleMap.render
+  }
+
+  /**
+   * Overhead UI drawn after all map layers. Balloons and quest notices sit
+   * above the scenery in the original client — drawn in the NPC's own layer
+   * they vanished behind higher-layer objects (shop WELCOME signs most
+   * visibly, which is most shop clerks in the game).
+   */
+  drawOverlays(canvas: GameCanvas, camera: CameraInterface) {
+    if (this.hide) return;
+    const screenX = this.x - camera.x;
+    const screenY = this.cy - camera.y;
+    if (screenX < -300 || screenX > 1100 || screenY < -300 || screenY > 900) return;
+
+    this.drawQuestIndicator(canvas, camera);
     if (this.showDialog) {
       this.drawChatBalloon(canvas, camera);
     }

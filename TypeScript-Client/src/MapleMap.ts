@@ -587,6 +587,26 @@ MapleMap.loadReactors = async function (wzNode) {
 
     try {
       const reactor = await Reactor.fromOpts(spawnDef);
+      // Render within the ground foothold's layer, like mobs do. Reactor
+      // layer defaulted to 0, so Amherst's quest boxes — which stand among
+      // layer-1 bushes — were painted a whole layer earlier and hidden
+      // behind the scenery. Within the right layer, drawLayer already puts
+      // reactors after objects, which is what puts the box in front.
+      let bestLayer: number | null = null;
+      let bestDist = Infinity;
+      for (const fh of this.footholdList) {
+        const lo = Math.min(fh.x1, fh.x2);
+        const hi = Math.max(fh.x1, fh.x2);
+        if (x < lo || x > hi) continue;
+        const t = (x - fh.x1) / (fh.x2 - fh.x1 || 1);
+        const fy = fh.y1 + t * (fh.y2 - fh.y1);
+        const d = Math.abs(fy - y);
+        if (d < bestDist) {
+          bestDist = d;
+          bestLayer = fh.layer;
+        }
+      }
+      if (bestLayer !== null) reactor.layer = bestLayer;
       this.reactors.push(reactor);
     } catch (e) {
       console.warn(`[MapleMap] Failed to load reactor ${id}:`, e);
@@ -953,6 +973,20 @@ MapleMap.render = function (
     drop.draw(canvas, camera);
   });
 
+  // NPC overhead UI — chat balloons and quest notices — above every map
+  // layer and front background, so a clerk behind a shop sign still talks
+  // over it like the original client
+  for (const npc of this.npcs) {
+    try {
+      npc.drawOverlays(canvas, camera);
+    } catch (e) {
+      if (!(npc as any)._overlayErrorLogged) {
+        (npc as any)._overlayErrorLogged = true;
+        console.error('[MapleMap] NPC overlay draw failed:', e);
+      }
+    }
+  }
+
   // Station departure clock (world-space) / timed-ride countdown
   UIShipClock.draw(canvas, camera);
 
@@ -1278,9 +1312,11 @@ MapleMap.showDefaultNpcTalk = async function (npc: any) {
   const dLines: string[] = npc.strings?.questDialogues || [];
   if (dLines.length === 0) return;
 
-  // d-lines use the same #p/#t/#b format codes as script dialogue
-  const { ensureItemNames } = await import('./Quest/QuestData');
+  // d-lines use the same #p/#t/#b/#m format codes as script dialogue — both
+  // name tables must be loaded before stripping bakes the text
+  const { ensureItemNames, ensureMapNames } = await import('./Quest/QuestData');
   await ensureItemNames();
+  await ensureMapNames();
 
   const dialog = this.questDialog;
   const npcName = npc.strings?.name || '';

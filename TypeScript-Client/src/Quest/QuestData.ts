@@ -69,11 +69,9 @@ const itemNames: Map<number, string> = new Map();
 const itemDescs: Map<number, string> = new Map();
 
 // Lazy-loaded item names from String.wz
-let itemNamesLoaded = false;
 
 // Lazy-loaded map names from String.wz/Map.img
 const mapNames: Map<number, string> = new Map();
-let mapNamesLoaded = false;
 
 function extractMapNames(node: any) {
   if (!node?.nChildren) return;
@@ -92,13 +90,26 @@ function extractMapNames(node: any) {
   }
 }
 
-async function ensureMapNames() {
-  if (mapNamesLoaded) return;
-  mapNamesLoaded = true;
-  try {
-    const node: any = await WZManager.get('String.wz/Map.img');
-    extractMapNames(node);
-  } catch {}
+// Promise-cached, NOT flag-cached. The old `if (loaded) return; loaded =
+// true;` marked the load done before the fetch finished, so a concurrent
+// caller (the quest log kicks this off un-awaited at map load) sailed past
+// the guard and resolved #m codes against an EMPTY table — "Map 1010000"
+// baked into Maria's dialog instead of the map name. Worse, one failed
+// fetch left the flag set and no name ever loaded for the whole session.
+// Sharing the in-flight promise fixes the race; clearing it on failure
+// makes the next caller retry.
+let mapNamesPromise: Promise<void> | null = null;
+function ensureMapNames(): Promise<void> {
+  if (!mapNamesPromise) {
+    mapNamesPromise = (async () => {
+      const node: any = await WZManager.get('String.wz/Map.img');
+      extractMapNames(node);
+    })().catch((e) => {
+      console.error('[QuestData] map name load failed, will retry:', e);
+      mapNamesPromise = null;
+    }) as Promise<void>;
+  }
+  return mapNamesPromise;
 }
 
 function getMapNameSync(mapId: number): string {
@@ -123,16 +134,22 @@ function extractItemNames(node: any) {
   }
 }
 
-async function ensureItemNames() {
-  if (itemNamesLoaded) return;
-  itemNamesLoaded = true;
-  const files = ['Consume', 'Eqp', 'Etc', 'Ins', 'Cash'];
-  for (const file of files) {
-    try {
-      const node: any = await WZManager.get(`String.wz/${file}.img`);
-      extractItemNames(node);
-    } catch {}
+// Same promise-cache pattern as ensureMapNames, for the same race
+let itemNamesPromise: Promise<void> | null = null;
+function ensureItemNames(): Promise<void> {
+  if (!itemNamesPromise) {
+    itemNamesPromise = (async () => {
+      const files = ['Consume', 'Eqp', 'Etc', 'Ins', 'Cash'];
+      for (const file of files) {
+        const node: any = await WZManager.get(`String.wz/${file}.img`);
+        extractItemNames(node);
+      }
+    })().catch((e) => {
+      console.error('[QuestData] item name load failed, will retry:', e);
+      itemNamesPromise = null;
+    }) as Promise<void>;
   }
+  return itemNamesPromise;
 }
 
 function getItemNameSync(itemId: number): string {
@@ -651,4 +668,4 @@ class QuestDataManager {
 
 const QuestData = new QuestDataManager();
 export default QuestData;
-export { mobNames, npcNames, itemNames, ensureItemNames, ensureMapNames, getItemNameSync, getItemDescSync };
+export { mobNames, npcNames, itemNames, ensureItemNames, ensureMapNames, getItemNameSync, getItemDescSync, getMapNameSync };

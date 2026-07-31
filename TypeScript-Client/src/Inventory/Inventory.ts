@@ -12,7 +12,19 @@ class Inventory {
   etc: Item[];
   setup: Item[];
   cash: Item[];
-  mesos: number;
+
+  // Accessor rather than a raw field so EVERY meso mutation — pickups,
+  // purchases, sales, script rewards, drops — schedules a save without
+  // each call site having to remember to
+  private _mesos: number = 0;
+  get mesos(): number {
+    return this._mesos;
+  }
+  set mesos(v: number) {
+    if (v === this._mesos) return;
+    this._mesos = v;
+    (window as any).__mySocket?.requestSave?.();
+  }
 
   constructor(opts: any) {
     this.equip = opts.equip || [];
@@ -32,6 +44,8 @@ class Inventory {
   async addToInventory(itemId: number | string, quantity: number, equipData?: any) {
     itemId = typeof itemId === 'string' ? parseInt(itemId, 10) : itemId;
     console.log("Adding to inventory", itemId, quantity);
+    // Item gained — persist soon (mesos route through their own setter)
+    (window as any).__mySocket?.requestSave?.();
     if (MapleInventory.isMeso(itemId.toString())) {
       this.gainMesos(quantity);
     } else {
@@ -118,6 +132,8 @@ class Inventory {
   }
 
   removeFromInventory(itemId: number, quantity: number = 1): boolean {
+    // Item consumed/dropped/sold — persist soon
+    (window as any).__mySocket?.requestSave?.();
     const tabs = [this.equip, this.use, this.setup, this.etc, this.cash];
     for (const tab of tabs) {
       for (let i = 0; i < tab.length; i++) {
