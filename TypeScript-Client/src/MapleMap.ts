@@ -587,6 +587,26 @@ MapleMap.loadReactors = async function (wzNode) {
 
     try {
       const reactor = await Reactor.fromOpts(spawnDef);
+      // Render within the ground foothold's layer, like mobs do. Reactor
+      // layer defaulted to 0, so Amherst's quest boxes — which stand among
+      // layer-1 bushes — were painted a whole layer earlier and hidden
+      // behind the scenery. Within the right layer, drawLayer already puts
+      // reactors after objects, which is what puts the box in front.
+      let bestLayer: number | null = null;
+      let bestDist = Infinity;
+      for (const fh of this.footholdList) {
+        const lo = Math.min(fh.x1, fh.x2);
+        const hi = Math.max(fh.x1, fh.x2);
+        if (x < lo || x > hi) continue;
+        const t = (x - fh.x1) / (fh.x2 - fh.x1 || 1);
+        const fy = fh.y1 + t * (fh.y2 - fh.y1);
+        const d = Math.abs(fy - y);
+        if (d < bestDist) {
+          bestDist = d;
+          bestLayer = fh.layer;
+        }
+      }
+      if (bestLayer !== null) reactor.layer = bestLayer;
       this.reactors.push(reactor);
     } catch (e) {
       console.warn(`[MapleMap] Failed to load reactor ${id}:`, e);
