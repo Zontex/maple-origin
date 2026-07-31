@@ -1,5 +1,6 @@
-// Departure-countdown clock for transport stations (map `clock` nodes) and
-// remaining-time display on instanced timed rides.
+// Station clock (map `clock` nodes): shows the current time of day, synced
+// to the server clock, centred on the station's display board. Timed rides
+// keep a remaining-time countdown at the top of the screen instead.
 //
 // v83 renders the station clock from UI.wz/Basic.img/Clock; that node is
 // missing from our extraction (see plan), so we try it and fall back to text
@@ -11,7 +12,7 @@ import config from '../Config';
 import GameCanvas from '../GameCanvas';
 import WZManager from '../wz-utils/WZManager';
 import TransportationManager from '../Transport/TransportationManager';
-import { CLOCK_ROUTE_BY_MAP, TIMED_RIDES } from '../Transport/TransportRoutes';
+import { TIMED_RIDES } from '../Transport/TransportRoutes';
 
 const UIShipClock = {
   mapId: -1,
@@ -31,12 +32,18 @@ const UIShipClock = {
       this.screenMode = true;
       return;
     }
-    if (!CLOCK_ROUTE_BY_MAP[mapId]) return;
+    // Any map with a `clock` node shows the current time of day on its
+    // station board — that is what the node means in the original client.
+    // The node is a rect: x/y are its TOP-LEFT corner (verified against the
+    // Ludibrium board sprite — the rect centre lands on the display area,
+    // while treating x/y as the centre put the clock ~100px up-left of it).
     const clockNode = mapWzNode?.nGet?.('clock');
     const x = clockNode?.nGet?.('x')?.nGet?.('nValue', null);
     const y = clockNode?.nGet?.('y')?.nGet?.('nValue', null);
-    if (x === null || x === undefined) return;
-    this.worldPos = { x, y: y ?? 0 };
+    if (x === null || x === undefined || typeof x !== 'number') return;
+    const w = clockNode?.nGet?.('width')?.nGet?.('nValue', 200) ?? 200;
+    const h = clockNode?.nGet?.('height')?.nGet?.('nValue', 200) ?? 200;
+    this.worldPos = { x: x + w / 2, y: (typeof y === 'number' ? y : 0) + h / 2 };
   },
 
   async ensureAssets() {
@@ -62,25 +69,49 @@ const UIShipClock = {
 
   draw(canvas: GameCanvas, camera: CameraInterface) {
     if (!this.worldPos && !this.screenMode) return;
-    const remaining = TransportationManager.getClockRemainingMs(this.mapId);
-    if (remaining === null) return;
     void this.ensureAssets();
 
-    const totalSec = Math.max(0, Math.floor(remaining / 1000));
-    const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
-    const ss = String(totalSec % 60).padStart(2, '0');
-    const text = `${mm}:${ss}`;
-
+    let text: string;
     let dx: number;
     let dy: number;
+
     if (this.worldPos) {
+      // Station board: the current time of day, server-synced — NOT a
+      // departure countdown. The offset comes from the server's clock at
+      // connect time, so every player's board reads the same.
+      const offset = (window as any).__mySocket?.serverTimeOffset ?? 0;
+      const now = new Date(Date.now() + offset);
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mi = String(now.getMinutes()).padStart(2, '0');
+      text = `${hh}:${mi}`;
       dx = this.worldPos.x - camera.x;
       dy = this.worldPos.y - camera.y;
       if (dx < -120 || dx > config.width + 120 || dy < -120 || dy > config.height + 120) return;
-    } else {
-      dx = config.width / 2;
-      dy = 48;
+
+      // The board itself is the backing plate — just the digits, sized for
+      // the 200px clock rect
+      canvas.drawText({
+        text,
+        x: Math.round(dx),
+        y: Math.round(dy - 12),
+        color: '#FFFFFF',
+        align: 'center',
+        fontSize: 24,
+        fontWeight: 'bold',
+        fontFamily: 'monospace',
+      });
+      return;
     }
+
+    // Timed ride: remaining-time countdown at the top of the screen
+    const remaining = TransportationManager.getClockRemainingMs(this.mapId);
+    if (remaining === null) return;
+    const totalSec = Math.max(0, Math.floor(remaining / 1000));
+    const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const ss = String(totalSec % 60).padStart(2, '0');
+    text = `${mm}:${ss}`;
+    dx = config.width / 2;
+    dy = 48;
 
     if (this._clockDigits) {
       if (this._clockBackgrnd) {

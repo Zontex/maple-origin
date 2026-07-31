@@ -864,8 +864,15 @@ class MySocket {
     });
   }
   
+  // Server clock minus ours, captured at connect — station clocks add this
+  // to Date.now() so every player's board shows the same time
+  serverTimeOffset: number = 0;
+
   handlePlayerId(data: any) {
     this.playerId = data.id;
+    if (typeof data.serverTime === 'number') {
+      this.serverTimeOffset = data.serverTime - Date.now();
+    }
     console.log(`Assigned player ID: ${this.playerId}`);
     
     // Now that we have an ID, send full player info
