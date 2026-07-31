@@ -417,9 +417,18 @@ const ShopUI: any = {
 
     // NPC sprite — feet on the left shadow, anchored by its WZ origin
     if (this.npcSprite && this.npcSprite.complete && this.npcSprite.naturalWidth > 0) {
-      const ox = this.npcOrigin.x || Math.floor(this.npcSprite.width / 2);
+      const w = this.npcSprite.width;
+      const ox = this.npcOrigin.x || Math.floor(w / 2);
       const oy = this.npcOrigin.y || this.npcSprite.height;
-      canvas.drawImage({ img: this.npcSprite, dx: npcX - ox, dy: baselineY - oy });
+      // WZ NPC sprites are drawn facing left. The shop portrait faces the
+      // item list on the right, as in the original client — mirror it, with
+      // the origin reflected the same way NPC.draw does for flipped sprites.
+      canvas.drawImage({
+        img: this.npcSprite,
+        dx: npcX - (w - ox),
+        dy: baselineY - oy,
+        flipped: true,
+      });
     }
 
     // Player character sprite — feet on the right shadow (frame offsets are
