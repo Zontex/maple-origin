@@ -102,10 +102,11 @@ type Bindings = Record<number, BindableAction>;
 type ItemBindings = Record<number, number>;
 
 const ITEM_STORAGE_KEY = "maple_keybindings_items";
+const SKILL_STORAGE_KEY = "maple_keybindings_skills";
 
-function loadItems(): ItemBindings {
+function loadItems(storageKey: string = ITEM_STORAGE_KEY): ItemBindings {
   try {
-    const raw = localStorage.getItem(ITEM_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     const out: ItemBindings = {};
@@ -130,6 +131,12 @@ interface KeyBindingsShape {
    * putting an item on, say, X has to go through the key config window.
    */
   itemBindings: ItemBindings;
+  /** scancode -> skillId, same idea as itemBindings. */
+  skillBindings: ItemBindings;
+  skillFor: (scancode: number) => number | undefined;
+  bindSkill: (scancode: number, skillId: number) => void;
+  clearSkill: (scancode: number) => void;
+  saveSkills: () => void;
   itemFor: (scancode: number) => number | undefined;
   /** GameCanvas key name for a scancode, or null when it is not bindable. */
   keyNameForScancode: (scancode: number) => string | null;
@@ -180,6 +187,41 @@ function load(): Bindings {
 const KeyBindings: KeyBindingsShape = {
   bindings: load(),
   itemBindings: loadItems(),
+  skillBindings: loadItems(SKILL_STORAGE_KEY),
+
+  skillFor(scancode) {
+    return this.skillBindings[scancode];
+  },
+
+  bindSkill(scancode, skillId) {
+    const prev = (() => {
+      for (const k of Object.keys(this.skillBindings)) {
+        if (this.skillBindings[Number(k)] === skillId) return Number(k);
+      }
+      return undefined;
+    })();
+    if (prev !== undefined) delete this.skillBindings[prev];
+    // One key, one thing.
+    delete this.bindings[scancode];
+    delete this.itemBindings[scancode];
+    this.skillBindings[scancode] = skillId;
+    this.save();
+    this.saveItems();
+    this.saveSkills();
+  },
+
+  clearSkill(scancode) {
+    delete this.skillBindings[scancode];
+    this.saveSkills();
+  },
+
+  saveSkills() {
+    try {
+      localStorage.setItem(SKILL_STORAGE_KEY, JSON.stringify(this.skillBindings));
+    } catch (e) {
+      console.warn("[KeyBindings] could not save skill bindings", e);
+    }
+  },
 
   itemFor(scancode) {
     return this.itemBindings[scancode];
@@ -203,6 +245,8 @@ const KeyBindings: KeyBindingsShape = {
     const prev = this.keyForItem(itemId);
     if (prev !== undefined) delete this.itemBindings[prev];
     delete this.bindings[scancode];
+    delete this.skillBindings[scancode];
+    this.saveSkills();
     this.itemBindings[scancode] = itemId;
     this.save();
     this.saveItems();

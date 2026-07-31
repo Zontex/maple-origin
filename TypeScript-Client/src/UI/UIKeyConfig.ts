@@ -117,6 +117,8 @@ interface UIKeyConfigInterface {
   itemIcons: Record<number, HTMLImageElement>;
   loadItemIcon: (itemId: number) => void;
   handleDrop: (drop: { type: string; id: number; mouseX: number; mouseY: number }) => boolean;
+  /** True when the point is over a bindable key of an open window. */
+  isOverKey: (x: number, y: number) => boolean;
   initialize: (canvas: GameCanvas) => Promise<void>;
   show: () => void;
   hide: () => void;
@@ -171,12 +173,32 @@ UIKeyConfig.loadItemIcon = function (itemId: number) {
  * is fixed to the eight v83 keys, so anything outside that set has to be
  * bound here. Returns true when the drop was consumed.
  */
-UIKeyConfig.handleDrop = function (drop) {
-  if (!this.isVisible || drop.type !== "item") return false;
+/**
+ * Drag sources ask this before deciding whether to cancel the drag on mouse
+ * up. They run their own DOM mouseup handler, which fires before the next
+ * frame, and anything not dropped on the quickslot bar used to be cancelled
+ * there — so a drop onto a key was destroyed before the frame could bind it.
+ */
+UIKeyConfig.isOverKey = function (x: number, y: number) {
+  if (!this.isVisible) return false;
+  return KEY_SLOTS.some((s) => inside(slotRect(s), x, y));
+};
+
+UIKeyConfig.handleDrop = function (drop: any) {
+  if (!this.isVisible) return false;
+  if (drop.type !== "item" && drop.type !== "skill") return false;
   const slot = KEY_SLOTS.find((s) => inside(slotRect(s), drop.mouseX, drop.mouseY));
   if (!slot) return false;
-  KeyBindings.bindItem(slot.code, drop.id);
-  this.loadItemIcon(drop.id);
+  // The drag already carries the icon it was drawn with, so reuse it rather
+  // than going back to WZ — that also covers skills, whose icons never came
+  // from the item tree in the first place.
+  if (drop.icon) this.itemIcons[drop.id] = drop.icon;
+  if (drop.type === "skill") {
+    KeyBindings.bindSkill(slot.code, drop.id);
+  } else {
+    KeyBindings.bindItem(slot.code, drop.id);
+    this.loadItemIcon(drop.id);
+  }
   return true;
 };
 
@@ -353,6 +375,10 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
       KeyBindings.clearItem(slot.code);
       return;
     }
+    if (KeyBindings.skillBindings[slot.code] !== undefined) {
+      KeyBindings.clearSkill(slot.code);
+      return;
+    }
     const action = KeyBindings.bindings[slot.code];
     if (action) {
       const info = ACTIONS.find((a) => a.action === action);
@@ -377,12 +403,15 @@ UIKeyConfig.draw = function (canvas, camera, lag, msPerTick, tdelta) {
   if (!this.isVisible || !this.background) return;
   canvas.drawImage({ img: this.background, dx: this.x, dy: this.y });
 
-  // Items bound straight to a key (chairs, potions) draw their inventory icon.
+  // Items and skills bound straight to a key draw their own icon.
   for (const s of KEY_SLOTS) {
-    const itemId = KeyBindings.itemBindings[s.code];
+    const itemId = KeyBindings.itemBindings[s.code] ?? KeyBindings.skillBindings[s.code];
     if (itemId === undefined) continue;
     const img = this.itemIcons[itemId];
-    if (!img) { this.loadItemIcon(itemId); continue; }
+    if (!img) {
+      if (KeyBindings.itemBindings[s.code] !== undefined) this.loadItemIcon(itemId);
+      continue;
+    }
     const r = slotRect(s);
     canvas.drawImage({
       img,

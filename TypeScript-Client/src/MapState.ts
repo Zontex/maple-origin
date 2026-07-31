@@ -58,13 +58,20 @@ function actionPressed(canvas: GameCanvas, action: BindableAction): boolean {
 let menuFocusLatched = false;
 const previousItemKeyState: Record<number, boolean> = {};
 function checkItemKeys(canvas: GameCanvas) {
-  for (const codeStr of Object.keys(KeyBindings.itemBindings)) {
+  const codes = new Set([
+    ...Object.keys(KeyBindings.itemBindings),
+    ...Object.keys(KeyBindings.skillBindings),
+  ]);
+  for (const codeStr of codes) {
     const code = Number(codeStr);
     const keyName = KeyBindings.keyNameForScancode(code);
     if (!keyName) continue;
     const down = canvas.isKeyDown(keyName);
     if (down && !previousItemKeyState[code]) {
-      UIHotkeyBar.activateItem(KeyBindings.itemBindings[code]);
+      const itemId = KeyBindings.itemBindings[code];
+      const skillId = KeyBindings.skillBindings[code];
+      if (itemId !== undefined) UIHotkeyBar.activateItem(itemId);
+      else if (skillId !== undefined) void UIHotkeyBar.activateSkill(skillId);
     }
     previousItemKeyState[code] = down;
   }

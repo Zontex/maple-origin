@@ -5,6 +5,7 @@ import { CameraInterface } from '../../Camera';
 import GameCanvas from '../../GameCanvas';
 import Item from '../../Inventory/Item';
 import DragManager from '../DragManager';
+import UIKeyConfig from '../UIKeyConfig';
 import DropItemSprite from '../../DropItem/DropItemSprite';
 import mySocket from '../../mysocket';
 import UIEquipTooltip from '../UIEquipTooltip';
@@ -225,6 +226,9 @@ class EquipMenuSprite extends DragableMenu {
       if (slot < 0) return;
       // Threshold never reached — plain click, double-click handling owns it
       if (!DragManager.isDragging) return;
+      // Dropping a worn item onto a key belongs to the key config window, so
+      // leave the drag alive for the frame to pick up rather than cancelling.
+      if (UIKeyConfig.isOverKey?.(this.GameCanvas.mouseX, this.GameCanvas.mouseY)) return;
       DragManager.cancel();
 
       const mx = this.GameCanvas.mouseX;

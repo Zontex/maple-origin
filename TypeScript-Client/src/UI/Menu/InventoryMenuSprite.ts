@@ -19,6 +19,7 @@ import mySocket from "../../mysocket";
 import UIHotkeyBar from "../UIHotkeyBar";
 import UIEquipTooltip from "../UIEquipTooltip";
 import { getEquipSlotForItem } from "./EquipMenuSprite";
+import UIKeyConfig from "../UIKeyConfig";
 
 class InventoryMenuSprite extends DragableMenu {
   opts: any;
@@ -824,7 +825,11 @@ class InventoryMenuSprite extends DragableMenu {
       // application and ground drops below still work
       if (DragManager.isDragging) {
         const barSlot = UIHotkeyBar.getSlotAtMouse?.(mouseX, mouseY) ?? -1;
-        if (barSlot >= 0) {
+        // A key in the KEYBOARD SETTING window is a drop target too — without
+        // this the cancel below killed the drag before the frame could bind
+        // it, which is why an item could never be dropped onto a key.
+        const onKey = UIKeyConfig.isOverKey?.(mouseX, mouseY) ?? false;
+        if (barSlot >= 0 || onKey) {
           this.draggingItem = null;
           this.draggingIcon = null;
           this.draggingSlotIndex = -1;
