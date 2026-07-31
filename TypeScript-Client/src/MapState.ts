@@ -35,7 +35,7 @@ import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
 import UIGameOption from "./UI/UIGameOption";
 import UIKeyConfig from "./UI/UIKeyConfig";
-import KeyBindings, { BindableAction } from "./KeyBindings";
+import KeyBindings, { ACTIONS, BindableAction } from "./KeyBindings";
 
 // Bound-key helpers. Everything below asks for an ACTION, never a letter, so
 // rebinding takes effect immediately and the edge-triggered checks keep
@@ -50,11 +50,10 @@ function actionPressed(canvas: GameCanvas, action: BindableAction): boolean {
   return actionDown(canvas, action) && !previousActionState[action];
 }
 function latchActions(canvas: GameCanvas) {
-  for (const a of [
-    "jump", "attack", "pickup", "sit", "inventory", "stats",
-    "equipment", "skills", "questLog", "miniMap",
-  ] as BindableAction[]) {
-    previousActionState[a] = actionDown(canvas, a);
+  // Driven off ACTIONS rather than a hand-written list so a newly bindable
+  // action cannot be left unlatched and fire on every frame it is held.
+  for (const { action } of ACTIONS) {
+    previousActionState[action] = actionDown(canvas, action);
   }
 }
 import MySocket from "./mysocket";
@@ -568,6 +567,25 @@ MapStateInstance.doUpdate = function (
       }
       if (actionPressed(canvas, "skills") && !DirectionScene.isActive) {
         this.skillMenu.setIsHidden(!this.skillMenu.isHidden);
+      }
+      if (actionPressed(canvas, "keyConfig") && !DirectionScene.isActive) {
+        UIKeyConfig.toggle();
+      }
+      if (actionPressed(canvas, "sit") && !DirectionScene.isActive) {
+        // v83 sits on a seat defined in the map; this client has no map
+        // seats, so the key drives the chair system instead — stand up if
+        // seated, otherwise sit on the first chair in the Setup tab.
+        const chr: any = MyCharacter;
+        if (chr.chairId) {
+          chr.standUpFromChair();
+        } else if (!chr.isDead && !chr.isInClimbingRope && chr.pos?.fh) {
+          // Same guards the inventory double-click applies: no sitting
+          // mid-air, on a rope or while dead.
+          const chair = chr.inventory?.setup?.find(
+            (it: any) => it && it.itemId >= 3010000 && it.itemId < 3020000
+          );
+          if (chair) chr.sitOnChair(chair.itemId);
+        }
       }
 
       // Edge-triggered: ESC now toggles the game menu, and without this a held

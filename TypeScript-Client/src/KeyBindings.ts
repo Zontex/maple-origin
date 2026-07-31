@@ -1,16 +1,18 @@
 // Key bindings for the KEYBOARD SETTING window.
 //
 // v83 keys its config by DirectInput scancode, which is why
-// UI.wz/UIWindow.img/KeyConfig/key is indexed 2..88 rather than by ASCII —
-// the nodes that exist there ARE the bindable key set, so this table mirrors
-// them exactly.
+// UI.wz/UIWindow.img/KeyConfig/key is indexed 2..88 rather than by ASCII.
+// The 70 sprites under that node are the labels the original prints on the
+// keyboard, and every one of them is accounted for in KEY_SLOTS over in
+// UIKeyConfig — the two tables were derived from each other, so "every key
+// available" means exactly the set the art ships.
 //
 // No WZ/UI imports here so MapState can depend on it without pulling the UI
 // layer in behind it.
 
 const STORAGE_KEY = "maple_keybindings";
 
-/** Every action the client can actually drive from a key. */
+/** Every action the client can actually carry out from a key. */
 export type BindableAction =
   | "jump"
   | "attack"
@@ -22,8 +24,7 @@ export type BindableAction =
   | "skills"
   | "questLog"
   | "miniMap"
-  | "menu"
-  | "chat";
+  | "keyConfig";
 
 export interface ActionInfo {
   action: BindableAction;
@@ -32,53 +33,60 @@ export interface ActionInfo {
   label: string;
 }
 
-// Icon ids are taken from KeyConfig/icon. The set present is 0-27, 50-54 and
-// 100-106; these are the ones whose meaning the client can honour today.
+// Icon ids read off the sprites themselves rather than guessed: the icon set
+// is 0-27 (menus and chat targets), 50-54 (ATTACK/JUMP/PICK UP/SIT/NPC CHAT)
+// and 100-106 (the emote faces). Only the ones the client can honour today
+// are listed — an icon in the palette is a control that works.
 export const ACTIONS: ActionInfo[] = [
-  { action: "attack", icon: 100, label: "Attack" },
-  { action: "jump", icon: 101, label: "Jump" },
-  { action: "pickup", icon: 102, label: "Pick up" },
-  { action: "sit", icon: 103, label: "Sit" },
+  { action: "attack", icon: 52, label: "Attack" },
+  { action: "jump", icon: 53, label: "Jump" },
+  { action: "pickup", icon: 50, label: "Pick up" },
+  { action: "sit", icon: 51, label: "Sit" },
   { action: "equipment", icon: 0, label: "Equipment" },
-  { action: "inventory", icon: 1, label: "Items" },
-  { action: "stats", icon: 2, label: "Stats" },
-  { action: "skills", icon: 3, label: "Skills" },
-  { action: "questLog", icon: 4, label: "Quest" },
-  { action: "miniMap", icon: 5, label: "Mini Map" },
-  { action: "menu", icon: 6, label: "Menu" },
-  { action: "chat", icon: 7, label: "Chat" },
+  { action: "inventory", icon: 1, label: "Item" },
+  { action: "stats", icon: 2, label: "Ability" },
+  { action: "skills", icon: 3, label: "Skill" },
+  { action: "questLog", icon: 8, label: "Quest" },
+  { action: "miniMap", icon: 7, label: "Mini Map" },
+  { action: "keyConfig", icon: 9, label: "Set Key" },
 ];
 
 export const ACTION_BY_NAME = new Map(ACTIONS.map((a) => [a.action, a]));
 
 /**
  * Scancode -> the key name GameCanvas.isKeyDown() understands.
- * Only scancodes with a KeyConfig/key/<n> sprite are listed, so "every key
- * available" means precisely this set.
+ *
+ * GameCanvas names the punctuation keys rather than using the glyph
+ * ("minus", not "-"), and isKeyDown falls through to `pressedKeys[key]` when
+ * the name is unknown, so a wrong name here is silent — the key simply never
+ * fires. Every name below is taken from GameCanvas.keys.
  */
 export const SCANCODE_TO_KEY: Record<number, string> = {
   2: "1", 3: "2", 4: "3", 5: "4", 6: "5", 7: "6", 8: "7", 9: "8", 10: "9",
-  11: "0", 12: "-", 13: "=",
+  11: "0", 12: "minus", 13: "plus",
   16: "q", 17: "w", 18: "e", 19: "r", 20: "t", 21: "y", 22: "u", 23: "i",
   24: "o", 25: "p", 26: "[", 27: "]",
   29: "ctrl",
   30: "a", 31: "s", 32: "d", 33: "f", 34: "g", 35: "h", 36: "j", 37: "k",
-  38: "l", 39: ";", 40: "'", 41: "`",
-  42: "shift", 43: "\\",
+  38: "l", 39: "colon", 40: "quote", 41: "tilde",
+  42: "shift", 43: "pipe",
   44: "z", 45: "x", 46: "c", 47: "v", 48: "b", 49: "n", 50: "m",
-  51: ",", 52: ".",
+  51: "comma", 52: "period",
   56: "alt", 57: "space",
   59: "f1", 60: "f2", 61: "f3", 62: "f4", 63: "f5", 64: "f6", 65: "f7",
   66: "f8", 67: "f9", 68: "f10", 87: "f11", 88: "f12",
-  69: "numlock", 70: "scrolllock",
   71: "home", 73: "pageup", 79: "end", 81: "pagedown",
   82: "insert", 83: "delete",
 };
 
-/** v83 defaults, as the stock client ships them. */
+/**
+ * v83 defaults. Esc and Enter are deliberately absent: the original has no
+ * key sprite and no keyboard slot for either, so the menu and the chat box
+ * stay hardwired to them and can never be stranded on an unreachable key.
+ */
 export const DEFAULT_BINDINGS: Record<number, BindableAction> = {
-  56: "jump",       // Alt
   29: "attack",     // Ctrl
+  56: "jump",       // Alt
   44: "pickup",     // Z
   46: "sit",        // C
   18: "equipment",  // E
@@ -87,8 +95,7 @@ export const DEFAULT_BINDINGS: Record<number, BindableAction> = {
   37: "skills",     // K
   16: "questLog",   // Q
   50: "miniMap",    // M
-  1: "menu",        // Esc (no key sprite; kept so the action always has a home)
-  28: "chat",       // Enter (likewise)
+  // keyConfig ships unbound, so it starts in the palette.
 };
 
 type Bindings = Record<number, BindableAction>;
@@ -116,10 +123,20 @@ function load(): Bindings {
     for (const k of Object.keys(parsed)) {
       const code = Number(k);
       const action = parsed[k];
-      // Drop anything unrecognised rather than trusting the blob wholesale.
-      if (Number.isFinite(code) && ACTION_BY_NAME.has(action)) out[code] = action;
+      // Drop anything unrecognised rather than trusting the blob wholesale —
+      // an action that was removed from the client would otherwise sit on a
+      // key forever, invisible and unbindable.
+      if (
+        Number.isFinite(code) &&
+        SCANCODE_TO_KEY[code] !== undefined &&
+        ACTION_BY_NAME.has(action)
+      ) {
+        out[code] = action;
+      }
     }
-    return Object.keys(out).length ? out : { ...DEFAULT_BINDINGS };
+    // A deliberately empty map is a legitimate state (the Delete button), so
+    // only a completely unreadable blob falls back to the defaults.
+    return out;
   } catch {
     return { ...DEFAULT_BINDINGS };
   }
@@ -138,14 +155,12 @@ const KeyBindings: KeyBindingsShape = {
   keyNameFor(action) {
     const code = this.keyFor(action);
     if (code === undefined) return null;
-    // Esc/Enter have no KeyConfig sprite but still need to resolve.
-    if (code === 1) return "esc";
-    if (code === 28) return "enter";
     return SCANCODE_TO_KEY[code] ?? null;
   },
 
   bind(scancode, action) {
     // An action lives on exactly one key, so moving it clears the old slot.
+    // Whatever already sat on the target is displaced back to the palette.
     const prev = this.keyFor(action);
     if (prev !== undefined) delete this.bindings[prev];
     this.bindings[scancode] = action;
