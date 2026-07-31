@@ -118,6 +118,9 @@ class MapleCharacter {
   // Whether the grabbed climbable is a ladder (true) or rope (false) —
   // they use different stances (v83: 'ladder' vs 'rope')
   climbingIsLadder: boolean = false;
+  /** y-extent of the rope currently held, so the climb can be stopped at its
+   *  ends instead of running past them. */
+  climbRopeBounds: { y1: number; y2: number } | null = null;
   isDead: boolean = false;
   maxCloseToMobDistance: number = 0;
   mobHitMinOverlapPercentage: number = 0;
@@ -1456,10 +1459,23 @@ isCloseToMob = (inAllDirections = true) => {
       }
     );
     if (ladderRope) {
-      console.log("ladderRope", ladderRope);
+      const ropeTop = ladderRope.y1.nValue;
+      const ropeBottom = ladderRope.y2.nValue;
+
+      // Standing at the foot of a rope puts you inside the grab box (its lower
+      // edge IS y2), so pressing DOWN there used to grab it and start climbing
+      // down with nothing below — the character sank through the floor and out
+      // of the map. You can only climb down a rope that still extends below you.
+      if (direction === ClimbDirections.DOWN && this.pos.y >= ropeBottom - 5) {
+        this.isInClimbingRope = false;
+        this.pos.stopClimb();
+        return false;
+      }
+
       // Ladders and ropes use different climb stances (ladder: rungs grip,
       // rope: hands on the rope) — remember which one was grabbed
       this.climbingIsLadder = ladderRope.nGet("l").nValue === 1;
+      this.climbRopeBounds = { y1: ropeTop, y2: ropeBottom };
       this.pos.x = ladderRope.x.nValue;
       this.climbRope(direction);
       return true;
@@ -2249,6 +2265,26 @@ isCloseToMob = (inAllDirections = true) => {
     if (this.isInClimbingRope && !this.pos.isClimbing) {
       this.isInClimbingRope = false;
       this.isClimbMoving = false;
+      this.climbRopeBounds = null;
+    }
+
+    // Let go at the ends of the rope. Climbing bypasses foothold collision, so
+    // without this a descent just carries on past the bottom and drops the
+    // character through the map floor. Releasing hands back to normal physics,
+    // which lands them on the foothold at the rope's foot.
+    if (this.isInClimbingRope && this.pos.isClimbing && this.climbRopeBounds) {
+      const { y1, y2 } = this.climbRopeBounds;
+      if (this.pos.y > y2) {
+        this.pos.y = y2;
+        this.pos.stopClimb();
+        this.isInClimbingRope = false;
+        this.isClimbMoving = false;
+        this.climbRopeBounds = null;
+      } else if (this.pos.y < y1) {
+        this.pos.y = y1;
+        this.pos.stopClimbMovement();
+        this.isClimbMoving = false;
+      }
     }
 
     // Fall damage: check if we just landed after a long fall
