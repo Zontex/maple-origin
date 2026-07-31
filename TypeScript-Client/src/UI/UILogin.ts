@@ -938,8 +938,12 @@ UILogin.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   // a few px off its target, so static coords would drift. World anchors
   // measured against the live camera: ID recess (68,-67), PW recess (68,-37)
   if (LoginState.currentSubState === LoginSubState.LOGIN_SCREEN) {
-    this.inputUsn?.setCanvasPos(68 - Camera.x, -67 - Camera.y);
-    this.inputPwd?.setCanvasPos(68 - Camera.x, -37 - Camera.y);
+    // Sits in the recess beside the "Login ID" / "Password" labels baked into
+    // the sign. The label centres measure y=236 and y=266 on the rendered
+    // canvas; the text rides 2px under that and inset from the recess edge,
+    // which reads better against the wood than dead-centre does.
+    this.inputUsn?.setCanvasPos(72 - Camera.x, -71 - Camera.y);
+    this.inputPwd?.setCanvasPos(72 - Camera.x, -41 - Camera.y);
   }
 
   this.drawMask(canvas);
