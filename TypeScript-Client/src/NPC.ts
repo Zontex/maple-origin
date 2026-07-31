@@ -93,7 +93,13 @@ class NPC {
     this.cy = opts.cy;
     // Set the pos property to match x and cy for consistent use across the codebase
     this.pos = { x: opts.x, y: opts.cy };
-    this.flipped = opts.f;
+    // life/f is inverted relative to a plain "mirror me" flag: f=1 means the
+    // sprite is used as authored, f=0 (the common case, often absent) means
+    // mirrored. Measured against two NPCs whose intended facing is not in
+    // doubt — Pan is authored facing left with no f and must face right into
+    // his stall; Natasha is authored facing right with f=1 and must face
+    // right at her counter. Only `!f` satisfies both.
+    this.flipped = !opts.f;
     this.fh = opts.fh;
     this.rx0 = opts.rx0;
     this.rx1 = opts.rx1;
