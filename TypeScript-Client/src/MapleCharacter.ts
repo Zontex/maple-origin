@@ -48,6 +48,11 @@ const ATTACK_BODY_H = 60;
 // point. Positive sinks it into the floor, negative lifts it.
 const CHAIR_BASE_OFFSET = 0;
 
+// How far past the end of a ladder or rope counts as still touching it. Used
+// asymmetrically when grabbing (see checkForLadder) and as the overshoot that
+// carries the character over the lip of the platform when they reach the top.
+const GRAB_SLACK = 5;
+
 class MapleCharacter {
   opts: any;
   active: boolean = true;
@@ -1523,12 +1528,27 @@ isCloseToMob = (inAllDirections = true) => {
   }
 
   checkForLadder(direction: ClimbDirections) {
+    const isUp = direction === ClimbDirections.UP;
     const ladderRope = this.map!.wzNode.ladderRope.nChildren.find(
       (ladderRope: any) => {
         // its ladder or rope
         const isLadder = ladderRope.nGet("l").nValue === 1;
 
         const xRange = isLadder ? 15 : 8;
+
+        // The grab box is deliberately lopsided, and which way depends on the
+        // direction asked for. A rope's y1 sits 2px below the foothold it
+        // hangs from, so a symmetric box overlaps the platform at the top and
+        // the floor at the bottom, and you get grabbed at both ends.
+        //
+        // Reaching UP: slack at the foot so you can catch a rope while
+        // standing under it, but none at the head — otherwise standing on the
+        // platform is inside the box and pressing up yanks you back on.
+        // Reaching DOWN is the mirror: slack at the head so you can climb on
+        // from the platform, none at the foot or you grab the rope you are
+        // already standing at the bottom of and sink through the floor.
+        const top = ladderRope.y1.nValue - (isUp ? 0 : GRAB_SLACK);
+        const bottom = ladderRope.y2.nValue + (isUp ? GRAB_SLACK : -GRAB_SLACK);
 
         return isPositionInsideRectByConrners(
           {
@@ -1537,11 +1557,11 @@ isCloseToMob = (inAllDirections = true) => {
           },
           {
             x: ladderRope.x.nValue - xRange,
-            y: ladderRope.y1.nValue - 4,
+            y: top,
           },
           {
             x: ladderRope.x.nValue + xRange,
-            y: ladderRope.y2.nValue,
+            y: bottom,
           }
         );
       }
@@ -1550,25 +1570,26 @@ isCloseToMob = (inAllDirections = true) => {
       const ropeTop = ladderRope.y1.nValue;
       const ropeBottom = ladderRope.y2.nValue;
 
-      // Standing at the foot of a rope puts you inside the grab box (its lower
-      // edge IS y2), so pressing DOWN there used to grab it and start climbing
-      // down with nothing below — the character sank through the floor and out
-      // of the map. You can only climb down a rope that still extends below you.
-      if (direction === ClimbDirections.DOWN && this.pos.y >= ropeBottom - 5) {
-        this.isInClimbingRope = false;
-        this.pos.stopClimb();
-        return false;
-      }
-
       // Ladders and ropes use different climb stances (ladder: rungs grip,
       // rope: hands on the rope) — remember which one was grabbed
       this.climbingIsLadder = ladderRope.nGet("l").nValue === 1;
       this.climbRopeBounds = { y1: ropeTop, y2: ropeBottom };
       this.pos.x = ladderRope.x.nValue;
+      // That slack means you can grab from just outside the rope's span, so
+      // start the climb at the end you caught hold of — otherwise the
+      // let-go check below sees you past the end and drops you immediately.
+      if (this.pos.y > ropeBottom) this.pos.y = ropeBottom;
+      else if (this.pos.y < ropeTop) this.pos.y = ropeTop;
       this.climbRope(direction);
       return true;
     } else {
-      this.isInClimbingRope = false;
+      // This is the branch that actually ends most climbs: the up/down key is
+      // still held, the character has risen or sunk out of the grab box, and
+      // no rope matches any more. It has to give the foothold back the same
+      // way the end-of-rope check does — but only when there was a rope, or
+      // every press of up/down while walking would drop the character's
+      // foothold and start them falling.
+      if (this.isInClimbingRope) this.releaseRope();
       this.pos.stopClimb();
 
       return false;
@@ -1722,6 +1743,25 @@ isCloseToMob = (inAllDirections = true) => {
 
   leftClickRelease() {
     this.pos.left = false;
+  }
+
+  /**
+   * Let go of a ladder or rope and hand back to normal physics.
+   *
+   * Dropping the foothold is the point. Climbing keeps whatever foothold the
+   * character was standing on when they grabbed on, and nothing recomputes it
+   * on the way off, so walking away from the far end used to resolve against
+   * a platform that is no longer under them — off the top of a ladder they
+   * fell to the floor below, and off the bottom they were snapped back up to
+   * the platform they had left. Clearing it makes them fall the last pixel or
+   * two and acquire the foothold they are actually standing on.
+   */
+  releaseRope() {
+    this.isInClimbingRope = false;
+    this.isClimbMoving = false;
+    this.climbRopeBounds = null;
+    this.pos.fh = null;
+    this.pos.lf = null;
   }
 
   // ClimbDirections enum
@@ -2375,27 +2415,29 @@ isCloseToMob = (inAllDirections = true) => {
     // end, knockback), clear the character climb state too — otherwise the
     // rope stance sticks while falling
     if (this.isInClimbingRope && !this.pos.isClimbing) {
-      this.isInClimbingRope = false;
-      this.isClimbMoving = false;
-      this.climbRopeBounds = null;
+      this.releaseRope();
     }
 
-    // Let go at the ends of the rope. Climbing bypasses foothold collision, so
-    // without this a descent just carries on past the bottom and drops the
-    // character through the map floor. Releasing hands back to normal physics,
-    // which lands them on the foothold at the rope's foot.
+    // Let go at BOTH ends of the rope. Climbing bypasses foothold collision,
+    // so without this a descent carries on past the foot and drops the
+    // character through the map floor. Letting go hands back to normal
+    // physics, which lands them on the foothold at that end.
+    //
+    // The top end used to pin the character at y1 instead of letting go, and
+    // since y1 is 2px below the platform the rope hangs from, that left them
+    // standing in the climb stance on top of the terrain rather than stepping
+    // onto it. Climb a little past the head, then let go and drop onto the
+    // platform — the same few pixels of slack the grab box uses.
     if (this.isInClimbingRope && this.pos.isClimbing && this.climbRopeBounds) {
       const { y1, y2 } = this.climbRopeBounds;
-      if (this.pos.y > y2) {
-        this.pos.y = y2;
+      const offBottom = this.pos.y > y2;
+      const offTop = this.pos.y + GRAB_SLACK < y1;
+      if (offBottom || offTop) {
+        // Only the foot needs snapping back; overshoot at the head is what
+        // carries the character up over the lip of the platform.
+        if (offBottom) this.pos.y = y2;
         this.pos.stopClimb();
-        this.isInClimbingRope = false;
-        this.isClimbMoving = false;
-        this.climbRopeBounds = null;
-      } else if (this.pos.y < y1) {
-        this.pos.y = y1;
-        this.pos.stopClimbMovement();
-        this.isClimbMoving = false;
+        this.releaseRope();
       }
     }
 
