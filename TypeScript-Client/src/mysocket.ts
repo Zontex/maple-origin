@@ -7,6 +7,7 @@ import Monster from "./Monster";
 import Inventory from "./Inventory/Inventory";
 import Stats from "./Stats/Stats";
 import DropItemSprite from "./DropItem/DropItemSprite";
+import config from "./Config";
 
 let nextDropId = 1;
 
@@ -74,6 +75,8 @@ class MySocket {
   _needsRegistration: boolean = false;
   isConnected: boolean = false;
   isLoggedIn: boolean = false;
+  // Set by disconnect() so handleSocketClose skips the reconnect path
+  intentionalDisconnect: boolean = false;
   userId: number = 0;
   reconnectAttempts: number = 0;
   maxReconnectAttempts: number = 5;
@@ -97,13 +100,16 @@ class MySocket {
 
   // Send a log message to the server for display in server console
   remoteLog(...args: any[]) {
-    // Never re-enter. sendMessage warns when the socket is down, that warning
-    // is itself console-hooked, and forwarding it calls sendMessage again —
-    // unbounded recursion. The update loop fires every 33ms, so once the
-    // socket dropped this pinned the main thread and froze the tab.
+    // Bail out while disconnected. installRemoteLogging() routes console.warn
+    // through here, and sendMessage() warns when the socket is down — so
+    // logging anything after a disconnect would recurse until the stack blew.
+    if (!this.isConnected || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    // Belt-and-braces against the same recursion arriving by another route:
+    // any send path that logs on failure would otherwise re-enter here even
+    // while the socket looks healthy.
     if (this._inRemoteLog) return;
-    // Nothing to forward over a dead socket; bail before sendMessage warns
-    if (!this.isConnected || this.socket?.readyState !== WebSocket.OPEN) return;
 
     this._inRemoteLog = true;
     try {
@@ -148,6 +154,13 @@ class MySocket {
   }
 
   private resolveServerUrl() {
+    // An explicit VITE_WEBSOCKET_URL (TypeScript-Client/.env) always wins —
+    // it's the only way to point the client at a backend on a different host
+    // than the one serving the page.
+    if (config.websocketUrl) {
+      this.serverUrl = config.websocketUrl;
+      return;
+    }
     if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
       this.serverUrl = `ws://${window.location.hostname}:3001`;
       if (window.location.protocol === 'https:') {
@@ -588,10 +601,36 @@ class MySocket {
     }
   }
   
+  /**
+   * Close the session deliberately (QUIT GAME). Distinct from a dropped
+   * connection: handleSocketClose would otherwise start reconnecting and drag
+   * the player straight back into the world they just left.
+   */
+  disconnect() {
+    this.intentionalDisconnect = true;
+    this.isLoggedIn = false;
+    this.userId = 0;
+    this.otherPlayers.clear();
+    this.isMobHost = false;
+    this._needsRegistration = false;
+    try {
+      this.socket?.close();
+    } finally {
+      this.socket = null;
+      this.isConnected = false;
+    }
+  }
+
   handleSocketClose(event: CloseEvent) {
     console.log("WebSocket connection closed:", event.code, event.reason);
     this.isConnected = false;
     this.updateConnectionStatus('disconnected');
+
+    // Deliberate quit — stay disconnected until the player logs in again.
+    if (this.intentionalDisconnect) {
+      this.intentionalDisconnect = false;
+      return;
+    }
 
     // Idle timeout — go back to login instead of reconnecting
     if (event.code === 4000 || event.reason === 'idle_timeout') {

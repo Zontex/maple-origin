@@ -51,6 +51,13 @@ const LoginState: LoginState = {
     this._canvas = canvas ?? null;
     canvas?.setInternalSize(LOGIN_NATIVE_WIDTH, LOGIN_NATIVE_HEIGHT);
     MyCharacter.deactivate();
+
+    // Coming back from the game (QUIT GAME), not just booting. MapleMap.load
+    // never clears an existing PlayerCharacter and the renderer draws it
+    // regardless of deactivate(), so the player would stand around on the
+    // login map.
+    MapleMap.PlayerCharacter = null;
+
     await MapleMap.load("MapLogin");
 
     // Start character preload in background — don't block login screen render.
@@ -64,6 +71,18 @@ const LoginState: LoginState = {
     // Extend camera boundaries to allow scrolling to all login screen sections
     // (the map footholds don't cover the create character area)
     Camera.setBoundaries({ left: -800, right: 1600, top: -5000, bottom: 1200 });
+
+    // Camera.update() never travels the last few pixels (see Camera.ts), so
+    // where the camera comes to rest depends on where it started easing from —
+    // and the login layout is measured against the position the boot path
+    // produces. Boot always starts from 0,0: main.ts awaits this whole
+    // initialize before the game loop exists, so nothing moves the camera in
+    // between. Quitting back here re-initialises with the loop already
+    // running, which would ease it toward MapleMap.load's own lookAt during
+    // the awaits above and leave it resting somewhere else entirely -- that is
+    // what pulled the login sign's planks apart. Resetting immediately before
+    // the target is set reproduces boot's approach exactly.
+    Camera.doReset();
 
     const initialPos = LOGIN_CAMERA_POSITIONS[LoginSubState.LOGIN_SCREEN];
     Camera.setTopLeft(initialPos.x, initialPos.y);

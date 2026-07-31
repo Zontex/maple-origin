@@ -107,6 +107,14 @@ Camera.lookAt = function (x, y) {
   }
 };
 
+// NOTE: rounding after easing means the last few pixels are never travelled —
+// within 5px of the target the 10% step is under half a pixel and Math.round
+// hands back the previous value, so the camera rests slightly short. That is
+// load-bearing: the login screen's layout offsets were measured against where
+// it actually comes to rest, so "fixing" the convergence shifts every
+// world-drawn element against the screen-fixed ones and pulls the login sign
+// apart. Anything that needs a reproducible camera must reproduce the whole
+// approach (see LoginState.initialize), not just the target.
 Camera.update = function () {
   if (this.x === targetX && this.y === targetY) {
     return;

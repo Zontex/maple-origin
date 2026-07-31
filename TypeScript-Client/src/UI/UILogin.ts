@@ -35,6 +35,14 @@ interface UILoginInterface {
   ) => void;
   removeInputs: () => void;
   createLoginInputs: (canvas: GameCanvas) => void;
+  /** Log in with the current field values. Shared by the Log In button and
+   *  by Enter in either credential field. Assigned during initialize(). */
+  performLogin: (() => Promise<void>) | null;
+  _loginInProgress: boolean;
+  /** Timestamp of the last character-slot click, for double-click detection. */
+  _lastCharClickTime: number;
+  /** One-shot latch so a held double-click only enters the game once. */
+  _enteringGame: boolean;
   drawMask: (canvas: GameCanvas) => void;
   worlds: any[];
   selectedWorldId: number | null;
@@ -170,6 +178,9 @@ UILogin.initialize = async function (canvas: GameCanvas) {
   this.charSelectScrollFrame = 0;
   this.charSelectScrollDelay = 0;
   this.charSelectScrollState = 'closed';
+  this._loginInProgress = false;
+  this._lastCharClickTime = 0;
+  this._enteringGame = false;
   this.uiLogin = await WZManager.get('UI.wz/Login.img');
 
   // Load character select sound effect
@@ -503,31 +514,36 @@ UILogin.initialize = async function (canvas: GameCanvas) {
   this.inFrontOfFrameButtons.push(channelBackButton);
   this.channelBackButton = channelBackButton;
 
-  const loginButton = new MapleStanceButton(canvas, {
-    x: 223,
-    y: -85,
-    img: this.uiLogin.nGet('Title').nGet('BtLogin').nChildren,
-    onClick: async () => {
-      const username = this.inputUsn?.input?.value?.trim() || '';
-      const password = this.inputPwd?.input?.value || '';
+  // Extracted so Enter in either credential field submits the same way the
+  // Log In button does (see createLoginInputs).
+  this.performLogin = async () => {
+    // Enter can repeat while a request is in flight, and the notice dialogs
+    // below leave the fields focused — without this the user can queue up
+    // several logins from one hold of the key.
+    if (uiLoginRef._loginInProgress) return;
 
-      if (!username || !password) {
-        this.showNotice(NoticeType.NORMAL, NoticeMessage.INCORRECT_LOGIN_ID);
-        return;
-      }
+    const username = uiLoginRef.inputUsn?.input?.value?.trim() || '';
+    const password = uiLoginRef.inputPwd?.input?.value || '';
 
+    if (!username || !password) {
+      uiLoginRef.showNotice(NoticeType.NORMAL, NoticeMessage.INCORRECT_LOGIN_ID);
+      return;
+    }
+
+    uiLoginRef._loginInProgress = true;
+    try {
       // Connect to server if not already connected
       try {
         await MySocket.connectForLogin();
       } catch {
-        this.showNotice(NoticeType.NORMAL, NoticeMessage.UNABLE_TO_CONNECT_GAME_SERVER);
+        uiLoginRef.showNotice(NoticeType.NORMAL, NoticeMessage.UNABLE_TO_CONNECT_GAME_SERVER);
         return;
       }
 
       // Authenticate
       const result = await MySocket.sendLogin(username, password);
       if (!result.success) {
-        this.showNotice(NoticeType.ABNORMAL, NoticeMessage.PASSWORD_IS_INCORRECT);
+        uiLoginRef.showNotice(NoticeType.ABNORMAL, NoticeMessage.PASSWORD_IS_INCORRECT);
         return;
       }
 
@@ -539,6 +555,17 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       await LoginState.switchToSubState(LoginSubState.WORLD_SELECT);
       viewAllCharacterButton.isHidden = false;
       channelBackButton.isHidden = false;
+    } finally {
+      uiLoginRef._loginInProgress = false;
+    }
+  };
+
+  const loginButton = new MapleStanceButton(canvas, {
+    x: 223,
+    y: -85,
+    img: this.uiLogin.nGet('Title').nGet('BtLogin').nChildren,
+    onClick: async () => {
+      await uiLoginRef.performLogin?.();
     },
   });
 
@@ -669,8 +696,14 @@ UILogin.initialize = async function (canvas: GameCanvas) {
 
   this.newCharStats = Random.generateDiceRollStats();
 
+  // Plain world coordinates — FrameAnimation.draw already subtracts the camera.
+  // This used to be `-830 - Camera.y`, which only ever worked on boot: main.ts
+  // awaits the first setState before starting the game loop, so Camera.y was
+  // still 0 and the term cancelled out. Returning here from the game (QUIT
+  // GAME) runs initialize() while the loop is easing the camera, baking a
+  // stale offset that laid the world-select scroll across the login screen.
   const dx = Math.floor(-215);
-  const dy = Math.floor(-830 - Camera.y);
+  const dy = Math.floor(-830);
   this.scrollOpenAnimation = new FrameAnimation(this.uiLogin.nGet('WorldSelect')?.nGet('scroll').nGet(0), dx, dy);
   this.scrollContentFadeIn = {
     active: false,
@@ -905,8 +938,12 @@ UILogin.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   // a few px off its target, so static coords would drift. World anchors
   // measured against the live camera: ID recess (68,-67), PW recess (68,-37)
   if (LoginState.currentSubState === LoginSubState.LOGIN_SCREEN) {
-    this.inputUsn?.setCanvasPos(68 - Camera.x, -67 - Camera.y);
-    this.inputPwd?.setCanvasPos(68 - Camera.x, -37 - Camera.y);
+    // Sits in the recess beside the "Login ID" / "Password" labels baked into
+    // the sign. The label centres measure y=236 and y=266 on the rendered
+    // canvas; the text rides 2px under that and inset from the recess edge,
+    // which reads better against the wood than dead-centre does.
+    this.inputUsn?.setCanvasPos(72 - Camera.x, -71 - Camera.y);
+    this.inputPwd?.setCanvasPos(72 - Camera.x, -41 - Camera.y);
   }
 
   this.drawMask(canvas);
@@ -957,12 +994,19 @@ UILogin.drawMask = function (canvas) {
 // leaving it calls removeInputs(), so the fields must be recreated.
 UILogin.createLoginInputs = function (canvas: GameCanvas) {
   if (this.inputUsn || this.inputPwd) return;
+  // Enter in either field logs in. Resolved at keypress time rather than
+  // captured here: initialize() creates the inputs before it assigns
+  // performLogin, so the reference would be null if we read it now.
+  const submit = () => {
+    void this.performLogin?.();
+  };
   this.inputUsn = new MapleInput(canvas, {
     x: 459,
     y: 207,
     width: 170,
     height: 18,
     color: "#ffffff",
+    submitListeners: [submit],
   });
   this.inputPwd = new MapleInput(canvas, {
     x: 459,
@@ -971,6 +1015,7 @@ UILogin.createLoginInputs = function (canvas: GameCanvas) {
     height: 18,
     color: "#ffffff",
     type: "password",
+    submitListeners: [submit],
   });
 };
 
@@ -1180,6 +1225,29 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
         if (mx >= slotX - 30 && mx <= slotX + 30 &&
             my >= charScreenY - 60 && my <= charScreenY + 10) {
           if (i < this.characters.length) {
+            // Second click on the already-selected slot enters the game, the
+            // same as the world list's double-click. Reuses the Start button's
+            // handler so both routes stay in step.
+            const now = Date.now();
+            const isDoubleClick =
+              this.charSelected &&
+              this.selectedCharIndex === i &&
+              now - (this._lastCharClickTime || 0) < 400;
+            this._lastCharClickTime = now;
+
+            if (isDoubleClick) {
+              // canvas.clicked stays true for as long as the button is held, so
+              // this block runs on every render frame of a single click. Latch
+              // it — without this, one double-click fires selectCharacter() and
+              // enterGame() once per frame (observed: 5 map loads from a 60ms
+              // hold). The latch is cleared when character select is re-entered.
+              if (!this._enteringGame && this.startButton && this.startButton.stance !== 'disabled') {
+                this._enteringGame = true;
+                void this.startButton.onClick(this.startButton);
+              }
+              break;
+            }
+
             // Deselect previous
             if (this.charSelected && this.selectedCharIndex !== i) {
               this.characters[this.selectedCharIndex]?.setStance('stand1', 0, true);
@@ -1939,6 +2007,8 @@ UILogin.loadCharactersFromServer = async function () {
   this.characters = [];
   this.selectedCharIndex = 0;
   this.charSelected = false;
+  this._lastCharClickTime = 0;
+  this._enteringGame = false;
 
   for (const c of charList) {
     try {

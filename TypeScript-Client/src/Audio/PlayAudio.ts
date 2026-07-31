@@ -14,11 +14,18 @@
 //   concurrentAudio.play();
 // }
 
+import Settings from "../Settings";
+
 // WeakMap, not Map: this is keyed by the source Audio element, so a strong
 // Map pinned one entry per WZ sound node for the life of the page and kept
 // every element it had ever throttled alive alongside it
 const playingAudios = new WeakMap<object, number>();
 
+/**
+ * `volume` stays the caller's per-sound level; the player's SOUND setting
+ * scales it, so an effect that was deliberately quiet stays proportionally
+ * quiet as the slider moves.
+ */
 function PLAY_AUDIO(audio: any, volume = 1, allowOverlap = false) {
   if (!audio || typeof audio.cloneNode !== "function") {
     return;
@@ -31,7 +38,7 @@ function PLAY_AUDIO(audio: any, volume = 1, allowOverlap = false) {
   // to prevent audio spam from rapid-fire calls in the same frame
   if (allowOverlap || now - lastPlayed > 50) {
     const concurrentAudio = audio.cloneNode();
-    concurrentAudio.volume = volume;
+    concurrentAudio.volume = Math.min(1, Math.max(0, volume * Settings.sfxVolume));
     // Rejects under autoplay policy and while the source is still loading —
     // unhandled, it surfaces as an unhandledrejection and gets logged home
     concurrentAudio.play()?.catch(() => {});
