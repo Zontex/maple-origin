@@ -21,6 +21,9 @@ import DebugDrag from './DebugDrag';
 interface UILoginInterface {
   uiLogin: WZNode;
   frameImg: any;
+  // Sound.wz/Game.img/GameIn — plays as the world loads after you pick a
+  // character, distinct from the UI.img/CharSelect click blip
+  gameInAudio: any;
   inputUsn: MapleInput | null;
   inputPwd: MapleInput | null;
   newCharStats: number[];
@@ -186,6 +189,8 @@ UILogin.initialize = async function (canvas: GameCanvas) {
   // Load character select sound effect
   const uiSounds: any = await WZManager.get('Sound.wz/UI.img');
   this.charSelectAudio = uiSounds.CharSelect?.nGetAudio?.() || null;
+  const gameSounds: any = await WZManager.get('Sound.wz/Game.img');
+  this.gameInAudio = gameSounds?.GameIn?.nGetAudio?.() || null;
 
   this.frameImg = this.uiLogin.nGet('Common').nGet('frame').nGetImage();
   this.selectedWorldImage = this.uiLogin.nGet('Common').selectWorld.nGetImage();
@@ -260,6 +265,11 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         console.error('Failed to select character:', result.error);
         return;
       }
+
+      // Server accepted the character, so we're definitely entering the
+      // world — play the log-in cue now, while the load runs, rather than
+      // after it when the screen has already changed
+      if (uiLoginRef.gameInAudio) PLAY_AUDIO(uiLoginRef.gameInAudio);
 
       const charData = result.character;
       const MyChar = (await import('../MyCharacter')).default;
