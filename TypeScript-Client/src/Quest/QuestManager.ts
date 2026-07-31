@@ -31,9 +31,24 @@ export default class QuestManager {
     return this.trackedQuests.includes(questId);
   }
 
+  /**
+   * True when a quest has goals that show measurable progress — mobs to kill
+   * or items to gather. Pure "go talk to someone" quests (Nina's brother Sen,
+   * for one) have nothing to count, and GMS doesn't list them in the helper.
+   */
+  hasTrackableRequirements(questId: number): boolean {
+    const reqs = QuestData.requirements.get(questId);
+    if (!reqs) return false;
+    const mobs = reqs.complete?.mobs || [];
+    const items = (reqs.complete?.items || []).filter((i: any) => i.count > 0);
+    return mobs.length > 0 || items.length > 0;
+  }
+
   /** Track an in-progress quest in the Quest Helper (oldest drops when full). */
   trackQuest(questId: number): boolean {
     if (!this.activeQuests.has(questId)) return false;
+    // Nothing to show a counter for — don't take up a helper slot
+    if (!this.hasTrackableRequirements(questId)) return false;
     UIQuestAlarm.visible = true; // re-open the helper panel if it was closed
     if (this.isTracked(questId)) return true;
     this.trackedQuests.push(questId);
@@ -60,6 +75,10 @@ export default class QuestManager {
     this.fulfilledState.set(questId, fulfilled);
 
     if (fulfilled && !wasFulfilled) {
+      // Requirements met. This is what the red balloon announces — it points
+      // at the quest-notifier button and means "this one can be claimed now",
+      // so it fires here and NOT on turn-in. Going to the NPC afterwards is
+      // the player acting on it.
       const questName = QuestData.quests.get(questId)?.name || `Quest #${questId}`;
       UIQuestAlarm.showQuestComplete(questId, questName);
       this.character.playQuestFulfilled();
@@ -338,8 +357,10 @@ export default class QuestManager {
     this.completedQuests.set(questId, completedAt ?? Date.now());
     this.untrackQuest(questId);
     this.fulfilledState.delete(questId);
+    const forcedName = QuestData.quests.get(questId)?.name;
+    // completedAt is only set when replaying saved state on load
     if (completedAt === undefined) this.character.playQuestClear();
-    console.log(`Quest force-completed: ${QuestData.quests.get(questId)?.name} (#${questId})`);
+    console.log(`Quest force-completed: ${forcedName} (#${questId})`);
   }
 
   // Cosmic-style weighted pick: roll against the sum of prop weights

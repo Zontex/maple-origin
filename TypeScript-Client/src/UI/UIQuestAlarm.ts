@@ -1,5 +1,7 @@
 import WZManager from '../wz-utils/WZManager';
 import GameCanvas from '../GameCanvas';
+import ClickManager from './ClickManager';
+import config from '../Config';
 import QuestData, { mobNames, getItemNameSync, ensureItemNames } from '../Quest/QuestData';
 
 /**
@@ -7,41 +9,65 @@ import QuestData, { mobNames, getItemNameSync, ensureItemNames } from '../Quest/
  *
  *   Quest Helper (2/5)                [-][x]
  *   Bold Quest Name                      (x)
- *   Requirement Name  cur/req   (red cur while unmet,
- *   ...                          struck through when met)
+ *   cur / req  Requirement Name   (struck through when met)
+ *   ...
  *
- * plus the GMS quest alarm bubble (UIWindow.img/QuestAlarm) that pops above
- * the status bar — next to the quickslot, over the SHOP button — when a
- * quest's requirements are all fulfilled. It auto-hides after a few seconds;
- * clicking it opens the quest log.
+ * plus the GMS quest-complete balloon that pops above the status bar — next
+ * to the quickslot, over the SHOP button — when a quest's requirements are
+ * all fulfilled. It auto-hides after a few seconds; clicking it opens the
+ * quest log.
  *
- * Window buttons come from Basic.img (BtMin/BtMax/BtClose/BtClose2); the
- * bubble is tiled from the QuestAlarm 9-slice pieces (backgrndmin for one
- * row, backgrndmax + backgrndcenter + backgrndbottom for stacks) with the
- * blinking green Q animation (BtQ/ani) on each row.
+ * Window buttons come from Basic.img (BtMin/BtMax/BtClose/BtClose2). The
+ * balloon is UIWindow.img/FadeYesNo/backgrnd4 (the red rounded pop-up with
+ * a tail) and UIWindow.img/FadeYesNo/icon6 (the gold trophy), drawn with the
+ * quest name on the first line and "Quest Complete!" on the second. The
+ * matching sound is Sound.wz/Game.img/QuestClear, played from
+ * MapleCharacter.playQuestClear() alongside the BasicEff QuestClear effect.
  */
 
-const PANEL_W = 212;
-const TITLE_H = 19;
+// v83 draws its UI text in Dotum, the Windows system font — not Arial, whose
+// rounder, wider glyphs are the giveaway. Prefer Dotum, then the Korean
+// gothics that ship with macOS/Windows, before falling back.
+const UI_FONT = "Dotum, DotumChe, AppleGothic, 'Malgun Gothic', Arial, sans-serif";
+// GMS uses one flat near-black throughout the helper — no red for unmet
+// counts, no coloured strike-through. Anything lighter washes out against
+// the panel's 33%-opaque body with the map showing through.
+const TEXT_COLOR = '#000000';
+
+// Piece sizes from UIWindow.img/QuestAlarm — the panel is exactly as wide as
+// the sprite, and the title bar is backgrndmax's own height
+const PANEL_W = 223;
+const TITLE_H = 25;   // backgrndmax
+const PANEL_FILL_H = 18; // backgrndcenter, tiled for the body
+const PANEL_BOT_H = 5;   // backgrndbottom
+const PANEL_MIN_H = 20;  // backgrndmin, collapsed
 const NAME_ROW_H = 17;
 const REQ_ROW_H = 15;
 const SECTION_GAP = 7;
 const PAD_X = 10;
 const MAX_TRACKED = 5;
 
-// QuestAlarm bubble geometry (piece sizes from UIWindow.img/QuestAlarm)
-const BUBBLE_W = 223;
-const BUBBLE_MIN_H = 20;   // backgrndmin — single-row bubble
-const BUBBLE_MAX_H = 25;   // backgrndmax — rounded top + first row
-const BUBBLE_ROW_H = 18;   // backgrndcenter — one extra row
-const BUBBLE_BOT_H = 5;    // backgrndbottom — bottom cap
-// Anchored just left of the quickslot (x 649-800) and above the status bar
-// (top edge y=529), i.e. on top of the SHOP button
-const BUBBLE_RIGHT = 645;
+// Balloon sits above the status bar (top edge y=529)
 const BUBBLE_BOTTOM = 527;
 const BUBBLE_MS = 5000;    // auto-dismiss like GMS
-const BUBBLE_MAX_ROWS = 3;
-const BTQ_FRAME_MS = 150;
+
+// Quest-complete balloon (UIWindow.img/FadeYesNo/backgrnd4, 154x44).
+// Measured from the sprite: the rounded body occupies rows 0-38 and the
+// tail tapers over rows 39-42 to a tip at x=141 — so to point the tail at a
+// screen position, draw the balloon at (tipX - 141, tipY - 42).
+const BALLOON_W = 154;
+const BALLOON_H = 44;
+const BALLOON_BODY_H = 39;
+const BALLOON_TAIL_X = 141;
+// The tail points at the status bar's alert button (StatusBar.img/BtClaim,
+// 20x19 at x=583 in UIMap.addButtons), i.e. its centre — not at the equip
+// button next to it
+const BALLOON_TAIL_TARGET_X = 593;
+const BALLOON_ICON_X = 11;   // trophy (icon6, 8x15), vertically centred in body
+const BALLOON_TEXT_X = 30;
+const BALLOON_LINE1_Y = 7;
+const BALLOON_LINE2_Y = 20;
+const BALLOON_TEXT_PAD_R = 8;
 
 interface Rect { x: number; y: number; w: number; h: number }
 
@@ -55,13 +81,20 @@ const UIQuestAlarm = {
   btClose: null as HTMLImageElement | null,
   btRemove: null as HTMLImageElement | null, // BtClose2 round (x)
 
-  // UIWindow.img/QuestAlarm bubble pieces
-  bubbleMin: null as HTMLImageElement | null,
-  bubbleMax: null as HTMLImageElement | null,
-  bubbleCenter: null as HTMLImageElement | null,
-  bubbleBottom: null as HTMLImageElement | null,
-  btQFrames: [] as HTMLImageElement[],
-  _btQTime: 0,
+  // UIWindow.img/QuestAlarm — the Quest Helper frame. A 223-wide 9-slice:
+  // backgrndmin is the collapsed (title-only) state, otherwise backgrndmax
+  // (title bar) + tiled backgrndcenter (body) + backgrndbottom (cap).
+  panelMin: null as HTMLImageElement | null,
+  panelTop: null as HTMLImageElement | null,
+  panelFill: null as HTMLImageElement | null,
+  panelBottom: null as HTMLImageElement | null,
+  btAuto: null as HTMLImageElement | null,
+  btAutoPressed: null as HTMLImageElement | null,
+  _btAutoRect: null as Rect | null,
+
+  // UIWindow.img/FadeYesNo — quest-complete balloon + trophy icon
+  balloonImg: null as HTMLImageElement | null,
+  balloonIcon: null as HTMLImageElement | null,
 
   // State
   x: 582, // 800 - PANEL_W - 6
@@ -90,15 +123,21 @@ const UIQuestAlarm = {
       this.btRemove = basic?.BtClose2?.normal?.[0]?.nGetImage?.() || null;
 
       const alarm: any = await WZManager.get('UI.wz/UIWindow.img/QuestAlarm');
-      this.bubbleMin = alarm?.backgrndmin?.nGetImage?.() || null;
-      this.bubbleMax = alarm?.backgrndmax?.nGetImage?.() || null;
-      this.bubbleCenter = alarm?.backgrndcenter?.nGetImage?.() || null;
-      this.bubbleBottom = alarm?.backgrndbottom?.nGetImage?.() || null;
-      this.btQFrames = (alarm?.BtQ?.ani?.nChildren || [])
-        .map((f: any) => f?.nGetImage?.())
-        .filter(Boolean);
+      this.panelMin = alarm?.backgrndmin?.nGetImage?.() || null;
+      this.panelTop = alarm?.backgrndmax?.nGetImage?.() || null;
+      this.panelFill = alarm?.backgrndcenter?.nGetImage?.() || null;
+      this.panelBottom = alarm?.backgrndbottom?.nGetImage?.() || null;
+      this.btAuto = alarm?.BtAuto?.normal?.[0]?.nGetImage?.() || null;
+      this.btAutoPressed = alarm?.BtAuto?.pressed?.[0]?.nGetImage?.() || null;
+
+      // Quest-complete balloon — the red pop-up with the gold trophy that
+      // GMS shows above the status bar. Both pieces live under FadeYesNo.
+      const fade: any = await WZManager.get('UI.wz/UIWindow.img/FadeYesNo');
+      this.balloonImg = fade?.backgrnd4?.nGetImage?.() || null;
+      this.balloonIcon = fade?.icon6?.nGetImage?.() || null;
       // Preload item names so requirement rows don't show "Item #id"
       ensureItemNames().catch(() => {});
+      ClickManager.addDragableMenu(this);
       this.initialized = true;
     } catch (e) {
       console.error('UIQuestAlarm initialize error:', e);
@@ -107,6 +146,27 @@ const UIQuestAlarm = {
 
   setCharacter(character: any) {
     this.character = character;
+  },
+
+  /**
+   * Drag handle for ClickManager. Deliberately just the title bar — GMS
+   * drags this window by its header, not by the quest list. Returns an empty
+   * rect while hidden so a stale handle can't be grabbed off-screen.
+   */
+  getRect(_camera?: any) {
+    // NOTE: ClickManager hit-tests via GUIUtil.pointInRectangle, which reads
+    // .width/.height — not the .w/.h this file uses internally. Returning
+    // w/h here silently disabled dragging entirely.
+    if (!this.visible) return { x: 0, y: 0, width: 0, height: 0 };
+    return { x: this.x, y: this.y, width: PANEL_W, height: TITLE_H };
+  },
+
+  /** Called by ClickManager while dragging; keeps the panel on screen. */
+  moveTo(pos: { x: number; y: number }) {
+    const maxX = config.width - PANEL_W;
+    const maxY = config.height - TITLE_H;
+    this.x = Math.max(0, Math.min(maxX, Math.round(pos.x)));
+    this.y = Math.max(0, Math.min(maxY, Math.round(pos.y)));
   },
 
   get questManager(): any {
@@ -120,7 +180,7 @@ const UIQuestAlarm = {
     return hit(this._bounds) || hit(this._bubbleBounds);
   },
 
-  /** Queue the quest alarm bubble for a fulfilled quest. */
+  /** Queue the red "Quest Complete!" balloon for a just-completed quest. */
   showQuestComplete(questId: number, name: string) {
     if (!this.completeQueue.some(q => q.questId === questId)) {
       this.completeQueue.push({ questId, name, age: 0 });
@@ -144,11 +204,13 @@ const UIQuestAlarm = {
       this.questManager?.pollFulfillment?.();
     }
 
-    // Blinking Q animation + auto-dismiss timers
-    this._btQTime += msPerTick;
-    const visibleRows = Math.min(this.completeQueue.length, BUBBLE_MAX_ROWS);
-    for (let i = 0; i < visibleRows; i++) this.completeQueue[i].age += msPerTick;
-    this.completeQueue = this.completeQueue.filter(q => q.age < BUBBLE_MS);
+    // Auto-dismiss. Only the balloon actually on screen ages, so a backlog
+    // of completions is shown one after another instead of several expiring
+    // together while the player only ever saw the first.
+    if (this.completeQueue.length) {
+      this.completeQueue[0].age += msPerTick;
+      if (this.completeQueue[0].age >= BUBBLE_MS) this.completeQueue.shift();
+    }
 
     if ((canvas as any).wasClicked) {
       const mx = (canvas as any).mouseX || 0;
@@ -168,6 +230,9 @@ const UIQuestAlarm = {
       }
       if (bubbleClicked) {
         // handled
+      } else if (inRect(this._btAutoRect)) {
+        const qm = this.questManager;
+        if (qm) qm.autoTrack = !qm.autoTrack;
       } else if (inRect(this._btMinRect)) {
         this.collapsed = !this.collapsed;
       } else if (inRect(this._btCloseRect)) {
@@ -213,13 +278,18 @@ const UIQuestAlarm = {
     if (!this.initialized) return;
     this._btMinRect = null;
     this._btCloseRect = null;
+    this._btAutoRect = null;
     this._removeRects = [];
     this._bubbleRowRects = [];
     this._bubbleBounds = null;
     this._bounds = null;
 
     const qm = this.questManager;
-    const tracked: number[] = (qm?.trackedQuests || []).filter((id: number) => qm.activeQuests.has(id));
+    // Also drop quests with nothing to count — they may still be in a save
+    // from before trackQuest started rejecting them
+    const tracked: number[] = (qm?.trackedQuests || []).filter(
+      (id: number) => qm.activeQuests.has(id) && this.getRequirementLines(id).length > 0
+    );
 
     if (this.completeQueue.length) {
       this.renderBubble(canvas);
@@ -242,37 +312,53 @@ const UIQuestAlarm = {
       }
       bodyH += 3;
     }
-    const totalH = TITLE_H + bodyH;
+    const totalH = this.collapsed
+      ? PANEL_MIN_H
+      : TITLE_H + bodyH + PANEL_BOT_H;
 
-    // Translucent white panel with thin border, like the original helper
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
-    ctx.fillRect(this.x, py, PANEL_W, totalH);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-    ctx.fillRect(this.x, py, PANEL_W, TITLE_H);
-    ctx.strokeStyle = 'rgba(120, 120, 120, 0.8)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(this.x + 0.5, py + 0.5, PANEL_W - 1, totalH - 1);
-    ctx.beginPath();
-    ctx.moveTo(this.x, py + TITLE_H - 0.5);
-    ctx.lineTo(this.x + PANEL_W, py + TITLE_H - 0.5);
-    ctx.stroke();
-    ctx.restore();
+    // Frame from UIWindow.img/QuestAlarm. The sprites carry their own
+    // translucency (title bar ~73%, body ~33%), which is what lets the map
+    // show through the way it does in the original.
+    if (this.collapsed) {
+      canvas.drawImage({ img: this.panelMin, dx: this.x, dy: py });
+    } else {
+      canvas.drawImage({ img: this.panelTop, dx: this.x, dy: py });
+      // Tile the 18px body strip, clipped so a partial row can't overhang
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(this.x, py + TITLE_H, PANEL_W, bodyH);
+      ctx.clip();
+      for (let fy = py + TITLE_H; fy < py + TITLE_H + bodyH; fy += PANEL_FILL_H) {
+        canvas.drawImage({ img: this.panelFill, dx: this.x, dy: fy });
+      }
+      ctx.restore();
+      canvas.drawImage({ img: this.panelBottom, dx: this.x, dy: py + TITLE_H + bodyH });
+    }
 
     // Title + window buttons
     canvas.drawText({
       text: `Quest Helper (${tracked.length}/${MAX_TRACKED})`,
-      color: '#333333', x: this.x + 8, y: py + 4, fontSize: 11,
+      color: TEXT_COLOR, x: this.x + 8, y: py + 6, fontSize: 11,
+      fontFamily: UI_FONT,
     });
-    const btY = py + 3;
+    const btY = py + 6;
+    // AUTO toggles whether newly accepted quests are tracked automatically
+    const autoImg = this.questManager?.autoTrack === false
+      ? (this.btAuto || this.btAutoPressed)
+      : (this.btAutoPressed || this.btAuto);
+    if (autoImg) {
+      const bx = this.x + PANEL_W - 58;
+      canvas.drawImage({ img: autoImg, dx: bx, dy: btY });
+      this._btAutoRect = { x: bx, y: btY, w: 21, h: 12 };
+    }
     const minImg = this.collapsed ? (this.btMax || this.btMin) : this.btMin;
     if (minImg) {
-      const bx = this.x + PANEL_W - 30;
+      const bx = this.x + PANEL_W - 32;
       canvas.drawImage({ img: minImg, dx: bx, dy: btY });
       this._btMinRect = { x: bx, y: btY, w: 12, h: 12 };
     }
     if (this.btClose) {
-      const bx = this.x + PANEL_W - 16;
+      const bx = this.x + PANEL_W - 18;
       canvas.drawImage({ img: this.btClose, dx: bx, dy: btY });
       this._btCloseRect = { x: bx, y: btY, w: 12, h: 12 };
     }
@@ -287,7 +373,7 @@ const UIQuestAlarm = {
       if (name.length > 26) name = name.substring(0, 24) + '..';
       canvas.drawText({
         text: name, color: '#000000', fontWeight: 'bold',
-        x: this.x + PAD_X, y: ry + 2, fontSize: 12,
+        x: this.x + PAD_X, y: ry + 2, fontSize: 12, fontFamily: UI_FONT,
       });
       if (this.btRemove) {
         const bx = this.x + PANEL_W - 18;
@@ -305,23 +391,18 @@ const UIQuestAlarm = {
         ctx2.save();
         ctx2.textBaseline = 'top';
         ctx2.textAlign = 'left';
-        ctx2.font = '11px Arial';
+        ctx2.font = `11px ${UI_FONT}`;
         const tx = this.x + PAD_X;
         const ty = ry + 2;
-        ctx2.fillStyle = '#4A4A4A';
-        ctx2.fillText(lname, tx, ty);
-        const nameW = ctx2.measureText(lname).width;
-        // current count red while unmet
-        const curStr = `${line.cur}`;
-        ctx2.fillStyle = met ? '#4A4A4A' : '#D03000';
-        ctx2.fillText(curStr, tx + nameW + 6, ty);
-        const curW = ctx2.measureText(curStr).width;
-        ctx2.fillStyle = '#4A4A4A';
-        ctx2.fillText(`/${line.req}`, tx + nameW + 6 + curW, ty);
-        const totalW = nameW + 6 + curW + ctx2.measureText(`/${line.req}`).width;
+        // GMS order is "10 / 10 Blue Snail Shell" — counts lead, name follows,
+        // all in one colour
+        const text = `${line.cur} / ${line.req} ${lname}`;
+        ctx2.fillStyle = TEXT_COLOR;
+        ctx2.fillText(text, tx, ty);
+        const totalW = ctx2.measureText(text).width;
         // strike through completed requirements
         if (met) {
-          ctx2.strokeStyle = 'rgba(160, 40, 60, 0.9)';
+          ctx2.strokeStyle = TEXT_COLOR;
           ctx2.lineWidth = 1;
           ctx2.beginPath();
           ctx2.moveTo(tx - 1, ty + 6);
@@ -337,75 +418,57 @@ const UIQuestAlarm = {
   },
 
   /**
-   * GMS quest alarm bubble above the status bar (UIWindow.img/QuestAlarm).
-   * One row uses backgrndmin; stacks use backgrndmax + centers + bottom.
-   * Each row: blinking green Q + quest name + "(Complete)".
+   * GMS quest-complete balloon (UIWindow.img/FadeYesNo/backgrnd4) — the red
+   * pop-up with the gold trophy that appears above the status bar, its tail
+   * pointing down at the quest notifier:
+   *
+   *   [trophy]  Biggs's Collectio..
+   *             Quest Complete!
+   *
+   * One balloon at a time, newest first; the rest of the queue waits its
+   * turn, matching the original rather than stacking rows.
    */
   renderBubble(canvas: GameCanvas) {
-    const rows = this.completeQueue.slice(0, BUBBLE_MAX_ROWS);
-    const single = rows.length === 1;
-    if (single && !this.bubbleMin) return;
-    if (!single && (!this.bubbleMax || !this.bubbleCenter || !this.bubbleBottom)) return;
+    const entry = this.completeQueue[0];
+    if (!entry || !this.balloonImg) return;
 
-    const bx = BUBBLE_RIGHT - BUBBLE_W;
-    const totalH = single
-      ? BUBBLE_MIN_H
-      : BUBBLE_MAX_H + (rows.length - 1) * BUBBLE_ROW_H + BUBBLE_BOT_H;
-    const by = BUBBLE_BOTTOM - totalH;
+    // Anchor by the tail tip, not the corner, so the balloon always points at
+    // the alert button regardless of its own width
+    const bx = BALLOON_TAIL_TARGET_X - BALLOON_TAIL_X;
+    const by = BUBBLE_BOTTOM - BALLOON_H;
 
-    // Background pieces
-    if (single) {
-      canvas.drawImage({ img: this.bubbleMin!, dx: bx, dy: by });
-    } else {
-      canvas.drawImage({ img: this.bubbleMax!, dx: bx, dy: by });
-      for (let i = 1; i < rows.length; i++) {
-        canvas.drawImage({ img: this.bubbleCenter!, dx: bx, dy: by + BUBBLE_MAX_H + (i - 1) * BUBBLE_ROW_H });
-      }
-      canvas.drawImage({ img: this.bubbleBottom!, dx: bx, dy: by + BUBBLE_MAX_H + (rows.length - 1) * BUBBLE_ROW_H });
-    }
-
-    // Rows: blinking Q + quest name (Complete)
-    const qFrame = this.btQFrames.length
-      ? this.btQFrames[Math.floor(this._btQTime / BTQ_FRAME_MS) % this.btQFrames.length]
-      : null;
-    const ctx = canvas.context;
-    for (let i = 0; i < rows.length; i++) {
-      // backgrndmax = a 20px row like backgrndmin plus a 5px fade into the stack
-      const rowY = i === 0 ? by : by + BUBBLE_MAX_H + (i - 1) * BUBBLE_ROW_H;
-      const rowH = i === 0 ? BUBBLE_MIN_H : BUBBLE_ROW_H;
-      if (qFrame) canvas.drawImage({ img: qFrame, dx: bx + 6, dy: rowY + Math.floor((rowH - 12) / 2) });
-
-      ctx.save();
-      ctx.textBaseline = 'top';
-      ctx.textAlign = 'left';
-      ctx.font = '11px Arial';
-      const suffix = ' (Complete)';
-      const maxNameW = BUBBLE_W - 24 - 10 - ctx.measureText(suffix).width;
-      let name = rows[i].name;
-      while (name.length > 4 && ctx.measureText(name).width > maxNameW) {
-        name = name.substring(0, name.length - 3) + '..';
-      }
-      const tx = bx + 24;
-      const ty = rowY + Math.floor((rowH - 13) / 2) + 1;
-      // 1px drop shadow for readability on the translucent panel
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillText(name, tx + 1, ty + 1);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(name, tx, ty);
-      const nameW = ctx.measureText(name).width;
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillText(suffix, tx + nameW + 1, ty + 1);
-      ctx.fillStyle = '#FFDD33';
-      ctx.fillText(suffix, tx + nameW, ty);
-      ctx.restore();
-
-      this._bubbleRowRects.push({
-        rect: { x: bx, y: rowY, w: BUBBLE_W, h: rowH },
-        questId: rows[i].questId,
+    canvas.drawImage({ img: this.balloonImg, dx: bx, dy: by });
+    if (this.balloonIcon) {
+      canvas.drawImage({
+        img: this.balloonIcon,
+        dx: bx + BALLOON_ICON_X,
+        dy: by + Math.floor((BALLOON_BODY_H - 15) / 2),
       });
     }
 
-    this._bubbleBounds = { x: bx, y: by, w: BUBBLE_W, h: totalH };
+    const ctx = canvas.context;
+    ctx.save();
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.font = `bold 12px ${UI_FONT}`;
+
+    // Quest name, truncated with '..' exactly like GMS when it overflows
+    const maxNameW = BALLOON_W - BALLOON_TEXT_X - BALLOON_TEXT_PAD_R;
+    let name = entry.name;
+    while (name.length > 4 && ctx.measureText(name).width > maxNameW) {
+      name = name.substring(0, name.length - 3) + '..';
+    }
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(name, bx + BALLOON_TEXT_X, by + BALLOON_LINE1_Y);
+    ctx.fillText('Quest Complete!', bx + BALLOON_TEXT_X, by + BALLOON_LINE2_Y);
+    ctx.restore();
+
+    // Clicking the balloon opens the quest log, as before
+    this._bubbleBounds = { x: bx, y: by, w: BALLOON_W, h: BALLOON_BODY_H };
+    this._bubbleRowRects = [
+      { rect: { x: bx, y: by, w: BALLOON_W, h: BALLOON_BODY_H }, questId: entry.questId },
+    ];
   },
 };
 

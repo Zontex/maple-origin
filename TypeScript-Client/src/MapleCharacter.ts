@@ -1,4 +1,5 @@
 import WZManager from "./wz-utils/WZManager";
+import GUIUtil from "./GuiUtils";
 import PLAY_AUDIO from "./Audio/PlayAudio";
 import { Physics } from "./Physics";
 import Stance from "./Constants/enums/Stance";
@@ -32,6 +33,12 @@ import Portal from "./Portal";
 import DropItemSprite from "./DropItem/DropItemSprite";
 import GameCanvas from "./GameCanvas";
 import { CameraInterface } from "./Camera";
+
+// Played the moment a quest's requirements are met — killing the 10th of 10
+// snails — alongside the red balloon. This is "quest finished", which in GMS
+// is a separate cue from "quest cleared" (turning it in at the NPC), the
+// latter being QuestClear plus the over-the-character effect.
+const FULFILLED_SOUND = "Sound.wz/UI.img/Invite";
 
 class MapleCharacter {
   opts: any;
@@ -759,8 +766,19 @@ class MapleCharacter {
    * fulfilled — the QuestAlert light-burst over the character + jingle
    * (same effect the original client plays at that moment).
    */
-  playQuestFulfilled() {
-    this.playQuestStart();
+  /**
+   * Requirements-met feedback. Sound only — the announcement itself is the
+   * red balloon over the quest notifier, and GMS doesn't also play the
+   * over-the-character effect here (that belongs to accepting a quest and to
+   * turning one in).
+   */
+  async playQuestFulfilled() {
+    try {
+      const sfxNode: any = await WZManager.get(FULFILLED_SOUND);
+      if (sfxNode?.nGetAudio) PLAY_AUDIO(sfxNode.nGetAudio());
+    } catch (e) {
+      console.error('playQuestFulfilled error:', e);
+    }
   }
 
   async playIncExp() {
@@ -2722,29 +2740,29 @@ isCloseToMob = (inAllDirections = true) => {
 
     // Top edge
     ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by, innerW, nwH); ctx.clip();
-    for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += n.width) canvas.drawImage({ img: n, dx: tx, dy: by });
+    GUIUtil.tileRange(bx + nwW, bx + nwW + innerW, n.width, (tx) => canvas.drawImage({ img: n, dx: tx, dy: by }));
     ctx.restore();
 
     // Bottom edge
     ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by + totalH - s.height, innerW, s.height); ctx.clip();
-    for (let tx = bx + nwW; tx < bx + nwW + innerW; tx += s.width) canvas.drawImage({ img: s, dx: tx, dy: by + totalH - s.height });
+    GUIUtil.tileRange(bx + nwW, bx + nwW + innerW, s.width, (tx) => canvas.drawImage({ img: s, dx: tx, dy: by + totalH - s.height }));
     ctx.restore();
 
     // Left edge
     ctx.save(); ctx.beginPath(); ctx.rect(bx, by + nwH, w.width, innerH); ctx.clip();
-    for (let ty = by + nwH; ty < by + nwH + innerH; ty += w.height) canvas.drawImage({ img: w, dx: bx, dy: ty });
+    GUIUtil.tileRange(by + nwH, by + nwH + innerH, w.height, (ty) => canvas.drawImage({ img: w, dx: bx, dy: ty }));
     ctx.restore();
 
     // Right edge
     ctx.save(); ctx.beginPath(); ctx.rect(bx + totalW - e.width, by + nwH, e.width, innerH); ctx.clip();
-    for (let ty = by + nwH; ty < by + nwH + innerH; ty += e.height) canvas.drawImage({ img: e, dx: bx + totalW - e.width, dy: ty });
+    GUIUtil.tileRange(by + nwH, by + nwH + innerH, e.height, (ty) => canvas.drawImage({ img: e, dx: bx + totalW - e.width, dy: ty }));
     ctx.restore();
 
     // Center fill
     ctx.save(); ctx.beginPath(); ctx.rect(bx + nwW, by + nwH, innerW, innerH); ctx.clip();
-    for (let fy = by + nwH; fy < by + nwH + innerH; fy += c.height)
-      for (let fx = bx + nwW; fx < bx + nwW + innerW; fx += c.width)
-        canvas.drawImage({ img: c, dx: fx, dy: fy });
+    GUIUtil.tileRange(by + nwH, by + nwH + innerH, c.height, (fy) =>
+      GUIUtil.tileRange(bx + nwW, bx + nwW + innerW, c.width, (fx) =>
+        canvas.drawImage({ img: c, dx: fx, dy: fy })));
     ctx.restore();
 
     // Arrow
