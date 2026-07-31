@@ -24,6 +24,7 @@ import UIHotkeyBar from "./UI/UIHotkeyBar";
 import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
+import UIGameOption from "./UI/UIGameOption";
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
@@ -474,10 +475,14 @@ MapStateInstance.doUpdate = function (
       DirectionScene.update(msPerTick);
       const questDialogOpen = MapleMap.questDialog && !MapleMap.questDialog.isHidden;
       // UIGameMenu is included so its arrow-key navigation doesn't also walk
-      // the character around underneath the open panel.
+      // the character around underneath the open panel; the windows it opens
+      // are included for the same reason — the character should stand still
+      // while an option dialog has the screen.
       const dialogOpen =
         !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen ||
-        DirectionScene.isActive || UIGameMenu.isVisible;
+        DirectionScene.isActive || UIGameMenu.isVisible ||
+        UISystemOption.isVisible || UIGameOption.isVisible ||
+        UIChannelSelect.isVisible;
 
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
@@ -536,6 +541,8 @@ MapStateInstance.doUpdate = function (
           ShopUI.hide();
         } else if (UISystemOption.isVisible) {
           UISystemOption.hide();
+        } else if (UIGameOption.isVisible) {
+          UIGameOption.hide();
         } else if (UIChannelSelect.isVisible) {
           UIChannelSelect.hide();
         } else if (UIGameMenu.isVisible) {
