@@ -90,7 +90,16 @@ function handleSelectCharacter(playerId, data) {
 
 function handleSaveCharacter(playerId, data) {
   const player = players.get(playerId);
-  if (!player || !player.characterId) return;
+  if (!player) return;
+  // NEVER drop a save silently. A connection without characterId is a
+  // client that reconnected without resuming its session (or a server that
+  // restarted underneath it) — discarding its saves without a word cost a
+  // player hours of progress. Tell it so it can re-authenticate and retry.
+  if (!player.characterId) {
+    console.warn(`[Save] save_character from unauthenticated connection ${playerId} — rejecting`);
+    sendToPlayer(player.ws, { type: 'save_character_result', success: false, error: 'not_authenticated' });
+    return;
+  }
   // Never persist a bogus map id — drop map/pos so the DB row keeps the last
   // real location instead of teleporting the character to the start map
   if (!validMapId(data.mapId)) {
