@@ -13,6 +13,7 @@ import UIDevTools from "./UIDevTools";
 import UIHotkeyBar from "./UIHotkeyBar";
 import UIChatLog from "./UIChatLog";
 import UIGameMenu from "./UIGameMenu";
+import UIChannelSelect from "./UIChannelSelect";
 
 export interface UIMapInterface {
   statusBarLevelDigits: any[];
@@ -164,13 +165,20 @@ UIMap.addButtons = function (canvas) {
   // Popup for the MENU button. Not awaited — its assets load in the
   // background and the panel starts hidden, so nothing can be clicked early.
   void UIGameMenu.initialize(canvas);
+  void UIChannelSelect.initialize(canvas);
+  // No server-side channels yet, so switching is a local selection only: the
+  // player is told, and the choice is remembered for when the server grows
+  // real channel support.
+  UIChannelSelect.onChanged = (channel) => {
+    UIChatLog.notice(`[Channel] Moved to channel ${channel + 1}.`);
+  };
   UIGameMenu.onAction = (action) => {
     switch (action) {
       case "quit":
         void quitToLogin(canvas);
         break;
       case "channel":
-        console.log("change channel — not implemented yet");
+        UIChannelSelect.show();
         break;
       case "skin":
         console.log("change skin — not implemented yet");
@@ -540,6 +548,8 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
 
   // GAME MENU popup sits above the bar it springs from, but below the cursor
   UIGameMenu.draw(canvas, camera, lag, msPerTick, tdelta);
+  UIChannelSelect.doUpdate(canvas);
+  UIChannelSelect.draw(canvas, camera, lag, msPerTick, tdelta);
 
   // Chat log above the status bar (under the cursor drawn by UICommon)
   UIChatLog.render(canvas);
