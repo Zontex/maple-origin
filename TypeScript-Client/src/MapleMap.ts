@@ -1024,9 +1024,13 @@ MapleMap.render = function (
         box.width,
         box.height
       );
-      // Position anchor — the point compared against foothold ends
+      // Position anchor — a crosshair whose arms END exactly at pos, so it
+      // cannot visually overshoot the foothold line the way a centred dot did
       ctx.fillStyle = '#FFEE00';
-      ctx.fillRect(Math.round(pc.pos.x - camera.x) - 2, Math.round(pc.pos.y - camera.y) - 2, 5, 5);
+      const ax = Math.round(pc.pos.x - camera.x);
+      const ay = Math.round(pc.pos.y - camera.y);
+      ctx.fillRect(ax - 4, ay, 9, 1);
+      ctx.fillRect(ax, ay - 4, 1, 5);
       ctx.restore();
     }
   }
