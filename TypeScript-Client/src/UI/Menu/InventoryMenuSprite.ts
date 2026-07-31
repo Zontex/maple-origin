@@ -1195,7 +1195,18 @@ class InventoryMenuSprite extends DragableMenu {
   }
 
   // Drop items — single items drop immediately, stackable items show quantity dialog
-  showItemDropDialog(item: any, slotIndex: number) {
+  async showItemDropDialog(item: any, slotIndex: number) {
+    // What the item itself says. v83 marks untradeable and quest items in
+    // their own WZ info node, and their tooltips already tell the player as
+    // much in orange — nothing was enforcing it, so a Relaxer chair
+    // (tradeBlock=1) could be thrown on the floor. This covers every item
+    // carrying the flags, not just chairs.
+    const { canDropItem } = await import('../../Inventory/ItemRestrictions');
+    if (!(await canDropItem(item.itemId))) {
+      console.log(`[Inventory] #${item.itemId} cannot be dropped (untradeable or quest item)`);
+      return;
+    }
+
     // Block dropping quest items
     const questManager = this.charecter?.questManager;
     if (questManager) {

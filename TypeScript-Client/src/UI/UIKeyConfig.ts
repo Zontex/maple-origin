@@ -108,6 +108,11 @@ interface UIKeyConfigInterface {
   dragY: number;
   _clickHeld: boolean;
   _restore: Record<number, BindableAction> | null;
+  /** Horizontal offset of each button from the window's left edge. */
+  _buttonDx: number[];
+  /** Grab offset while the title bar is being dragged, null when it is not. */
+  _windowDrag: { dx: number; dy: number } | null;
+  syncButtons: () => void;
   initialize: (canvas: GameCanvas) => Promise<void>;
   show: () => void;
   hide: () => void;
@@ -129,6 +134,19 @@ UIKeyConfig.dragX = 0;
 UIKeyConfig.dragY = 0;
 UIKeyConfig._clickHeld = false;
 UIKeyConfig._restore = null;
+UIKeyConfig._buttonDx = [];
+UIKeyConfig._windowDrag = null;
+
+/** The title plate across the top of the background, used as the drag handle. */
+const TITLE_H = 26;
+
+/** Buttons carry absolute coordinates, so they have to follow the window. */
+UIKeyConfig.syncButtons = function () {
+  this.buttons.forEach((b, i) => {
+    b.x = this.x + (this._buttonDx[i] ?? 0);
+    b.y = this.y + BTN_Y;
+  });
+};
 
 const slotRect = (s: KeySlot) => ({
   x: UIKeyConfig.x + s.x,
@@ -193,7 +211,9 @@ UIKeyConfig.initialize = async function (canvas: GameCanvas) {
       });
       ClickManager.addButton(b);
       this.buttons.push(b);
+      this._buttonDx.push(dx);
     };
+    this._buttonDx = [];
     // Bindings apply as they are dropped, so OK only has to close.
     mk(BTN_X.default, kc.nGet("BtDefault"), () => KeyBindings.resetToDefault());
     mk(BTN_X.delete, kc.nGet("BtDelete"), () => KeyBindings.replaceAll({}));
@@ -237,6 +257,24 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
   this.dragX = mx;
   this.dragY = my;
 
+  // Moving the window itself, by its title plate. Handled before anything
+  // else so a drag in progress owns the mouse.
+  if (this._windowDrag) {
+    if (canvas.clicked) {
+      this.x = mx - this._windowDrag.dx;
+      this.y = my - this._windowDrag.dy;
+      // Keep it reachable — the title bar must stay on screen or there is no
+      // way to drag it back.
+      this.x = Math.max(-WIN_W + 80, Math.min(config.width - 80, this.x));
+      this.y = Math.max(0, Math.min(config.height - TITLE_H, this.y));
+      this.syncButtons();
+      return;
+    }
+    this._windowDrag = null;
+    this._clickHeld = false;
+    return;
+  }
+
   // canvas.clicked stays true for the whole press, so the pickup is latched
   // to the frame the button goes down and the drop to the frame it comes up.
   if (!canvas.clicked) {
@@ -253,6 +291,15 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
   }
   if (this._clickHeld) return;
   this._clickHeld = true;
+
+  // Grab the title plate to move the window.
+  if (
+    mx >= this.x && mx <= this.x + WIN_W &&
+    my >= this.y && my <= this.y + TITLE_H
+  ) {
+    this._windowDrag = { dx: mx - this.x, dy: my - this.y };
+    return;
+  }
 
   // Pick up off a key…
   const slot = KEY_SLOTS.find((s) => inside(slotRect(s), mx, my));

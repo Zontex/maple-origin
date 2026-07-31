@@ -757,6 +757,11 @@ MapStateInstance.doRender = function (
       MapleMap.questDialog.draw(canvas, camera, lag, msPerTick, tdelta);
     }
 
+    // KEYBOARD SETTING sits under the draggable menus. Its input still runs
+    // from UIMap.doUpdate; only the drawing moved here, because that block
+    // runs after this one and the window covered anything opened on top.
+    UIKeyConfig.draw(canvas, camera, lag, msPerTick, tdelta);
+
     this.UIMenus.forEach((menu) => {
       menu.draw(canvas, camera, lag, msPerTick, tdelta);
     });
