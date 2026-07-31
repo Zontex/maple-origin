@@ -21,6 +21,10 @@ import UIQuestAlarm from "./UI/UIQuestAlarm";
 import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
 import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
+import UIGameMenu from "./UI/UIGameMenu";
+import UIChannelSelect from "./UI/UIChannelSelect";
+import UISystemOption from "./UI/UISystemOption";
+import UIGameOption from "./UI/UIGameOption";
 import MySocket from "./mysocket";
 import DebugDrag from "./UI/DebugDrag";
 import DragManager from "./UI/DragManager";
@@ -57,6 +61,8 @@ export interface MapState extends UIState {
     m: boolean;
     e: boolean;
     k: boolean;
+    esc: boolean;
+    enter: boolean;
   };
 }
 
@@ -331,6 +337,8 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     m: false,
     e: false,
     k: false,
+    esc: false,
+    enter: false,
   } as any;
 
   await initializeMapState(map, true);
@@ -466,8 +474,15 @@ MapStateInstance.doUpdate = function (
       // the UI while a Direction intro plays)
       DirectionScene.update(msPerTick);
       const questDialogOpen = MapleMap.questDialog && !MapleMap.questDialog.isHidden;
+      // UIGameMenu is included so its arrow-key navigation doesn't also walk
+      // the character around underneath the open panel; the windows it opens
+      // are included for the same reason — the character should stand still
+      // while an option dialog has the screen.
       const dialogOpen =
-        !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen || DirectionScene.isActive;
+        !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen ||
+        DirectionScene.isActive || UIGameMenu.isVisible ||
+        UISystemOption.isVisible || UIGameOption.isVisible ||
+        UIChannelSelect.isVisible;
 
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
@@ -514,7 +529,9 @@ MapStateInstance.doUpdate = function (
         this.skillMenu.setIsHidden(!this.skillMenu.isHidden);
       }
 
-      if (canvas.isKeyDown("esc") && !DirectionScene.isActive) {
+      // Edge-triggered: ESC now toggles the game menu, and without this a held
+      // key would open and close it once per frame.
+      if (canvas.isKeyDown("esc") && !this.previousKeyboardState.esc && !DirectionScene.isActive) {
         // First check if any dialog is open
         if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {
           MapleMap.questDialog.hide();
@@ -522,11 +539,36 @@ MapStateInstance.doUpdate = function (
           MapleMap.npcDialog.setIsHidden(true);
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
+        } else if (UISystemOption.isVisible) {
+          UISystemOption.hide();
+        } else if (UIGameOption.isVisible) {
+          UIGameOption.hide();
+        } else if (UIChannelSelect.isVisible) {
+          UIChannelSelect.hide();
+        } else if (UIGameMenu.isVisible) {
+          UIGameMenu.hide();
         } else {
           const notHiddenMenus = this.UIMenus.filter((menu) => !menu.isHidden);
           if (notHiddenMenus.length > 0) {
             notHiddenMenus[notHiddenMenus.length - 1].setIsHidden(true);
+          } else {
+            // Nothing left to dismiss — v83 opens the game menu instead.
+            UIGameMenu.open();
           }
+        }
+      }
+
+      // Keyboard navigation for the game menu. Movement is already suppressed
+      // via dialogOpen above, so the arrows are free to drive the cursor.
+      if (UIGameMenu.isVisible) {
+        if (canvas.isKeyDown("up") && !this.previousKeyboardState.up) {
+          UIGameMenu.moveSelection(-1);
+        }
+        if (canvas.isKeyDown("down") && !this.previousKeyboardState.down) {
+          UIGameMenu.moveSelection(1);
+        }
+        if (canvas.isKeyDown("enter") && !this.previousKeyboardState.enter) {
+          UIGameMenu.activateSelected();
         }
       }
 
@@ -567,6 +609,11 @@ MapStateInstance.doUpdate = function (
     this.previousKeyboardState.m = canvas.isKeyDown("m");
     this.previousKeyboardState.e = canvas.isKeyDown("e");
     (this.previousKeyboardState as any).k = canvas.isKeyDown("k");
+    this.previousKeyboardState.esc = canvas.isKeyDown("esc");
+    this.previousKeyboardState.enter = canvas.isKeyDown("enter");
+    // Release the Enter that confirmed a game-menu entry, so the next press is
+    // free to open the chat again.
+    if (!canvas.isKeyDown("enter")) UIGameMenu.swallowEnter = false;
     this.previousKeyboardState.up = canvas.isKeyDown("up");
     this.previousKeyboardState.down = canvas.isKeyDown("down");
     this.previousKeyboardState.left = canvas.isKeyDown("left");

@@ -74,7 +74,30 @@ class MapleInput {
     input.style.caretColor = color;
     input.style.zIndex = "10";
 
-    input.type = type;
+    // Chrome only treats a real type="password" field as a credential: it
+    // offers to save the value and runs its "found in a data breach" check on
+    // every login, which puts a browser modal over the game. A text field
+    // masked with -webkit-text-security looks and behaves identically to the
+    // player but is invisible to the password manager.
+    //
+    // Feature-detected rather than assumed — without the CSS the field would
+    // render the password in plain text, so anywhere it is unsupported we keep
+    // the native password input and accept the browser UI.
+    const canMaskWithCss =
+      type === "password" &&
+      typeof CSS !== "undefined" &&
+      typeof CSS.supports === "function" &&
+      CSS.supports("-webkit-text-security", "disc");
+
+    if (canMaskWithCss) {
+      input.type = "text";
+      input.style.setProperty("-webkit-text-security", "disc");
+    } else {
+      input.type = type;
+    }
+
+    input.autocomplete = "off";
+    input.spellcheck = false;
 
     input.addEventListener("focus", () => {
       this.focusListeners.forEach((listener: Function) => listener());
