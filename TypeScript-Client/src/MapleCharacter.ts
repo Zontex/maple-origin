@@ -1996,6 +1996,20 @@ isCloseToMob = (inAllDirections = true) => {
   }
 
   /**
+   * Debug: the touch-damage hitbox in world coordinates, for the F10
+   * collision overlay. Kept next to nothing — it just exposes the same box
+   * checkForMobsHit tests, so the overlay can never drift from the truth.
+   */
+  getTouchBox() {
+    return {
+      x: this.pos.x - TOUCH_HALF_W,
+      y: this.pos.y - TOUCH_H,
+      width: TOUCH_HALF_W * 2,
+      height: TOUCH_H,
+    };
+  }
+
+  /**
    * Chair sprite. Drawn before the body because the item's `effect/z` is -1,
    * i.e. behind the character.
    *

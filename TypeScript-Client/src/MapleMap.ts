@@ -810,6 +810,17 @@ MapleMap.update = function (msPerTick) {
   });
 };
 
+// Collision debug overlay, toggled with F10 (F9 is DebugDrag): draws every
+// foothold line, the player's touch-damage hitbox, and the position anchor —
+// the point whose crossing of a foothold's end is what makes you fall.
+let debugCollision = false;
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'F10') {
+    debugCollision = !debugCollision;
+    console.log(`[Collision] overlay ${debugCollision ? 'ENABLED' : 'disabled'} — green: footholds, red: touch hitbox, yellow: position anchor`);
+  }
+});
+
 // Reusable per-layer buckets for dynamic entities. drawLayer runs up to 8
 // times a frame, and filtering four collections inside it meant 32 throwaway
 // arrays plus 8 full scans of each collection every single frame. These are
@@ -990,7 +1001,35 @@ MapleMap.render = function (
   // Station departure clock (world-space) / timed-ride countdown
   UIShipClock.draw(canvas, camera);
 
-  // Object.values(this.footholds).forEach(draw); // debug: draw foothold lines
+  // F10 collision overlay — on top of everything so lines stay visible
+  if (debugCollision) {
+    for (const fh of this.footholdList || []) {
+      canvas.drawLine({
+        x1: fh.x1 - camera.x, y1: fh.y1 - camera.y,
+        x2: fh.x2 - camera.x, y2: fh.y2 - camera.y,
+        color: '#00FF00', width: 1,
+      });
+    }
+    const pc = this.PlayerCharacter;
+    const box = pc?.getTouchBox?.();
+    if (box) {
+      const ctx = canvas.context;
+      ctx.save();
+      // Touch-damage hitbox
+      ctx.strokeStyle = '#FF3333';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        Math.round(box.x - camera.x) + 0.5,
+        Math.round(box.y - camera.y) + 0.5,
+        box.width,
+        box.height
+      );
+      // Position anchor — the point compared against foothold ends
+      ctx.fillStyle = '#FFEE00';
+      ctx.fillRect(Math.round(pc.pos.x - camera.x) - 2, Math.round(pc.pos.y - camera.y) - 2, 5, 5);
+      ctx.restore();
+    }
+  }
 };
 
 // --- New: Simple click handler for NPCs ---
