@@ -14,9 +14,16 @@
 //   concurrentAudio.play();
 // }
 
-const playingAudios = new Map<any, number>();
+// WeakMap, not Map: this is keyed by the source Audio element, so a strong
+// Map pinned one entry per WZ sound node for the life of the page and kept
+// every element it had ever throttled alive alongside it
+const playingAudios = new WeakMap<object, number>();
 
 function PLAY_AUDIO(audio: any, volume = 1, allowOverlap = false) {
+  if (!audio || typeof audio.cloneNode !== "function") {
+    return;
+  }
+
   const now = Date.now();
   const lastPlayed = playingAudios.get(audio) || 0;
 
@@ -25,7 +32,9 @@ function PLAY_AUDIO(audio: any, volume = 1, allowOverlap = false) {
   if (allowOverlap || now - lastPlayed > 50) {
     const concurrentAudio = audio.cloneNode();
     concurrentAudio.volume = volume;
-    concurrentAudio.play();
+    // Rejects under autoplay policy and while the source is still loading —
+    // unhandled, it surfaces as an unhandledrejection and gets logged home
+    concurrentAudio.play()?.catch(() => {});
     playingAudios.set(audio, now);
   }
 }

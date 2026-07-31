@@ -93,14 +93,29 @@ class MySocket {
 
   constructor() {}
 
+  private _inRemoteLog = false;
+
   // Send a log message to the server for display in server console
   remoteLog(...args: any[]) {
-    const msg = args.map(a => {
-      if (a instanceof Error) return `${a.message}\n${a.stack}`;
-      if (typeof a === 'object') try { return JSON.stringify(a); } catch { return String(a); }
-      return String(a);
-    }).join(' ');
-    this.sendMessage({ type: 'client_log', data: msg });
+    // Never re-enter. sendMessage warns when the socket is down, that warning
+    // is itself console-hooked, and forwarding it calls sendMessage again —
+    // unbounded recursion. The update loop fires every 33ms, so once the
+    // socket dropped this pinned the main thread and froze the tab.
+    if (this._inRemoteLog) return;
+    // Nothing to forward over a dead socket; bail before sendMessage warns
+    if (!this.isConnected || this.socket?.readyState !== WebSocket.OPEN) return;
+
+    this._inRemoteLog = true;
+    try {
+      const msg = args.map(a => {
+        if (a instanceof Error) return `${a.message}\n${a.stack}`;
+        if (typeof a === 'object') try { return JSON.stringify(a); } catch { return String(a); }
+        return String(a);
+      }).join(' ');
+      this.sendMessage({ type: 'client_log', data: msg });
+    } finally {
+      this._inRemoteLog = false;
+    }
   }
 
   // Install console hooks — all console.log/warn/error also go to server
@@ -618,9 +633,17 @@ class MySocket {
         console.error("Error sending message:", error);
       }
     } else {
-      console.warn("Cannot send message: WebSocket not connected");
+      // Throttled: the update loop calls this ~30x/second, so an unnoticed
+      // disconnect otherwise buries the console in identical warnings
+      const now = Date.now();
+      if (now - this._lastDisconnectWarn > 5000) {
+        this._lastDisconnectWarn = now;
+        console.warn("Cannot send message: WebSocket not connected");
+      }
     }
   }
+
+  private _lastDisconnectWarn = 0;
   
   sendPlayerInfo() {
     if (!MyCharacter || !MyCharacter.stats) {
