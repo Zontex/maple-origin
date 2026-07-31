@@ -138,11 +138,28 @@ export default class QuestManager {
   // server-side before running end scripts. Mob kills and positive item counts
   // must be met; count-0 item entries are skipped (Cosmic treats missing/zero
   // count as always-met — e.g. Roger's Apple relies on the script's own check).
+  /**
+   * Completion-side prerequisite quests. Wrapper quests hinge on this:
+   * Lucas's "Chief's Introduction" (1040) completes only once Mai's four
+   * trainings (1041-1044) are all done — ignoring it let 1040 be turned in
+   * immediately, and since Mai's chain requires 1040 IN PROGRESS, the
+   * premature completion dead-locked the whole training center.
+   */
+  private meetsCompleteQuestReqs(reqs: any): boolean {
+    if (reqs.complete?.quests) {
+      for (const q of reqs.complete.quests) {
+        if (this.getQuestState(q.id) !== q.state) return false;
+      }
+    }
+    return true;
+  }
+
   canRunEndScript(questId: number): boolean {
     const active = this.activeQuests.get(questId);
     if (!active) return false;
     const reqs = QuestData.requirements.get(questId);
     if (!reqs) return false;
+    if (!this.meetsCompleteQuestReqs(reqs)) return false;
 
     if (reqs.complete.mobs) {
       for (const mob of reqs.complete.mobs) {
@@ -163,6 +180,8 @@ export default class QuestManager {
 
     const reqs = QuestData.requirements.get(questId);
     if (!reqs) return false;
+
+    if (!this.meetsCompleteQuestReqs(reqs)) return false;
 
     // Script-based quests — completable (the endscript runs when clicked in the
     // NPC's quest listing) as soon as the WZ completion reqs are met, exactly
