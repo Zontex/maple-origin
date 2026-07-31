@@ -107,20 +107,35 @@ Camera.lookAt = function (x, y) {
   }
 };
 
+// Ease one axis toward its target, keeping the camera on whole pixels.
+//
+// The position has to stay integral (sub-pixel camera values tear seams
+// between map tiles), but rounding after easing used to swallow the tail of
+// the movement: within 5px of the target the 10% step is under half a pixel,
+// so Math.round returned the previous value and the camera stalled there
+// forever. Whatever position it happened to be passing through became its
+// resting place, which is why the login screen settled somewhere different
+// depending on whether it was reached from boot or from QUIT GAME.
+//
+// Creeping a single pixel whenever rounding cancels the step keeps the easing
+// feel and still lands exactly on the target.
+function easeAxis(current: number, target: number): number {
+  if (current === target) return current;
+
+  const eased = Math.round(current + (target - current) * easeSpeed);
+  if (eased === current) return current + Math.sign(target - current);
+  // Never overshoot on the final pixels.
+  if (Math.sign(target - eased) !== Math.sign(target - current)) return target;
+  return eased;
+}
+
 Camera.update = function () {
   if (this.x === targetX && this.y === targetY) {
     return;
   }
 
-  this.x += (targetX - this.x) * easeSpeed;
-  this.y += (targetY - this.y) * easeSpeed;
-
-  if (Math.abs(this.x - targetX) < 0.5) this.x = targetX;
-  if (Math.abs(this.y - targetY) < 0.5) this.y = targetY;
-
-  // Round to integers to prevent sub-pixel rendering artifacts (flickering lines/seams)
-  this.x = Math.round(this.x);
-  this.y = Math.round(this.y);
+  this.x = easeAxis(this.x, targetX);
+  this.y = easeAxis(this.y, targetY);
 };
 
 Camera.doReset = function () {
