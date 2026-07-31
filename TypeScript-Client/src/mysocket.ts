@@ -523,6 +523,12 @@ class MySocket {
         case "player_id":
           this.handlePlayerId(data);
           break;
+        case "reregister":
+          // Server got a request from us but has no player.info — our
+          // registration was lost (reconnect, server restart). Re-send it.
+          console.warn('[Socket] Server asked us to re-register');
+          this.sendPlayerInfo();
+          break;
         case "player_joined":
           this.handlePlayerJoined(data);
           break;
@@ -1596,6 +1602,18 @@ class MySocket {
     setInterval(() => {
       try {
         if (!this.isConnected || !this.playerId || !MyCharacter) return;
+
+        // Deferred registration retries HERE, unconditionally — not inside
+        // sendPlayerUpdate, which only runs when the player moves. Gated
+        // behind movement, a player who reconnected mid-map-load stayed
+        // unregistered until they happened to jump: the server had no
+        // player.info for them, silently dropped their request_host_check
+        // watchdog pleas, and every mob sat frozen in remote mode. This was
+        // the "mobs frozen until I restart the backend and jump" bug — the
+        // jump was the part that fixed it.
+        if (this._needsRegistration) {
+          this.sendPlayerInfo();
+        }
         
         // Only send updates when the position or state has changed
         const posChanged = (

@@ -7,6 +7,7 @@ const { handleChatMessage } = require('./handlers/chat');
 const { handleReactorHit, handleReactorRespawn } = require('./handlers/reactor');
 const { handleRegister, handleLogin, handleGetWorlds, handleGetCharacters, handleCheckName, handleCreateCharacter, handleDeleteCharacter, handleSelectCharacter, handleSaveCharacter } = require('./handlers/auth');
 const { players } = require('./state');
+const { sendToPlayer } = require('./network');
 const { assignMapHost } = require('./hostManager');
 
 /**
@@ -16,7 +17,15 @@ const { assignMapHost } = require('./hostManager');
  */
 function handleHostCheck(playerId) {
   const player = players.get(playerId);
-  if (!player || !player.info) return;
+  if (!player) return;
+  // A host-check from an unregistered client means it lost (or never
+  // completed) registration — dropping the request silently left it asking
+  // every 5s forever while its mobs stayed frozen. Tell it to re-register;
+  // handlePlayerInfo will assign the host from there.
+  if (!player.info) {
+    sendToPlayer(player.ws, { type: 'reregister' });
+    return;
+  }
   assignMapHost(player.mapId, playerId);
 }
 
