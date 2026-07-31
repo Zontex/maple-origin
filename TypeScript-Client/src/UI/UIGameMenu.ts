@@ -25,9 +25,17 @@ const WELL_TOP = 19;
 const WELL_H = 112;
 const BTN_H = 25;
 
+// Each button's art ends in its own dark border, which reads as a gap against
+// the equally dark well — so distributing across the measured bounds alone
+// leaves the stack looking short of the frame top and bottom. A small overhang
+// past the well fills it visually without touching the white border.
+const WELL_OVERHANG = 2;
+
 function buttonY(index: number, count: number): number {
-  if (count <= 1) return WELL_TOP;
-  return WELL_TOP + Math.round((index * (WELL_H - BTN_H)) / (count - 1));
+  const top = WELL_TOP - WELL_OVERHANG;
+  if (count <= 1) return top;
+  const span = WELL_H + WELL_OVERHANG * 2 - BTN_H;
+  return top + Math.round((index * span) / (count - 1));
 }
 
 // Status bar art is 800x71 and sits flush with the bottom of the screen; the
