@@ -9,6 +9,15 @@
       "f": 0,
       "hide": 0,
       "_note": "Maple Administrator, Free Market entrance. Stands on foothold 32 (x 135..225, y -176), the clear stretch of the entrance platform between Fredrick (x=83) and Scrooge (x=288). Sells the Maple item set — shop 9010000 in shops.json."
+    },
+    {
+      "id": 9000030,
+      "x": 240,
+      "cy": -176,
+      "fh": 34,
+      "f": 1,
+      "hide": 0,
+      "_note": "Maple Admin the Witness, on foothold 34 (x 225..277) just left of Scrooge. Dresses the player in a Maple avatar per job — script at public/scripts/npc/9000030.js. Faces left (f=1) toward the Administrator."
     }
   ]
 }

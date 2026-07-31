@@ -113,6 +113,10 @@ interface UIKeyConfigInterface {
   /** Grab offset while the title bar is being dragged, null when it is not. */
   _windowDrag: { dx: number; dy: number } | null;
   syncButtons: () => void;
+  /** itemId -> inventory icon, for items bound straight onto a key. */
+  itemIcons: Record<number, HTMLImageElement>;
+  loadItemIcon: (itemId: number) => void;
+  handleDrop: (drop: { type: string; id: number; mouseX: number; mouseY: number }) => boolean;
   initialize: (canvas: GameCanvas) => Promise<void>;
   show: () => void;
   hide: () => void;
@@ -139,6 +143,42 @@ UIKeyConfig._windowDrag = null;
 
 /** The title plate across the top of the background, used as the drag handle. */
 const TITLE_H = 26;
+
+UIKeyConfig.itemIcons = {};
+
+/**
+ * Item icons come from the same place the inventory gets them, and are only
+ * fetched once per item.
+ */
+UIKeyConfig.loadItemIcon = function (itemId: number) {
+  if (this.itemIcons[itemId]) return;
+  void (async () => {
+    try {
+      const Item = (await import("../Inventory/Item")).default;
+      const obj: any = await Item.fromOpts({ itemId, quantity: 1 });
+      const node = obj?.node?.info?.iconRaw || obj?.node?.info?.icon;
+      if (node?.nGetImage) this.itemIcons[itemId] = node.nGetImage();
+    } catch (e) {
+      console.warn(`[UIKeyConfig] no icon for item ${itemId}`, e);
+    }
+  })();
+};
+
+/**
+ * Take an item dragged out of the inventory and drop it onto a key.
+ *
+ * This is what makes "put the chair on X" possible at all: the quickslot bar
+ * is fixed to the eight v83 keys, so anything outside that set has to be
+ * bound here. Returns true when the drop was consumed.
+ */
+UIKeyConfig.handleDrop = function (drop) {
+  if (!this.isVisible || drop.type !== "item") return false;
+  const slot = KEY_SLOTS.find((s) => inside(slotRect(s), drop.mouseX, drop.mouseY));
+  if (!slot) return false;
+  KeyBindings.bindItem(slot.code, drop.id);
+  this.loadItemIcon(drop.id);
+  return true;
+};
 
 /** Buttons carry absolute coordinates, so they have to follow the window. */
 UIKeyConfig.syncButtons = function () {
@@ -236,6 +276,9 @@ UIKeyConfig.show = function () {
   this._clickHeld = false;
   // Captured so Cancel can put every binding back — they apply as you drop.
   this._restore = KeyBindings.snapshot();
+  for (const code of Object.keys(KeyBindings.itemBindings)) {
+    this.loadItemIcon(KeyBindings.itemBindings[Number(code)]);
+  }
   this.buttons.forEach((b) => (b.isHidden = false));
 };
 
@@ -304,6 +347,12 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
   // Pick up off a key…
   const slot = KEY_SLOTS.find((s) => inside(slotRect(s), mx, my));
   if (slot) {
+    // An item on a key is cleared by clicking it — there is no palette for
+    // items to go back to, they came from the inventory and still live there.
+    if (KeyBindings.itemBindings[slot.code] !== undefined) {
+      KeyBindings.clearItem(slot.code);
+      return;
+    }
     const action = KeyBindings.bindings[slot.code];
     if (action) {
       const info = ACTIONS.find((a) => a.action === action);
@@ -327,6 +376,20 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
 UIKeyConfig.draw = function (canvas, camera, lag, msPerTick, tdelta) {
   if (!this.isVisible || !this.background) return;
   canvas.drawImage({ img: this.background, dx: this.x, dy: this.y });
+
+  // Items bound straight to a key (chairs, potions) draw their inventory icon.
+  for (const s of KEY_SLOTS) {
+    const itemId = KeyBindings.itemBindings[s.code];
+    if (itemId === undefined) continue;
+    const img = this.itemIcons[itemId];
+    if (!img) { this.loadItemIcon(itemId); continue; }
+    const r = slotRect(s);
+    canvas.drawImage({
+      img,
+      dx: Math.round(r.x + (r.w - Math.min(img.width || ICON, ICON)) / 2),
+      dy: Math.round(r.y + (r.h - Math.min(img.height || ICON, ICON)) / 2),
+    });
+  }
 
   // Icons sitting on the keys they are bound to.
   for (const s of KEY_SLOTS) {

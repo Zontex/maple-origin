@@ -586,6 +586,26 @@ export default class NpcScriptEngine {
       // Cosmetics — mutate the character and persist on next save
       isCosmeticEquipped(id: number) { return false; },
       getCosmeticItem(slot: number) { return 0; },
+      /**
+       * Put an equip straight onto the character, no inventory round trip.
+       * Used by the Maple avatar NPC, which dresses the player rather than
+       * handing them pieces to equip themselves.
+       */
+      equipItem(itemId: number) {
+        void (async () => {
+          try {
+            const { getEquipSlotForItem } = await import("./UI/Menu/EquipMenuSprite");
+            const slot = getEquipSlotForItem(itemId);
+            if (slot === undefined || slot === null || slot < 0) {
+              console.warn(`[cm.equipItem] no slot for ${itemId}`);
+              return;
+            }
+            await character?.attachEquip?.(slot, itemId);
+          } catch (e) {
+            console.error("[cm.equipItem] failed", e);
+          }
+        })();
+      },
       setHair(id: number) { character?.setHair?.(id)?.catch?.(console.error); },
       setFace(id: number) { character?.setFace?.(id)?.catch?.(console.error); },
       setSkin(id: number) { character?.setSkinColor?.(id)?.catch?.(console.error); },

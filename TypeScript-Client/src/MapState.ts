@@ -49,6 +49,25 @@ function actionDown(canvas: GameCanvas, action: BindableAction): boolean {
 function actionPressed(canvas: GameCanvas, action: BindableAction): boolean {
   return actionDown(canvas, action) && !previousActionState[action];
 }
+/**
+ * Items bound straight onto a keyboard key, which is how anything outside the
+ * eight quickslot keys gets used — a chair on X, for instance. Edge-triggered
+ * per key, so holding it does not re-fire.
+ */
+const previousItemKeyState: Record<number, boolean> = {};
+function checkItemKeys(canvas: GameCanvas) {
+  for (const codeStr of Object.keys(KeyBindings.itemBindings)) {
+    const code = Number(codeStr);
+    const keyName = KeyBindings.keyNameForScancode(code);
+    if (!keyName) continue;
+    const down = canvas.isKeyDown(keyName);
+    if (down && !previousItemKeyState[code]) {
+      UIHotkeyBar.activateItem(KeyBindings.itemBindings[code]);
+    }
+    previousItemKeyState[code] = down;
+  }
+}
+
 function latchActions(canvas: GameCanvas) {
   // Driven off ACTIONS rather than a hand-written list so a newly bindable
   // action cannot be left unlatched and fire on every frame it is held.
@@ -648,7 +667,16 @@ MapStateInstance.doUpdate = function (
       // Process drag and drop
       const drop = DragManager.update(canvas);
       if (drop) {
-        UIHotkeyBar.handleDrop(drop);
+        // The key config window gets first refusal: it is the only way to put
+        // an item on a key outside the eight quickslots.
+        if (!UIKeyConfig.handleDrop(drop)) {
+          UIHotkeyBar.handleDrop(drop);
+        }
+      }
+
+      // Items bound directly to a key (see KeyBindings.itemBindings)
+      if (!dialogOpen) {
+        checkItemKeys(canvas);
       }
 
       MyCharacter.update(msPerTick);

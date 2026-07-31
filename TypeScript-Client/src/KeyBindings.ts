@@ -99,9 +99,44 @@ export const DEFAULT_BINDINGS: Record<number, BindableAction> = {
 };
 
 type Bindings = Record<number, BindableAction>;
+type ItemBindings = Record<number, number>;
+
+const ITEM_STORAGE_KEY = "maple_keybindings_items";
+
+function loadItems(): ItemBindings {
+  try {
+    const raw = localStorage.getItem(ITEM_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    const out: ItemBindings = {};
+    for (const k of Object.keys(parsed)) {
+      const code = Number(k);
+      const itemId = Number(parsed[k]);
+      if (Number.isFinite(code) && SCANCODE_TO_KEY[code] && Number.isFinite(itemId)) {
+        out[code] = itemId;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 interface KeyBindingsShape {
   bindings: Bindings;
+  /**
+   * scancode -> itemId. Separate from `bindings` because an item is not a
+   * BindableAction: the quickslot bar only offers the eight v83 keys, so
+   * putting an item on, say, X has to go through the key config window.
+   */
+  itemBindings: ItemBindings;
+  itemFor: (scancode: number) => number | undefined;
+  /** GameCanvas key name for a scancode, or null when it is not bindable. */
+  keyNameForScancode: (scancode: number) => string | null;
+  keyForItem: (itemId: number) => number | undefined;
+  bindItem: (scancode: number, itemId: number) => void;
+  clearItem: (scancode: number) => void;
+  saveItems: () => void;
   /** scancode currently bound to an action, or undefined. */
   keyFor: (action: BindableAction) => number | undefined;
   /** GameCanvas key name bound to an action, or null when unbound. */
@@ -144,6 +179,47 @@ function load(): Bindings {
 
 const KeyBindings: KeyBindingsShape = {
   bindings: load(),
+  itemBindings: loadItems(),
+
+  itemFor(scancode) {
+    return this.itemBindings[scancode];
+  },
+
+  keyNameForScancode(scancode) {
+    return SCANCODE_TO_KEY[scancode] ?? null;
+  },
+
+  keyForItem(itemId) {
+    for (const k of Object.keys(this.itemBindings)) {
+      if (this.itemBindings[Number(k)] === itemId) return Number(k);
+    }
+    return undefined;
+  },
+
+  bindItem(scancode, itemId) {
+    // One key per item, and a key holds one thing — dropping an item on a key
+    // that has an action takes the key over, and the action goes back to the
+    // palette, the same as action-on-action.
+    const prev = this.keyForItem(itemId);
+    if (prev !== undefined) delete this.itemBindings[prev];
+    delete this.bindings[scancode];
+    this.itemBindings[scancode] = itemId;
+    this.save();
+    this.saveItems();
+  },
+
+  clearItem(scancode) {
+    delete this.itemBindings[scancode];
+    this.saveItems();
+  },
+
+  saveItems() {
+    try {
+      localStorage.setItem(ITEM_STORAGE_KEY, JSON.stringify(this.itemBindings));
+    } catch (e) {
+      console.warn("[KeyBindings] could not save item bindings", e);
+    }
+  },
 
   keyFor(action) {
     for (const k of Object.keys(this.bindings)) {
@@ -163,6 +239,12 @@ const KeyBindings: KeyBindingsShape = {
     // Whatever already sat on the target is displaced back to the palette.
     const prev = this.keyFor(action);
     if (prev !== undefined) delete this.bindings[prev];
+    // A key holds one thing, so an action dropped onto a key that carries an
+    // item displaces the item rather than both firing off the same press.
+    if (this.itemBindings[scancode] !== undefined) {
+      delete this.itemBindings[scancode];
+      this.saveItems();
+    }
     this.bindings[scancode] = action;
     this.save();
   },
