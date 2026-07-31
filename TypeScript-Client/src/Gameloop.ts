@@ -48,6 +48,10 @@ class GameLoop {
 
     Timer.update();
     this.lag += Timer.delta;
+    // Cap catch-up: rAF pauses in background tabs, so after minutes away an
+    // uncapped lag would run thousands of update ticks in one frame and hang
+    // the page ("Page Unresponsive"). Skip the lost time instead.
+    if (this.lag > 250) this.lag = 250;
     while (this.lag >= this.msPerTick) {
       this.lag -= this.msPerTick;
       Timer.tdelta += this.msPerTick;

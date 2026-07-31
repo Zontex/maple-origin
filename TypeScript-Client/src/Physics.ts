@@ -103,7 +103,7 @@ class Physics {
         this.down &&
         !fh.cantThrough &&
         !fh.forbid &&
-        Object.values(getMapleMap().footholds || {}).some((f: any) => {
+        (getMapleMap().footholdList || []).some((f: any) => {
           return f.id != fh.id && f.x1 < x && f.x2 > x && f.y1 > y && f.y2 > y;
         })
       ) {
@@ -402,7 +402,7 @@ class Physics {
           let nnx = x + dx1;
           let nny = y + dy1;
 
-          for (let f of Object.values<any>(getMapleMap().footholds || {})) {
+          for (let f of (getMapleMap().footholdList || []) as any[]) {
             let dx2 = f.x2 - f.x1,
               dy2 = f.y2 - f.y1;
             let dx3 = x - f.x1,

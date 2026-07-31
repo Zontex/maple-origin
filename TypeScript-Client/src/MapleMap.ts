@@ -31,6 +31,10 @@ export interface MapleMap {
   isTown: boolean;
   isSwimMap: boolean;
   footholds: any;
+  // Pre-flattened footholds. Physics scans every foothold per entity per
+  // substep; Object.values() there allocated a fresh array each time.
+  // Safe to cache: footholds is only ever assigned inside load().
+  footholdList: any[];
   boundaries: any;
   backgrounds: any;
   tiles: any;
@@ -48,6 +52,9 @@ export interface MapleMap {
   mobProjectiles: any[];
   reactors: Reactor[];
   itemDrops: any;
+  // Static per-layer buckets (tiles/objects never change layer after load)
+  _tilesByLayer?: any[][];
+  _objectsByLayer?: any[][];
   PlayerCharacter: any;
   shipObject: any;
   doneLoading: boolean;
@@ -106,6 +113,25 @@ MapleMap.load = async function (id: number | string) {
   const startTime = new Date().getTime();
   this.doneLoading = false;
 
+  // Reset every per-frame collection BEFORE the first await — if load throws
+  // midway, update()/render() must still see a consistent (empty) map rather
+  // than crash-looping on undefined arrays every frame
+  this.npcs = [];
+  this.monsters = [];
+  this.mobProjectiles = [];
+  this.reactors = [];
+  this.characters = [];
+  this.backgrounds = [];
+  this.tiles = [];
+  this.objects = [];
+  this.portals = [];
+  this.itemDrops = [];
+  this._tilesByLayer = Array.from({ length: 8 }, () => []);
+  this._objectsByLayer = Array.from({ length: 8 }, () => []);
+  this.footholds = this.footholds || {};
+  this.footholdList = this.footholdList || [];
+  this.boundaries = this.boundaries || { left: 0, right: 0, top: 0, bottom: 0 };
+
   // Free map-specific assets (Mob.wz, Map.wz, Npc.wz) from previous map
   WZManager.unloadTransient();
 
@@ -121,11 +147,6 @@ MapleMap.load = async function (id: number | string) {
   this.isSwimMap = !!this.wzNode.info.nGet("swim").nGet("nValue", 0);
   console.log(`is town: ${this.isTown}, swim: ${this.isSwimMap}`);
   console.log("Map WZ Node:", this.wzNode);
-  this.npcs = [];
-  this.monsters = [];
-  this.mobProjectiles = [];
-  this.reactors = [];
-  this.characters = [];
 
   if (!this.PlayerCharacter) {
     this.PlayerCharacter = null;
@@ -133,6 +154,7 @@ MapleMap.load = async function (id: number | string) {
 
   // Phase 1: Footholds + boundaries (sync, needed by NPCs/monsters)
   this.footholds = this.loadFootholds(this.wzNode.foothold);
+  this.footholdList = Object.values(this.footholds);
   this.boundaries = this.loadBoundaries(this.wzNode, this.footholds);
   Camera.setBoundaries(this.boundaries);
   Camera.lookAt(this.boundaries.left, this.boundaries.top);
@@ -151,6 +173,17 @@ MapleMap.load = async function (id: number | string) {
   this.portals = portals;
   this.names = names;
 
+  // Bucket static geometry by layer once — render() walks layers every frame
+  // and filtering the full arrays 8x per frame is wasted work
+  this._tilesByLayer = Array.from({ length: 8 }, () => []);
+  this._objectsByLayer = Array.from({ length: 8 }, () => []);
+  for (const tile of this.tiles) {
+    if (tile.layer >= 0 && tile.layer <= 7) this._tilesByLayer[tile.layer].push(tile);
+  }
+  for (const obj of this.objects) {
+    if (obj.layer >= 0 && obj.layer <= 7) this._objectsByLayer[obj.layer].push(obj);
+  }
+
   // Transport visuals: docked/enemy vessel (shipObj node) + departure clock
   this.shipObject = await ShipObject.fromMapNode(this.wzNode, id as number);
   UIShipClock.setFromMap(this.wzNode, id as number);
@@ -168,7 +201,6 @@ MapleMap.load = async function (id: number | string) {
   Timer.doReset();
 
   this.id = id;
-  this.itemDrops = [];
 
   // Dialog/engine init in parallel (independent)
   const [npcDialog, questDialog] = await Promise.all([
@@ -758,6 +790,31 @@ MapleMap.update = function (msPerTick) {
   });
 };
 
+// Reusable per-layer buckets for dynamic entities. drawLayer runs up to 8
+// times a frame, and filtering four collections inside it meant 32 throwaway
+// arrays plus 8 full scans of each collection every single frame. These are
+// cleared and refilled once per frame instead. Slot 8 collects entities whose
+// layer falls outside 0..7 (drawn last, as before).
+const OUTSIDE_LAYER = 8;
+const makeLayerBuckets = () =>
+  Array.from({ length: OUTSIDE_LAYER + 1 }, () => [] as any[]);
+const _monsterLayers = makeLayerBuckets();
+const _reactorLayers = makeLayerBuckets();
+const _characterLayers = makeLayerBuckets();
+const _npcLayers = makeLayerBuckets();
+const _backLayers = [[] as any[], [] as any[]]; // [behind, front]
+
+function bucketByLayer(list: any[], buckets: any[][]) {
+  for (const b of buckets) b.length = 0;
+  for (const o of list) {
+    const l = o?.layer;
+    // Non-integer layers previously matched neither `layer === i` nor the
+    // notInAnyLayer check and were silently never drawn — bucket them here
+    buckets[Number.isInteger(l) && l >= 0 && l <= 7 ? l : OUTSIDE_LAYER].push(o);
+  }
+  return buckets;
+}
+
 MapleMap.render = function (
   canvas: GameCanvas,
   camera: CameraInterface,
@@ -770,20 +827,38 @@ MapleMap.render = function (
   }
 
   currentMonsters = currentMonsters.filter((m) => !m.destroyed);
+
+  bucketByLayer(this.monsters, _monsterLayers);
+  bucketByLayer(this.reactors as any[], _reactorLayers);
+  bucketByLayer(this.characters, _characterLayers);
+  bucketByLayer(this.npcs, _npcLayers);
+  _backLayers[0].length = 0;
+  _backLayers[1].length = 0;
+  for (const bg of this.backgrounds) _backLayers[bg.front ? 1 : 0].push(bg);
   // One entity's draw error must not abort the frame — everything drawn
   // after it (mobs, portals, HUD) would silently vanish
   const draw = (obj: any) => {
     try {
       obj.draw(canvas, camera, lag, msPerTick, tdelta);
     } catch (e) {
-      if (!(obj as any)._drawErrorLogged) {
-        (obj as any)._drawErrorLogged = true;
-        console.error('[MapleMap] draw failed for entity:', e);
+      // Re-log at most every 5s rather than once ever: an entity that throws
+      // every frame is invisible for the whole session, and a single line
+      // that scrolled past is indistinguishable from "no problem"
+      const now = Date.now();
+      if (!obj._drawErrorAt || now - obj._drawErrorAt > 5000) {
+        obj._drawErrorAt = now;
+        console.error(
+          `[MapleMap] draw failed for ${obj?.constructor?.name ?? 'entity'}` +
+            `${obj === MapleMap.PlayerCharacter ? ' (PLAYER — this is why your character is invisible)' : ''}` +
+            `${obj?.name ? ` name=${obj.name}` : ''}` +
+            `${obj?.stance ? ` stance=${obj.stance} frame=${obj.frame}` : ''}:`,
+          e
+        );
       }
     }
   };
 
-  this.backgrounds.filter((bg: Background) => !bg.front).forEach(draw);
+  _backLayers[0].forEach(draw);
 
   // Docked/enemy vessel sits on the water behind every gameplay layer
   if (this.shipObject) {
@@ -832,12 +907,12 @@ MapleMap.render = function (
 
   const drawLayer = (i: number) => {
     const inCurrentLayer = (obj: Obj) => obj.layer === i;
-    this.objects.filter(inCurrentLayer).forEach(draw);
-    this.tiles.filter(inCurrentLayer).forEach(draw);
-    this.monsters.filter(inCurrentLayer).forEach(draw);
-    (this.reactors as any[]).filter(inCurrentLayer).forEach(draw);
-    this.characters.filter(inCurrentLayer).forEach(draw);
-    this.npcs.filter(inCurrentLayer).forEach(draw);
+    (this._objectsByLayer?.[i] ?? this.objects.filter(inCurrentLayer)).forEach(draw);
+    (this._tilesByLayer?.[i] ?? this.tiles.filter(inCurrentLayer)).forEach(draw);
+    _monsterLayers[i].forEach(draw);
+    _reactorLayers[i].forEach(draw);
+    _characterLayers[i].forEach(draw);
+    _npcLayers[i].forEach(draw);
   };
 
   if (isClimbing) {
@@ -860,11 +935,10 @@ MapleMap.render = function (
     for (let i = playerLayer + 1; i <= 7; i++) drawLayer(i);
   }
 
-  const notInAnyLayer = (obj: any) => !(obj.layer >= 0 && obj.layer <= 7);
-  this.monsters.filter(notInAnyLayer).forEach(draw);
-  (this.reactors as any[]).filter(notInAnyLayer).forEach(draw);
-  this.characters.filter(notInAnyLayer).forEach(draw);
-  this.npcs.filter(notInAnyLayer).forEach(draw);
+  _monsterLayers[OUTSIDE_LAYER].forEach(draw);
+  _reactorLayers[OUTSIDE_LAYER].forEach(draw);
+  _characterLayers[OUTSIDE_LAYER].forEach(draw);
+  _npcLayers[OUTSIDE_LAYER].forEach(draw);
 
   (this.mobProjectiles || []).forEach((p: any) => p.draw(canvas, camera));
 
@@ -873,7 +947,7 @@ MapleMap.render = function (
     .forEach(drawLevelUp);
 
   this.portals.forEach(draw);
-  this.backgrounds.filter((bg: Background) => !!bg.front).forEach(draw);
+  _backLayers[1].forEach(draw);
 
   this.itemDrops.forEach((drop: DropItemSprite) => {
     drop.draw(canvas, camera);
