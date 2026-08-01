@@ -25,6 +25,7 @@ import UIMiniMap from './UI/UIMiniMap';
 import UIShipClock from './UI/UIShipClock';
 import ShipObject from './Transport/ShipObject';
 import { _setMapleMap } from './Physics';
+import { drawSkillHits, clearSkillHits } from './Effects/SkillHitEffect';
 
 export interface MapleMap {
   id: number | string;
@@ -130,6 +131,7 @@ MapleMap.load = async function (id: number | string) {
   // than crash-looping on undefined arrays every frame
   this.npcs = [];
   this.monsters = [];
+  clearSkillHits();
   this.mobProjectiles = [];
   this.reactors = [];
   this.characters = [];
@@ -1006,7 +1008,10 @@ MapleMap.render = function (
     if (pc.questStartActive) drawEffect(pc, pc.questStartFrames, pc.questStartFrame);
     if (pc.incExpActive) drawEffect(pc, pc.incExpFrames, pc.incExpFrame);
     if (pc.skillEffectActive) drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame);
+    if (pc.afterimage?.active) pc.afterimage.draw(canvas, camera);
   };
+
+  drawSkillHits(canvas, camera);
 
   // Player's layer from current or last foothold (persists through jumps/climbs)
   if (this.PlayerCharacter?.pos?.fh != null) {

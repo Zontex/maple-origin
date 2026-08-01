@@ -234,6 +234,9 @@ const UIHotkeyBar = {
       const casted = await MyCharacter.useSkill?.(skillId, effect);
       if (!casted) return;
       this.playSkillSound(skillId);
+      // Attack skills carry a caster animation too — Magic Claw's claw swipe
+      // lives in its `effect` node, and only buffs were ever playing it
+      this.playSkillEffect(skillId);
     } else if (info.isBuff) {
       // Buff skill — apply buff
       if (MyCharacter.buffManager) {

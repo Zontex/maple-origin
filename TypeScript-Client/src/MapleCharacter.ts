@@ -33,6 +33,8 @@ import Portal from "./Portal";
 import DropItemSprite from "./DropItem/DropItemSprite";
 import GameCanvas from "./GameCanvas";
 import { CameraInterface } from "./Camera";
+import { AfterimageState, loadAfterimage } from "./Effects/Afterimage";
+import { spawnSkillHit } from "./Effects/SkillHitEffect";
 
 // Played the moment a quest's requirements are met — killing the 10th of 10
 // snails — alongside the red balloon. This is "quest finished", which in GMS
@@ -138,6 +140,7 @@ class MapleCharacter {
   skillEffectFrames: any[] | null = null;
   skillEffectFrame: number = 0;
   skillEffectDelay: number = 0;
+  afterimage: AfterimageState = new AfterimageState();
   _portalScriptEngine: any = null;
   pos: Physics;
   bodyRects: any = [];
@@ -1149,6 +1152,8 @@ async attack() {
   // Pick a random stance from the pool for variety
   const attackStance = stancePool[Math.floor(Math.random() * stancePool.length)];
 
+  void this.armAfterimage(attackStance);
+
   this.setStance(
     attackStance,
     0,
@@ -1298,6 +1303,20 @@ static readonly THREE_SNAILS_SHELLS: { itemId: number; damage: number; frame: nu
  * mob count, attack count, and skill-specific range.
  * Returns true if the cast actually happened (caller consumes MP/cooldown).
  */
+/**
+ * Queue the weapon's trail for an attack stance. Fires later, when the body
+ * animation reaches the stance's trigger frame (see Effects/Afterimage).
+ */
+async armAfterimage(stance: string) {
+  try {
+    const anim = await loadAfterimage(this.weaponEquipId, stance);
+    if (anim) this.afterimage.arm(anim);
+    else this.afterimage.cancel();
+  } catch (e) {
+    this.afterimage.cancel();
+  }
+}
+
 async useSkill(skillId: number, effect: any): Promise<boolean> {
   if (this.isInAttack) return false;
   if (this.isRiding) return false; // cannot use skills while mounted (v83)
@@ -1350,6 +1369,10 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
     if (info.action && this.baseBody?.[info.action]) {
       attackStance = info.action;
     }
+
+    // No weapon trail on skill casts — a skill's visuals are its own ball /
+    // effect / hit art. Swinging a staff for Energy Bolt must not streak.
+    this.afterimage.cancel();
 
     if (hasBall) {
       // Projectile skill — fire a projectile with ball sprites
@@ -1509,7 +1532,11 @@ async executeSkillDamage(skillId: number, effect: any) {
         const knockbackDirection = isCharacterFacingRight ? 1 : -1;
         monster.hit(damage, knockbackDirection, this, isCritical);
       }
-      this.createHitEffect(monster.pos.x, monster.pos.y);
+      // The skill's own impact art when it has one (Magic Claw, Energy Bolt's
+      // melee fallback); otherwise nothing, as before
+      if (effect.hitNode) {
+        spawnSkillHit(effect.hitNode, monster.pos.x, monster.pos.y, isCharacterFacingRight);
+      }
     } catch (e) {
       console.error('Error processing skill hit:', e);
     }
@@ -2499,6 +2526,15 @@ isCloseToMob = (inAllDirections = true) => {
         this.jobChangedDelay = 0;
       }
     }
+
+    // Weapon trail — ignites at the swing's apex, then plays out on its own.
+    // Gated on isInAttack so a late WZ load can't streak during idle frames.
+    if (this.isInAttack) {
+      this.afterimage.tryIgnite(this.frame, this.pos.x, this.pos.y, this.flipped);
+    } else {
+      this.afterimage.armed = false;
+    }
+    this.afterimage.update(msPerTick);
 
     // Skill effect animation (buff/attack visual)
     if (this.skillEffectActive && this.skillEffectFrames) {
