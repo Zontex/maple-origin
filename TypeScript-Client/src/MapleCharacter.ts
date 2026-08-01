@@ -683,6 +683,14 @@ class MapleCharacter {
     // this job's tab.
     this.stats.addSp(jobId, 3);
 
+    // The skill window caches the job's tier list and its loaded skills the
+    // first time it opens, and nothing ever invalidated it — onJobChange
+    // existed but was called from nowhere. So after advancing it kept showing
+    // only the Beginner tab until the client was reloaded, for every job.
+    // Reached through MapStateInstance rather than an import: MapleCharacter
+    // is upstream of the menus and a direct import closes a cycle.
+    (window as any).MapStateInstance?.skillMenu?.onJobChange?.();
+
     // Restore HP/MP to full on job change
     this.hp = this.maxHp;
     this.mp = this.maxMp;
