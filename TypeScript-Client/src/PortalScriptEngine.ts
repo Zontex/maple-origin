@@ -100,7 +100,42 @@ export default class PortalScriptEngine {
       getMapId() { return character?.map?.mapId ?? 0; },
       getMap() { return { getId() { return character?.map?.mapId ?? 0; } }; },
       getClient() { return { getPlayer() { return playerObj; } }; },
-      getSavedLocation(type: string) { return -1; },
+      // Saved locations live on the character, shared with NpcScriptEngine —
+      // the engines are recreated per map, the store must not be. This used to
+      // be a hardcoded `return -1` with no saveLocation at all, which broke the
+      // Free Market at both ends: the town-side scripts' saveLocation("FREE_
+      // MARKET") degraded to a no-op through the safe shim, and market00 asked
+      // for it on the way out, got -1, and warped there. Nothing threw, so the
+      // script's own catch-fallback to Henesys never fired and you landed in an
+      // unloadable map with no portals. Same failure shape as Pison's Florina
+      // return: a -1 sentinel treated as a map id.
+      saveLocation(type: string) {
+        const c: any = character;
+        if (!c) return;
+        c.savedLocations = c.savedLocations || {};
+        c.savedLocations[type] = c.map?.mapId ?? 0;
+        // Also remember WHICH door was used, not just the map. The Free
+        // Market's exit script asks for a portal to come back out of, and the
+        // only exact answer is the one walked into — towns have several
+        // portals and the map's spawn point is usually none of them, which
+        // dropped you somewhere else in Perion entirely.
+        c.savedLocationPortals = c.savedLocationPortals || {};
+        c.savedLocationPortals[type] = portal?.name || 0;
+      },
+      peekSavedLocation(type: string) {
+        const v = (character as any)?.savedLocations?.[type];
+        return typeof v === 'number' && v > 0 ? v : -1;
+      },
+      getSavedLocation(type: string) {
+        const c: any = character;
+        const v = c?.savedLocations?.[type];
+        if (c?.savedLocations) delete c.savedLocations[type];
+        return typeof v === 'number' && v > 0 ? v : -1;
+      },
+      clearSavedLocation(type: string) {
+        const c: any = character;
+        if (c?.savedLocations) delete c.savedLocations[type];
+      },
       getInventory(type: any) { return { getNumFreeSlot() { return 10; } }; },
       dropMessage(type: number, text: string) { console.log(`[PortalScript] ${text}`); },
       isQuestStarted(questId: number) { return questManager?.getQuestState(questId) === QuestState.STARTED; },
@@ -116,7 +151,35 @@ export default class PortalScriptEngine {
         });
       },
 
-      warp(mapId: number, portalNameOrId?: any) { onWarp(mapId, portalNameOrId); },
+      warp(mapId: number, portalNameOrId?: any) {
+        // A script that computes a bad destination must not be able to strand
+        // the player. Map ids are always positive, so anything else is a
+        // sentinel that leaked through (-1 = "nothing saved") or a bad
+        // calculation; loading it leaves a black screen with no portals out.
+        // Henesys is where these scripts send you when their own error path
+        // fires, so it is the fallback they already expect.
+        const id = Number(mapId);
+        if (!Number.isFinite(id) || id <= 0) {
+          console.warn(`[PortalScript] refusing to warp to invalid map ${mapId} — sending to Henesys`);
+          onWarp(100000000, 0);
+          return;
+        }
+        onWarp(id, portalNameOrId);
+      },
+
+      // Which portal you step out of once back in town: the one you walked in
+      // through, recorded by saveLocation. Falls back to the map's spawn point
+      // (0) when there is nothing remembered — every map has one, so the
+      // player always lands somewhere valid.
+      //
+      // Read after getSavedLocation has already consumed the map id, so this
+      // does its own cleanup rather than relying on that call.
+      getMarketPortalId(_mapId: number) {
+        const c: any = character;
+        const p = c?.savedLocationPortals?.['FREE_MARKET'];
+        if (c?.savedLocationPortals) delete c.savedLocationPortals['FREE_MARKET'];
+        return p || 0;
+      },
 
       getPlayer() { return playerObj; },
       getMapId() { return character?.map?.mapId ?? 0; },

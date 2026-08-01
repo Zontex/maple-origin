@@ -27,9 +27,16 @@ const BG_BOTTOM_H = BG_H - BG_BOTTOM_Y; // 32px bottom slice
 
 // Tab strip — the backgrnd asset has the strip built in (red underline at
 // y=43-44); tabs are just the WZ Tab/enabled|disabled numeral images on it
-const TAB_Y = 28;
-const TAB_H = 15;
-const TAB_W = 26;
+// Measured off the decoded backgrnd PNG: the red underline occupies y=42-44
+// and the strip band above it runs y=24..41. Tabs hang from that line rather
+// than being positioned from the top, so the 34x18 unselected and 34x19
+// selected plates share a bottom edge and the taller one rises a pixel over
+// the strip, which is what makes it read as "in front".
+const TAB_STRIP_BOTTOM = 42;
+const TAB_PLATE_H = 19;
+const TAB_Y = TAB_STRIP_BOTTOM - TAB_PLATE_H; // 23
+const TAB_H = TAB_PLATE_H;
+const TAB_W = 34;
 const TAB_X_START = 6;
 const TAB_GAP = 0;
 
@@ -37,6 +44,12 @@ const TAB_GAP = 0;
 // Text shifted right to account for skill book icon on the left
 const LABEL_TEXT_X = 110;
 const LABEL_TEXT_Y = 68;
+
+// Skill book icon, centred in the placeholder plate the background reserves
+// for it. Measured off the decoded backgrnd PNG: the plate is x=6..41,
+// y=54..86 (36x33) and the icon is 26x30, so it insets by 5 and 2.
+const BOOK_ICON_X = 11;
+const BOOK_ICON_Y = 56;
 
 // Skill list — tight to left edge per GMS ref
 const SKILL_LIST_X = 4;
@@ -59,6 +72,28 @@ const LEVEL_X = 36;
 const LEVEL_Y = 18;
 const SP_BTN_X = 124;
 const SP_BTN_Y = 11;
+
+// Everything between the icon and the SP button belongs to the name — 88px,
+// which most skill names overrun at any readable size, so they get cut.
+const NAME_MAX_W = SP_BTN_X - NAME_X - 2;
+const NAME_FONT_SIZE = 11;
+
+/** Truncate to `maxW` px, ending in ".." the way the original client does. */
+function fitText(canvas: any, text: string, maxW: number, fontSize: number): string {
+  const ctx = canvas?.context;
+  if (!ctx) return text;
+  const prev = ctx.font;
+  ctx.font = `bold ${fontSize}px Arial`;
+  let out = text;
+  if (ctx.measureText(out).width > maxW) {
+    while (out.length > 1 && ctx.measureText(out + '..').width > maxW) {
+      out = out.slice(0, -1);
+    }
+    out += '..';
+  }
+  ctx.font = prev;
+  return out;
+}
 
 // SP number — inside the white box in the bottom slice.
 // Measured from the decoded backgrnd PNG: box interior x=83-111, y=266-280;
@@ -84,9 +119,16 @@ class SkillMenuSprite extends DragableMenu {
   private bgImage: HTMLImageElement | null = null;
   private skill0Image: HTMLImageElement | null = null;
   private skill1Image: HTMLImageElement | null = null;
+  /** jobId -> skill book name from String.wz (e.g. 100 -> "Warrior Basics") */
+  private bookNames: Record<number, string> = {};
+  /** jobId -> skill book icon from Skill.wz/<tier>.img/info/icon (26x30) */
+  private bookIcons: Record<number, HTMLImageElement> = {};
   private lineImage: HTMLImageElement | null = null;
   private tabEnabled: (HTMLImageElement | null)[] = [];
   private tabDisabled: (HTMLImageElement | null)[] = [];
+  /** Pink selected / grey unselected tab plates (Item/New/Tab1|Tab0) */
+  private tabPlateOn: (HTMLImageElement | null)[] = [];
+  private tabPlateOff: (HTMLImageElement | null)[] = [];
   private spBtnNormal: HTMLImageElement | null = null;
   private spBtnPressed: HTMLImageElement | null = null;
   private spBtnDisabled: HTMLImageElement | null = null;
@@ -138,6 +180,17 @@ class SkillMenuSprite extends DragableMenu {
     const skillNode: any = await WZManager.get('UI.wz/UIWindow.img/Skill');
     if (!skillNode) return;
 
+    // The header names the skill BOOK, not the job — "Warrior Basics", not
+    // "Warrior". It is Nexon's own string, one per job tier, so read it rather
+    // than composing one ("1st Job" etc.) that GMS never showed.
+    try {
+      const names: any = await WZManager.get('String.wz/Skill.img');
+      for (const tier of names?.nChildren || []) {
+        const book = tier.nGet?.('bookName')?.nValue;
+        if (book) this.bookNames[Number(tier.nName)] = String(book);
+      }
+    } catch { /* header falls back to the job name */ }
+
     // Background
     const bg = skillNode.nGet('backgrnd');
     if (bg?.nGetImage) this.bgImage = bg.nGetImage() as HTMLImageElement;
@@ -164,6 +217,21 @@ class SkillMenuSprite extends DragableMenu {
         this.tabDisabled.push(dis?.nGetImage ? dis.nGetImage() as HTMLImageElement : null);
       }
     }
+
+    // Tab plates. The Skill window ships only the numerals, so the plates come
+    // from the inventory's set — Tab1 is the pink selected one, Tab0 the grey
+    // unselected, five of each and shared by both windows in the original.
+    try {
+      const newNode: any = await WZManager.get('UI.wz/UIWindow.img/Item/New');
+      const on = newNode?.nGet('Tab1');
+      const off = newNode?.nGet('Tab0');
+      for (let i = 0; i < 5; i++) {
+        const a = on?.nGet(String(i));
+        this.tabPlateOn.push(a?.nGetImage ? a.nGetImage() as HTMLImageElement : null);
+        const b = off?.nGet(String(i));
+        this.tabPlateOff.push(b?.nGetImage ? b.nGetImage() as HTMLImageElement : null);
+      }
+    } catch { /* numerals still draw on the background's bare strip */ }
 
     // SP+ button
     const spNode = skillNode.nGet('BtSpUp');
@@ -251,6 +319,24 @@ class SkillMenuSprite extends DragableMenu {
     this.skillsLoaded = true;
     this.currentTab = 0;
     this.refreshTabSkills();
+    for (const tierId of this.jobTierIds) void this.loadBookIcon(tierId);
+  }
+
+  /**
+   * The book sitting in the header is the job tier's own skill-book icon,
+   * `Skill.wz/<tier>.img/info/icon` (26x30) — green for Warrior, blue for
+   * Magician, and so on. The window background ships a generic "SKILL BOOK"
+   * placeholder drawn in its place, which is what we were leaving on screen.
+   */
+  private async loadBookIcon(jobFileId: number) {
+    if (this.bookIcons[jobFileId]) return;
+    try {
+      const file = String(jobFileId).padStart(3, '0');
+      const node: any = await WZManager.get(`Skill.wz/${file}.img/info/icon`);
+      if (node?.nTagName === 'canvas' && node.nGetImage) {
+        this.bookIcons[jobFileId] = node.nGetImage() as HTMLImageElement;
+      }
+    } catch { /* placeholder in the background stays visible */ }
   }
 
   private async refreshTabSkills() {
@@ -358,10 +444,31 @@ class SkillMenuSprite extends DragableMenu {
       const tabX = this.x + TAB_X_START + i * (TAB_W + TAB_GAP);
       const tabY = this.y + TAB_Y;
 
+      // Plate first: Tab1 is the pink selected one, Tab0 the grey rest. The
+      // selected plate is a pixel taller (19 vs 18) because it rises over the
+      // strip's red underline, so both are bottom-aligned to keep that edge
+      // where the background draws it.
+      // Always variant 0. These five plates are the *inventory's* per-tab
+      // tinting, not shapes — Tab1/0 is (238,102,136) while Tab1/1 is
+      // (255,170,187), a visibly lighter pink, and the greys drift the same
+      // way. Indexing them by tab number gave every tab its own shade; the
+      // skill window uses one colour for all of them.
+      const plate = isActive ? this.tabPlateOn[0] : this.tabPlateOff[0];
+      const plateH = plate?.height || TAB_PLATE_H;
+      const plateW = plate?.width || TAB_W;
+      // Hang from the underline: an unselected plate is a pixel shorter, so
+      // aligning tops instead would leave it floating and break the line.
+      const plateY = this.y + TAB_STRIP_BOTTOM - plateH;
+      if (plate) canvas.drawImage({ img: plate, dx: tabX, dy: plateY });
+
+      // Numeral centred in the plate it sits on — not in a fixed box, since
+      // the two plates differ in height and the glyphs differ in both.
+      // `enabled` is the dark glyph for the lit tab, `disabled` the light one,
+      // so they pair with the pink and grey plates respectively.
       const tabImg = isActive ? this.tabEnabled[i] : this.tabDisabled[i];
       if (tabImg && tabImg.complete && tabImg.width > 0) {
-        const ix = tabX + Math.floor((TAB_W - tabImg.width) / 2);
-        const iy = tabY + Math.floor((TAB_H - tabImg.height) / 2);
+        const ix = tabX + Math.round((plateW - tabImg.width) / 2);
+        const iy = plateY + Math.round((plateH - tabImg.height) / 2);
         canvas.drawImage({ img: tabImg, dx: ix, dy: iy });
       }
     }
@@ -370,11 +477,17 @@ class SkillMenuSprite extends DragableMenu {
   // ─── Job tier name on gold bar ─────────────────────────────────
   private drawTabLabel(canvas: GameCanvas) {
     const tabJobId = this.jobTierIds[this.currentTab];
-    let tabName: string;
-    if (this.currentTab === 0) {
-      tabName = "Beginner's Basics";
+    let tabName =
+      this.bookNames[tabJobId] ||
+      (this.currentTab === 0 ? "Beginner's Basics" : '') ||
+      getJobNameById(tabJobId) ||
+      `${this.currentTab}${this.currentTab === 1 ? 'st' : this.currentTab === 2 ? 'nd' : this.currentTab === 3 ? 'rd' : 'th'} Job`;
+
+    const book = this.bookIcons[tabJobId];
+    if (book) {
+      canvas.drawImage({ img: book, dx: this.x + BOOK_ICON_X, dy: this.y + BOOK_ICON_Y });
     } else {
-      tabName = getJobNameById(tabJobId) || `${this.currentTab}${this.currentTab === 1 ? 'st' : this.currentTab === 2 ? 'nd' : this.currentTab === 3 ? 'rd' : 'th'} Job`;
+      void this.loadBookIcon(tabJobId);
     }
 
     canvas.drawText({
@@ -422,11 +535,14 @@ class SkillMenuSprite extends DragableMenu {
         canvas.drawImage({ img: icon, dx: sx + ICON_X, dy: sy + ICON_Y });
       }
 
-      // Skill name
+      // Skill name, clipped to the room between the icon and the SP button.
+      // The row plate is only 141px wide and names like "Improved MaxHP
+      // Increase" are far wider than the 88px available, so drawn in full they
+      // ran out of the window and across the scrollbar. GMS cuts them off.
       canvas.drawText({
-        text: skill.name,
+        text: fitText(canvas, skill.name, NAME_MAX_W, NAME_FONT_SIZE),
         color: '#000000',
-        fontSize: 12,
+        fontSize: NAME_FONT_SIZE,
         fontWeight: 'bold',
         x: sx + NAME_X,
         y: sy + NAME_Y,
@@ -546,6 +662,25 @@ class SkillMenuSprite extends DragableMenu {
   }
 
   // ─── Skill tooltip ─────────────────────────────────────────────
+  /**
+   * Skill tooltip, laid out the way the original client does it:
+   *
+   *   • Skill Name                     <- header band
+   *   [icon]  [Master Level : N]
+   *           description text, wrapped
+   *           Required Skill : ...     <- #c..# renders orange
+   *   ------------------------------   <- divider
+   *   [Current Level N]
+   *   effect line for that level
+   *   [Required]
+   *   [icon] Prerequisite name
+   *          Level : 5
+   *
+   * The body text is NOT reconstructed — `desc` and `h<level>` come straight
+   * out of String.wz, including Nexon's own quirks (2000001's desc is missing
+   * its opening bracket). Only the [Current Level] / [Required] labels are
+   * ours, and they are the client's chrome rather than content.
+   */
   private drawTooltip(canvas: GameCanvas) {
     const skill = this._hoveredSkill;
     if (!skill) return;
@@ -553,94 +688,174 @@ class SkillMenuSprite extends DragableMenu {
     const ctx = canvas.context;
     const playerLevel = this.charecter?.skillManager?.getSkillLevel(skill.id) ?? 0;
 
-    // Build text lines
-    const lines: { text: string; color: string; bold?: boolean }[] = [];
+    const TT_W = 232;
+    const PAD = 8;
+    const LINE_H = 13;
+    const ICON_BOX = 44;                  // icon plus its inset
+    const DESC_X = PAD + ICON_BOX + 6;    // text column beside the icon
+    const DESC_W = TT_W - DESC_X - PAD;
+    const FULL_W = TT_W - PAD * 2;
 
-    // Skill name
-    lines.push({ text: skill.name, color: '#ffffff', bold: true });
+    ctx.save();
+    ctx.font = '11px Arial';
 
-    // Description — pixel-based wrapping using measureText
-    if (skill.description) {
-      // Strip format codes: #c...# (orange text), #b...# (blue), etc.
-      const cleaned = this.stripSkillFormatCodes(skill.description);
-      lines.push({ text: '', color: '' }); // spacer
-      const descLines = this.wrapTextPixel(ctx, cleaned, 11, 178);
-      for (const dl of descLines) {
-        lines.push({ text: dl, color: '#cccccc' });
-      }
-    }
+    // ── measure ───────────────────────────────────────────────────────────
+    const descSegs = this.parseSkillDesc(skill.description);
+    const descLines = this.wrapSegments(ctx, descSegs, DESC_W);
+    const headH = 20;
+    const bodyH = Math.max(ICON_BOX, descLines.length * LINE_H) + 6;
 
-    // Current level effect
-    if (playerLevel > 0) {
-      const hKey = `h${playerLevel}`;
-      const helpStr = skill.helpStrings.get(hKey);
-      if (helpStr) {
-        lines.push({ text: '', color: '' });
-        lines.push({ text: `[Lv.${playerLevel}]`, color: '#44bbff', bold: true });
-        const wrapped = this.wrapTextPixel(ctx, helpStr, 11, 178);
-        for (const w of wrapped) {
-          lines.push({ text: w, color: '#44bbff' });
-        }
-      }
-    }
+    const curKey = `h${playerLevel}`;
+    const curStr = playerLevel > 0 ? skill.helpStrings.get(curKey) : undefined;
+    const curLines = curStr ? this.wrapTextPixel(ctx, curStr, 11, FULL_W) : [];
+    const curH = curStr ? LINE_H * (1 + curLines.length) + 4 : 0;
 
-    // Next level preview
-    if (playerLevel < skill.maxLevel) {
-      const nextLevel = playerLevel + 1;
-      const hKey = `h${nextLevel}`;
-      const helpStr = skill.helpStrings.get(hKey);
-      if (helpStr) {
-        lines.push({ text: '', color: '' });
-        lines.push({ text: `[Next Lv.${nextLevel}]`, color: '#ffaa44', bold: true });
-        const wrapped = this.wrapTextPixel(ctx, helpStr, 11, 178);
-        for (const w of wrapped) {
-          lines.push({ text: w, color: '#ffaa44' });
-        }
-      }
-    }
+    const reqs = (skill.req || []).filter((r) => r.level > 0);
+    const reqH = reqs.length ? LINE_H + reqs.length * 34 + 2 : 0;
 
-    // Calculate tooltip dimensions
-    const TOOLTIP_W = 196;
-    const lineH = 14;
-    const padX = 9;
-    const padY = 7;
-    const contentH = lines.reduce((h, l) => h + (l.text ? lineH : 5), 0) + padY * 2;
-    const tooltipH = contentH;
+    const TT_H = headH + bodyH + (curH || reqH ? 8 : 0) + curH + reqH + PAD;
 
-    // Position: to the right of the skill menu
+    // ── position ──────────────────────────────────────────────────────────
     const my = (canvas as any).mouseY || 0;
     let tx = this.x + WIN_W + 4;
     let ty = my - 10;
-
-    // Keep on screen
-    if (tx + TOOLTIP_W > canvas.game.width) tx = this.x - TOOLTIP_W - 4;
-    if (ty + tooltipH > canvas.game.height) ty = canvas.game.height - tooltipH - 4;
+    if (tx + TT_W > canvas.game.width) tx = this.x - TT_W - 4;
+    if (ty + TT_H > canvas.game.height) ty = canvas.game.height - TT_H - 4;
     if (ty < 0) ty = 0;
 
-    ctx.save();
-
-    // Dark tooltip background (matches item tooltip style)
-    ctx.fillStyle = '#1c1b3a';
-    ctx.globalAlpha = 0.92;
-    ctx.fillRect(tx, ty, TOOLTIP_W, tooltipH);
-    ctx.globalAlpha = 1;
-    // Border
-    ctx.strokeStyle = '#6655aa';
+    // ── panel ─────────────────────────────────────────────────────────────
+    // Sampled straight off reference captures: the body is (68,74,125) and the
+    // header band (85,85,130), and those two values dominate both screenshots
+    // despite completely different scenes behind them. That small spread — ~17
+    // across the whole image — is what fixes the alpha near 0.9; a genuinely
+    // see-through panel would swing far more with its background. So the fill
+    // is essentially the colour you see, barely translucent.
+    ctx.fillStyle = 'rgba(68, 74, 125, 0.9)';
+    ctx.fillRect(tx, ty, TT_W, TT_H);
+    ctx.fillStyle = 'rgba(85, 85, 130, 0.9)';
+    ctx.fillRect(tx, ty, TT_W, headH);
+    ctx.strokeStyle = 'rgba(150, 158, 200, 0.85)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(tx + 0.5, ty + 0.5, TOOLTIP_W - 1, tooltipH - 1);
+    ctx.strokeRect(tx + 0.5, ty + 0.5, TT_W - 1, TT_H - 1);
 
-    // Draw text lines
-    let textY = ty + padY + 11;
-    for (const line of lines) {
-      if (!line.text) { textY += 5; continue; }
-      ctx.font = `${line.bold ? 'bold ' : ''}11px Arial`;
-      ctx.fillStyle = line.color;
-      ctx.textAlign = 'left';
-      ctx.fillText(line.text, tx + padX, textY);
-      textY += lineH;
+    // ── header: bullet + name ─────────────────────────────────────────────
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px Arial';
+    ctx.fillText('\u2022', tx + PAD, ty + 14);
+    ctx.fillText(skill.name, tx + PAD + 9, ty + 14);
+
+    // ── icon ──────────────────────────────────────────────────────────────
+    let y = ty + headH + 4;
+    const icon = skill.icon;
+    if (icon && icon.complete && icon.width > 0) {
+      const ix = tx + PAD + Math.floor((ICON_BOX - icon.width) / 2);
+      canvas.drawImage({ img: icon, dx: ix, dy: y + 2 });
+    }
+
+    // ── description beside the icon ───────────────────────────────────────
+    ctx.font = '11px Arial';
+    let dy = y + 11;
+    for (const line of descLines) {
+      let dx = tx + DESC_X;
+      for (const seg of line) {
+        ctx.fillStyle = seg.color;
+        ctx.fillText(seg.text, dx, dy);
+        dx += ctx.measureText(seg.text).width;
+      }
+      dy += LINE_H;
+    }
+    y += bodyH;
+
+    // ── divider ───────────────────────────────────────────────────────────
+    if (curStr || reqs.length) {
+      ctx.strokeStyle = 'rgba(150, 158, 200, 0.85)';
+      ctx.beginPath();
+      ctx.moveTo(tx + PAD, y + 0.5);
+      ctx.lineTo(tx + TT_W - PAD, y + 0.5);
+      ctx.stroke();
+      y += 8;
+    }
+
+    // ── current level ─────────────────────────────────────────────────────
+    if (curStr) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`[Current Level ${playerLevel}]`, tx + PAD, y + 10);
+      y += LINE_H;
+      for (const l of curLines) {
+        ctx.fillText(l, tx + PAD, y + 10);
+        y += LINE_H;
+      }
+      y += 4;
+    }
+
+    // ── required skills ───────────────────────────────────────────────────
+    if (reqs.length) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('[Required]', tx + PAD, y + 10);
+      y += LINE_H;
+      for (const r of reqs) {
+        const info = SkillData.getSkillSync(r.id);
+        if (info?.icon && info.icon.complete && info.icon.width > 0) {
+          canvas.drawImage({ img: info.icon, dx: tx + PAD, dy: y });
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(info?.name || `Skill ${r.id}`, tx + PAD + 36, y + 12);
+        ctx.fillText(`Level : ${r.level}`, tx + PAD + 36, y + 12 + LINE_H);
+        y += 34;
+      }
     }
 
     ctx.restore();
+  }
+
+  /**
+   * Split a WZ description into coloured runs. `#c...#` is the orange
+   * highlight the original uses for prerequisites and passive markers; the
+   * rest renders white. Newlines survive as their own break.
+   */
+  private parseSkillDesc(text: string): { text: string; color: string }[] {
+    const out: { text: string; color: string }[] = [];
+    if (!text) return out;
+    const src = text.replace(/\\n/g, '\n');
+    const re = /#c(.*?)#/gs;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      if (m.index > last) out.push({ text: src.slice(last, m.index), color: '#ffffff' });
+      out.push({ text: m[1], color: '#ffa023' });
+      last = re.lastIndex;
+    }
+    if (last < src.length) out.push({ text: src.slice(last), color: '#ffffff' });
+    return out;
+  }
+
+  /** Wrap coloured runs to `maxW`, keeping each run's colour across breaks. */
+  private wrapSegments(
+    ctx: CanvasRenderingContext2D,
+    segs: { text: string; color: string }[],
+    maxW: number
+  ): { text: string; color: string }[][] {
+    const lines: { text: string; color: string }[][] = [];
+    let line: { text: string; color: string }[] = [];
+    let w = 0;
+    const push = () => { lines.push(line); line = []; w = 0; };
+    for (const seg of segs) {
+      for (const part of seg.text.split('\n')) {
+        if (part !== seg.text.split('\n')[0]) push();
+        for (const word of part.split(/(\s+)/)) {
+          if (!word) continue;
+          const ww = ctx.measureText(word).width;
+          if (w + ww > maxW && w > 0) push();
+          if (!/^\s+$/.test(word) || w > 0) {
+            line.push({ text: word, color: seg.color });
+            w += ww;
+          }
+        }
+      }
+    }
+    if (line.length) lines.push(line);
+    return lines;
   }
 
   // Strip MapleStory format codes from skill descriptions

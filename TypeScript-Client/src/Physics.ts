@@ -108,6 +108,22 @@ class Physics {
     });
   }
 
+  /**
+   * Whether upward motion is a real take-off rather than the slope-following
+   * that ordinary walking produces.
+   *
+   * Grounded movement assigns `vy = (mvr * fy) / len` every frame, so walking
+   * *uphill* is negative vy — the character is genuinely rising, just not
+   * jumping. A plain `vy < 0` test therefore reads "mid-jump" on every upward
+   * slope and refuses to let you jump while walking up one. The two are far
+   * apart in magnitude: slope-following is capped at walking speed (125),
+   * a jump starts at jump_speed (570), so anything faster than walking can
+   * only have come from a take-off.
+   */
+  isRisingFromJump(): boolean {
+    return this.vy < -(this.walk_speed * shoe_walk_speed);
+  }
+
   jump() {
     let fh = this.fh;
     let djump = this.djump;

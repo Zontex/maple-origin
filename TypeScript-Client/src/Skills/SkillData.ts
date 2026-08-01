@@ -47,6 +47,8 @@ export interface SkillInfo {
   invisible: boolean;
   effects: SkillLevelEffect[];
   helpStrings: Map<string, string>;
+  /** Prerequisite skills from the WZ `req` node: skillId -> level needed */
+  req: { id: number; level: number }[];
   action: string | null; // Body stance to play (e.g., 'alert2', 'alert4') from WZ action node
   element: string | null; // WZ elemAttr char: F/I/L/S/H/D/P (fire/ice/lightning/poison/holy/dark/physical)
 }
@@ -215,6 +217,15 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
 
   // Determine skill type. Some skills (e.g., Three Snails) keep their ball/hit
   // nodes per-level instead of at the skill root, so check both.
+  // Prerequisites — the tooltip's [Required] block. e.g. Improved MaxMP
+  // Increase (2000001) requires level 5 of Improving MP Recovery (2000000).
+  const req: { id: number; level: number }[] = [];
+  for (const r of skillNode.nGet('req')?.nChildren || []) {
+    const rid = Number(r.nName);
+    const rlv = Number(r.nValue);
+    if (Number.isFinite(rid) && Number.isFinite(rlv)) req.push({ id: rid, level: rlv });
+  }
+
   const levelHasBallOrHit = effects.some(e => e.ballNode || e.hitNode);
   const isAttack = hasHit || hasBall || levelHasBallOrHit;
   const isBuff = !isAttack && (hasAction || hasEffect);
@@ -235,6 +246,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     invisible,
     effects,
     helpStrings: skillHelp.get(skillId) || new Map(),
+    req,
     action: actionStance,
     element,
   };

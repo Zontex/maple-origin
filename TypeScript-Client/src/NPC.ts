@@ -153,6 +153,19 @@ class NPC {
     // MapleTV logic
     this.mapleTv = npcFile.info.nGet("MapleTV").nGet("nValue", 0);
     if (!!this.mapleTv) {
+      // A screen is not a character and has no facing to get right, so a
+      // MapleTV is never mirrored. Its ad and banner are placed by explicit
+      // offsets (MapleTVadX/adY, MapleTVmsgX/msgY) authored against the
+      // UNFLIPPED sprite, so mirroring silently invalidates them while the
+      // frame itself — a symmetrical vine surround — looks unchanged.
+      // Ellinia's TV shows it arithmetically: the sprite's two screen
+      // cut-outs begin at local x=117 with origin x=129, so unflipped they
+      // land at npc.x-12, and the WZ asks for the ad at npc.x-11. Mirroring
+      // shifts the sprite by width - 2*originX = 517 - 258 = 259px while the
+      // ad stays put — exactly the gap between the black screens and the
+      // picture sitting beside them.
+      this.flipped = false;
+
       this.mapleTvAdX = npcFile.info.MapleTVadX.nValue;
       this.mapleTvAdY = npcFile.info.MapleTVadY.nValue;
       this.mapleTvMsgX = npcFile.info.MapleTVmsgX.nValue;
