@@ -126,6 +126,8 @@ class SkillMenuSprite extends DragableMenu {
   private lineImage: HTMLImageElement | null = null;
   private tabEnabled: (HTMLImageElement | null)[] = [];
   private tabDisabled: (HTMLImageElement | null)[] = [];
+  /** CoolTime sweep frames (UIWindow.img/Skill/CoolTime/0-15, 32x32) */
+  private coolTimeFrames: HTMLImageElement[] = [];
   /** Pink selected / grey unselected tab plates (Item/New/Tab1|Tab0) */
   private tabPlateOn: (HTMLImageElement | null)[] = [];
   private tabPlateOff: (HTMLImageElement | null)[] = [];
@@ -232,6 +234,12 @@ class SkillMenuSprite extends DragableMenu {
         this.tabPlateOff.push(b?.nGetImage ? b.nGetImage() as HTMLImageElement : null);
       }
     } catch { /* numerals still draw on the background's bare strip */ }
+
+    // Cooldown sweep — 16 frames the original steps through as the timer runs
+    const ctNode = skillNode.nGet('CoolTime');
+    for (const frame of ctNode?.nChildren || []) {
+      if (frame.nGetImage) this.coolTimeFrames.push(frame.nGetImage() as HTMLImageElement);
+    }
 
     // SP+ button
     const spNode = skillNode.nGet('BtSpUp');
@@ -533,6 +541,23 @@ class SkillMenuSprite extends DragableMenu {
       const icon = isLearned ? skill.icon : (skill.iconDisabled || skill.icon);
       if (icon) {
         canvas.drawImage({ img: icon, dx: sx + ICON_X, dy: sy + ICON_Y });
+      }
+
+      // Cooldown sweep over the icon, same frames the hotkey bar uses, so a
+      // skill on cooldown reads the same in both places
+      const sm = this.charecter?.skillManager;
+      if (sm?.isOnCooldown(skill.id) && this.coolTimeFrames.length > 0) {
+        const remaining = sm.getCooldownRemaining(skill.id);
+        const total = (sm.getSkillEffectSync(skill.id)?.cooltime || 1) * 1000;
+        // Driven by time ELAPSED: frame 0 covers the icon, frame 15 is nearly
+        // clear, so the skill starts fully greyed and uncovers as it recharges
+        const elapsed = 1 - Math.max(0, Math.min(1, remaining / total));
+        const cd = this.coolTimeFrames[
+          Math.min(this.coolTimeFrames.length - 1, Math.floor(elapsed * this.coolTimeFrames.length))
+        ];
+        if (cd?.complete && cd.width > 0) {
+          canvas.drawImage({ img: cd, dx: sx + ICON_X, dy: sy + ICON_Y });
+        }
       }
 
       // Skill name, clipped to the room between the icon and the SP button.

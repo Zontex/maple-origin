@@ -1294,10 +1294,25 @@ static readonly THREE_SNAILS_SHELLS: { itemId: number; damage: number; frame: nu
  * mob count, attack count, and skill-specific range.
  * Returns true if the cast actually happened (caller consumes MP/cooldown).
  */
+/**
+ * Arm a skill's cooldown once it has actually fired. Only skills whose WZ
+ * level data carries a `cooltime` have one — most v83 skills do not, so this
+ * is a no-op for them rather than an invented delay.
+ */
+beginSkillCooldown(skillId: number, effect: any) {
+  const secs = Number(effect?.cooltime) || 0;
+  if (secs > 0) this.skillManager?.startCooldown(skillId, secs);
+}
+
 async useSkill(skillId: number, effect: any): Promise<boolean> {
   if (this.isInAttack) return false;
   if (this.isRiding) return false; // cannot use skills while mounted (v83)
   if (this.isInClimbingRope) return false; // nor while on a rope or ladder (v83)
+  // Cooldown is enforced here rather than at the caller: this is the one
+  // choke point every cast goes through, so a skill fired from a hotkey, a
+  // bound key or anywhere else is gated the same way and starts the same
+  // timer. UIHotkeyBar keeps its own check purely for immediate feedback.
+  if (this.skillManager?.isOnCooldown(skillId)) return false;
 
   const info = (await import('./Skills/SkillData')).default.getSkillSync(skillId);
   if (!info) return false;
@@ -1373,6 +1388,7 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
         }
       );
     }
+    this.beginSkillCooldown(skillId, effect);
     return true;
   } else if (info.isBuff) {
     // Buff — apply the buff effect
@@ -1391,6 +1407,7 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
         () => { this.isInAttack = false; }, // return to normal on finish
       );
     }
+    this.beginSkillCooldown(skillId, effect);
     return true;
   }
   return false;
