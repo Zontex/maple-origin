@@ -152,6 +152,12 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   let hasHit = false;
   let hasBall = false;
   let hasEffect = false;
+  // Most skills keep ball/hit at the skill root, not per level (Three Snails is
+  // the exception). Without hoisting these onto every level effect, useSkill saw
+  // a null ballNode and silently ran Energy Bolt down the melee path — cast,
+  // damage, no bolt.
+  let rootBallNode: any = null;
+  let rootHitNode: any = null;
   let invisible = false;
   let actionStance: string | null = null;
   let element: string | null = null;
@@ -179,8 +185,10 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
       }
     } else if (name === 'hit') {
       hasHit = true;
+      rootHitNode = child;
     } else if (name === 'ball') {
       hasBall = true;
+      rootBallNode = child;
     } else if (name === 'effect') {
       hasEffect = true;
     } else if (name === 'invisible') {
@@ -197,6 +205,15 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
       for (const lvl of levelChildren) {
         effects.push(parseLevelEffect(lvl));
       }
+    }
+  }
+
+  // Push the skill-root ball/hit down onto each level, without clobbering the
+  // per-level nodes that skills like Three Snails define themselves
+  if (rootBallNode || rootHitNode) {
+    for (const e of effects) {
+      if (!e.ballNode && rootBallNode) e.ballNode = rootBallNode;
+      if (!e.hitNode && rootHitNode) e.hitNode = rootHitNode;
     }
   }
 

@@ -1304,6 +1304,23 @@ static readonly THREE_SNAILS_SHELLS: { itemId: number; damage: number; frame: nu
  * Returns true if the cast actually happened (caller consumes MP/cooldown).
  */
 /**
+ * Magician skills are spells — they require a wand or staff. Without one the
+ * cast simply does not happen, as in v83, rather than firing weaponless.
+ * Only magic skills are gated; every other job's skills are unaffected.
+ */
+canCastSkill(skillId: number, info: any): boolean {
+  // Skill ids are jobFileId * 10000 + n, so the leading digit is the branch
+  const isMagicSkill = Math.floor(skillId / 1000000) === 2;
+  if (!isMagicSkill) return true;
+
+  const weaponType = getEquipTypeById(this.weaponEquipId);
+  if (weaponType === WeaponType.WAND || weaponType === WeaponType.STAFF) return true;
+
+  console.log(`[Skill] ${skillId} needs a wand or staff — cast blocked`);
+  return false;
+}
+
+/**
  * Queue the weapon's trail for an attack stance. Fires later, when the body
  * animation reaches the stance's trigger frame (see Effects/Afterimage).
  */
@@ -1323,6 +1340,10 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
 
   const info = (await import('./Skills/SkillData')).default.getSkillSync(skillId);
   if (!info) return false;
+
+  // Spells need a magic weapon in hand (v83). Bail before any resource is
+  // spent — activateSkill only charges MP when the cast actually happens.
+  if (!this.canCastSkill(skillId, info)) return false;
 
   if (info.isAttack) {
     // Attack skills respect weapon attack speed like regular attacks
