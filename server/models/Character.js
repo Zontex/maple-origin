@@ -168,6 +168,12 @@ class Character {
         luk: char.luk,
         ap: char.ap,
         sp: char.sp || 0,
+        // Per-tier split. Null for characters saved before the column existed;
+        // the client then drops the old total into the current job's tier.
+        spByTier: (() => {
+          try { return char.sp_by_tier ? JSON.parse(char.sp_by_tier) : null; }
+          catch { return null; }
+        })(),
         maxHp: char.max_hp,
         maxMp: char.max_mp,
         jobId: char.job_id,
@@ -199,7 +205,7 @@ class Character {
 
     const updateChar = db.prepare(`
       UPDATE characters SET
-        level = ?, exp = ?, str = ?, dex = ?, int = ?, luk = ?, ap = ?, sp = ?,
+        level = ?, exp = ?, str = ?, dex = ?, int = ?, luk = ?, ap = ?, sp = ?, sp_by_tier = ?,
         hp = ?, max_hp = ?, mp = ?, max_mp = ?,
         job_id = ?, map_id = ?, pos_x = ?, pos_y = ?,
         mesos = ?, fame = ?, hair = ?, face = ?, skin = ?
@@ -295,6 +301,7 @@ class Character {
         data.level ?? current.level, data.exp ?? current.exp,
         data.str ?? current.str, data.dex ?? current.dex, data.int ?? current.int,
         data.luk ?? current.luk, data.ap ?? current.ap, data.sp ?? current.sp,
+        data.spByTier ? JSON.stringify(data.spByTier) : current.sp_by_tier,
         data.hp ?? current.hp, data.maxHp ?? current.max_hp,
         data.mp ?? current.mp, data.maxMp ?? current.max_mp,
         data.jobId ?? current.job_id, data.mapId ?? current.map_id,

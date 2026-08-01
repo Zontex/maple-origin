@@ -52,7 +52,16 @@ class Stats {
   level: number;
   job: string;            // Derived display name from jobId
   abilityPoints: number;
-  sp: number;             // Skill points available to allocate
+  /**
+   * Skill points, held per job tier rather than in one pool.
+   *
+   * Keyed by the tier's job id — the same ids SkillData.getJobTierFileIds
+   * produces, so 0 / 200 / 210 for an FP wizard. A point earned as a
+   * Beginner can only ever buy Beginner skills, and 1st-job points stay
+   * spendable in the 1st-job tab after advancing. One shared pool let a
+   * newly advanced character spend Beginner points on job skills.
+   */
+  spByTier: Record<number, number> = {};
   criticalChance: number;
   criticalDamage: number;
 
@@ -89,7 +98,13 @@ class Stats {
     this.level = opts.level || 1;
     this.job = opts.job || getJobNameById(this.jobId);
     this.abilityPoints = opts.abilityPoints || 0;
-    this.sp = opts.sp || 0;
+    // spByTier is authoritative; `sp` is the legacy single number and lands in
+    // the current tier so old saves keep their points somewhere spendable.
+    if (opts.spByTier && typeof opts.spByTier === "object") {
+      this.spByTier = { ...opts.spByTier };
+    } else {
+      this.sp = opts.sp || 0;
+    }
 
     this.criticalChance = defaultCritChance;
     this.criticalDamage = defaultCritDamagePercent;
@@ -213,6 +228,37 @@ class Stats {
     this.localMagic = Math.min(this.localMagic, 2000);
     this.localMaxHp = Math.min(this.localMaxHp, 30000);
     this.localMaxMp = Math.min(this.localMaxMp, 30000);
+  }
+
+  /** SP available in one tier's pool. */
+  getSp(tierJobId: number): number {
+    return this.spByTier[tierJobId] ?? 0;
+  }
+
+  /** Add SP to a tier. */
+  addSp(tierJobId: number, amount: number) {
+    this.spByTier[tierJobId] = this.getSp(tierJobId) + amount;
+  }
+
+  /** Take one point from a tier. Returns false when that pool is empty. */
+  spendSp(tierJobId: number): boolean {
+    if (this.getSp(tierJobId) <= 0) return false;
+    this.spByTier[tierJobId] = this.getSp(tierJobId) - 1;
+    return true;
+  }
+
+  /**
+   * Total across every tier. Kept because the character-select card and the
+   * save payload both want a single number; anything that actually spends
+   * points must go through the per-tier methods.
+   */
+  get sp(): number {
+    return Object.values(this.spByTier).reduce((a, b) => a + (b || 0), 0);
+  }
+
+  /** Legacy assignment: a bare number belongs to the current job's tier. */
+  set sp(value: number) {
+    this.spByTier = { [this.jobId ?? 0]: value || 0 };
   }
 
   setJobId(id: number) {

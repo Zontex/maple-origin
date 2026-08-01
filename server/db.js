@@ -127,6 +127,15 @@ function initSchema() {
     // Column already exists — ignore
   }
 
+  // Migration: per-job-tier skill points, stored as a JSON map of
+  // tierJobId -> points. The old `sp` column stays as the total so anything
+  // reading it keeps working; this column carries the split.
+  try {
+    db.exec(`ALTER TABLE characters ADD COLUMN sp_by_tier TEXT DEFAULT NULL`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+
   // Migration: quest completion timestamps (INTERVAL repeatable quests)
   try {
     db.exec(`ALTER TABLE quests ADD COLUMN completed_at INTEGER`);

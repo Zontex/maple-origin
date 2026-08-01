@@ -383,7 +383,10 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       }
 
       // Apply SP
-      if (MyChar.stats && charData.stats?.sp !== undefined) {
+      if (MyChar.stats && charData.stats?.spByTier) {
+        // Per-tier split wins; the flat `sp` below is the pre-split fallback.
+        MyChar.stats.spByTier = { ...charData.stats.spByTier };
+      } else if (MyChar.stats && charData.stats?.sp !== undefined) {
         MyChar.stats.sp = charData.stats.sp;
       }
 

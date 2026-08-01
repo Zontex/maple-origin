@@ -226,7 +226,8 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
       MyCharacter.stats.maxHp = charData.stats.maxHp;
       MyCharacter.stats.maxMp = charData.stats.maxMp;
       MyCharacter.stats.setJobId(charData.stats.jobId);
-      if (charData.stats.sp !== undefined) MyCharacter.stats.sp = charData.stats.sp;
+      if (charData.stats.spByTier) MyCharacter.stats.spByTier = { ...charData.stats.spByTier };
+      else if (charData.stats.sp !== undefined) MyCharacter.stats.sp = charData.stats.sp;
     }
     MyCharacter.exp = charData.exp ?? 0;
     const { default: ExpTable } = await import('./Constants/ExpTable');

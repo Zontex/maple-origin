@@ -677,10 +677,11 @@ class MapleCharacter {
     this.stats.setJobId(jobId);
     this.job = jobId;
 
-    // Grant SP on job advancement (v83: 1st job=1SP, 2nd+=varies, simplified to 1 SP)
-    // In v83, job advancement NPCs grant skills directly via script
-    // SP is primarily earned through leveling (3 SP/level)
-    this.stats.sp += 1;
+    // The advancement itself pays the same 3 SP a level does, into the NEW
+    // tier's own pool. Whatever is left in the previous tier stays there and
+    // stays spendable on that tier's skills — it is simply not reachable from
+    // this job's tab.
+    this.stats.addSp(jobId, 3);
 
     // Restore HP/MP to full on job change
     this.hp = this.maxHp;
@@ -712,9 +713,10 @@ class MapleCharacter {
     this.maxExp = ExpTable.getExpNeededForLevel(this.stats.level);
     this.stats.addAbilityPoints();
 
-    // SP gain: Beginners get 1 SP, all other jobs get 3 SP per level
+    // SP gain: Beginners get 1 SP, all other jobs get 3 SP per level — paid
+    // into the pool of the tier the character is in when they earn it.
     const spGain = this.stats.jobId === 0 ? 1 : 3;
-    this.stats.sp += spGain;
+    this.stats.addSp(this.stats.jobId, spGain);
 
     // v83 HP/MP gains per level based on job
     const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;

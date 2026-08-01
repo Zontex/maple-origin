@@ -442,8 +442,9 @@ class SkillMenuSprite extends DragableMenu {
         y: sy + LEVEL_Y,
       });
 
-      // SP+ button
-      const sp = this.charecter?.stats.sp ?? 0;
+      // SP+ button — the pool belongs to the tab being viewed, not to the
+      // character as a whole
+      const sp = this.currentTabSp();
       const canLevel = sp > 0 && playerLevel < skill.maxLevel;
       const btnImg = canLevel ? this.spBtnNormal : this.spBtnDisabled;
       if (btnImg) {
@@ -496,11 +497,22 @@ class SkillMenuSprite extends DragableMenu {
     }
   }
 
+  /**
+   * SP in the pool of the job tier this tab is showing. Switching tabs
+   * switches pools, which is the whole point — a Beginner point and a
+   * 1st-job point are not interchangeable.
+   */
+  private currentTabSp(): number {
+    const tierJobId = this.jobTierIds[this.currentTab];
+    if (tierJobId === undefined || !this.charecter) return 0;
+    return this.charecter.stats.getSp(tierJobId);
+  }
+
   // ─── SP count ──────────────────────────────────────────────────
   private drawSPCount(canvas: GameCanvas) {
     if (!this.charecter) return;
     canvas.drawText({
-      text: String(this.charecter.stats.sp),
+      text: String(this.currentTabSp()),
       color: '#000000',
       fontSize: 11,
       x: this.x + SP_NUM_X,
@@ -699,7 +711,7 @@ class SkillMenuSprite extends DragableMenu {
 
     // Skill row interactions
     const now = Date.now();
-    const sp = this.charecter?.stats.sp ?? 0;
+    const sp = this.currentTabSp();
     const listX = this.x + SKILL_LIST_X;
     const listY = this.y + SKILL_LIST_Y;
     const end = Math.min(this.scrollOffset + MAX_VISIBLE_SKILLS, this.tabSkills.length);
@@ -717,12 +729,17 @@ class SkillMenuSprite extends DragableMenu {
       const btnH = this.spBtnNormal?.height || 12;
       if (sp > 0 && mx >= btnX && mx <= btnX + btnW && my >= btnY && my <= btnY + btnH) {
         const currentLevel = this.charecter?.skillManager?.getSkillLevel(skill.id) ?? 0;
-        if (currentLevel < skill.maxLevel) {
+        const tierJobId = this.jobTierIds[this.currentTab];
+        // Take the point from the tab's own pool, and only raise the skill if
+        // that pool actually had one to give.
+        if (currentLevel < skill.maxLevel && this.charecter?.stats.spendSp(tierJobId)) {
           const newLevel = currentLevel + 1;
           const masterLevel = this.charecter?.skillManager?.getMasterLevel(skill.id) || skill.maxLevel;
           this.charecter?.skillManager?.changeSkillLevel(skill.id, newLevel, masterLevel);
-          this.charecter!.stats.sp--;
-          console.log(`[SkillMenu] Leveled up ${skill.name} to ${newLevel}, SP remaining: ${this.charecter!.stats.sp}`);
+          console.log(
+            `[SkillMenu] ${skill.name} -> ${newLevel}; tier ${tierJobId} SP left: ` +
+            `${this.charecter!.stats.getSp(tierJobId)}`
+          );
         }
         return;
       }

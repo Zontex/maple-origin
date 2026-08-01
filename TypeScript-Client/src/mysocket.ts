@@ -442,6 +442,8 @@ class MySocket {
         mesos: inv?.mesos ?? 0,
         fame: MyCharacter.fame ?? 0,
         sp: MyCharacter.stats?.sp ?? 0,
+        // The per-tier split; `sp` above stays the total for anything reading it
+        spByTier: MyCharacter.stats?.spByTier ?? {},
         hair: MyCharacter.hair,
         face: MyCharacter.face,
         skin: MyCharacter.skinColor,
