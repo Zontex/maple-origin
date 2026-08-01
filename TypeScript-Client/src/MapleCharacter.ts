@@ -1010,9 +1010,14 @@ class MapleCharacter {
     // rising. The foothold alone is not enough of a guard: physics can
     // re-acquire it for a frame or two on the way up, and a held key would
     // then re-launch at full speed before gravity ever bit — which is exactly
-    // how holding the key used to fly. Requiring vy >= 0 means the next jump
-    // cannot start until this one has landed.
-    return !!this.pos.fh && this.pos.vy >= 0;
+    // how holding the key used to fly.
+    //
+    // "Rising" has to mean rising *from a jump*, though. Walking sets vy from
+    // the foothold's slope every frame, so heading up any incline is negative
+    // vy at walking speed — a plain `vy >= 0` read that as a jump in progress
+    // and silently refused to let you jump while walking uphill, which is most
+    // of Perion and Maple Road.
+    return !!this.pos.fh && !this.pos.isRisingFromJump();
   }
 
   /** Jump if the current state allows it. See canJump for the rules. */
@@ -1116,6 +1121,13 @@ getAttackDelayMs(): number {
 async attack() {
   if (this.isInAttack) return;
   if (this.isRiding) return; // cannot attack while mounted (v83)
+  // Nor while on a rope or ladder (v83). Without this the swing played over
+  // the climb stance: the body turned to face left or right off the rope,
+  // hit frames and all, while still hanging from it.
+  // Deliberately not `pos.isClimbing` as well: releaseRope() clears this flag
+  // but leaves that one set until the character next lands, so letting go and
+  // attacking on the way down would have been blocked too.
+  if (this.isInClimbingRope) return;
   if (Date.now() - this.lastAttackTime < this.getAttackDelayMs()) return;
 
   const weaponType = getEquipTypeById(this.weaponEquipId);
@@ -1334,9 +1346,25 @@ async armAfterimage(stance: string) {
   }
 }
 
+/**
+ * Arm a skill's cooldown once it has actually fired. Only skills whose WZ
+ * level data carries a `cooltime` have one — most v83 skills do not, so this
+ * is a no-op for them rather than an invented delay.
+ */
+beginSkillCooldown(skillId: number, effect: any) {
+  const secs = Number(effect?.cooltime) || 0;
+  if (secs > 0) this.skillManager?.startCooldown(skillId, secs);
+}
+
 async useSkill(skillId: number, effect: any): Promise<boolean> {
   if (this.isInAttack) return false;
   if (this.isRiding) return false; // cannot use skills while mounted (v83)
+  if (this.isInClimbingRope) return false; // nor while on a rope or ladder (v83)
+  // Cooldown is enforced here rather than at the caller: this is the one
+  // choke point every cast goes through, so a skill fired from a hotkey, a
+  // bound key or anywhere else is gated the same way and starts the same
+  // timer. UIHotkeyBar keeps its own check purely for immediate feedback.
+  if (this.skillManager?.isOnCooldown(skillId)) return false;
 
   const info = (await import('./Skills/SkillData')).default.getSkillSync(skillId);
   if (!info) return false;
@@ -1420,6 +1448,7 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
         }
       );
     }
+    this.beginSkillCooldown(skillId, effect);
     return true;
   } else if (info.isBuff) {
     // Buff — apply the buff effect
@@ -1438,6 +1467,7 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
         () => { this.isInAttack = false; }, // return to normal on finish
       );
     }
+    this.beginSkillCooldown(skillId, effect);
     return true;
   }
   return false;

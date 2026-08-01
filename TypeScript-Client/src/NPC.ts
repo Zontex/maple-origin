@@ -93,13 +93,15 @@ class NPC {
     this.cy = opts.cy;
     // Set the pos property to match x and cy for consistent use across the codebase
     this.pos = { x: opts.x, y: opts.cy };
-    // life/f is inverted relative to a plain "mirror me" flag: f=1 means the
-    // sprite is used as authored, f=0 (the common case, often absent) means
-    // mirrored. Measured against two NPCs whose intended facing is not in
-    // doubt — Pan is authored facing left with no f and must face right into
-    // his stall; Natasha is authored facing right with f=1 and must face
-    // right at her counter. Only `!f` satisfies both.
-    this.flipped = !opts.f;
+    // life/f is a plain "mirror me" flag: f=1 mirrors, f=0 uses the sprite as
+    // authored. This was briefly inverted on the belief that Natasha (f=1) was
+    // authored facing right and had to stay that way — she is authored facing
+    // LEFT, like the Perion weapon clerks (also f=1), and both need mirroring
+    // to face into their counters. The inversion left most shop NPCs facing
+    // away from the customer. It also disagreed with the one case that can be
+    // checked by arithmetic rather than by eye: Ellinia's MapleTV is f=0 and
+    // its ad offsets only line up with the sprite's screen cut-outs unflipped.
+    this.flipped = !!opts.f;
     this.fh = opts.fh;
     this.rx0 = opts.rx0;
     this.rx1 = opts.rx1;
@@ -153,6 +155,19 @@ class NPC {
     // MapleTV logic
     this.mapleTv = npcFile.info.nGet("MapleTV").nGet("nValue", 0);
     if (!!this.mapleTv) {
+      // A screen is not a character and has no facing to get right, so a
+      // MapleTV is never mirrored. Its ad and banner are placed by explicit
+      // offsets (MapleTVadX/adY, MapleTVmsgX/msgY) authored against the
+      // UNFLIPPED sprite, so mirroring silently invalidates them while the
+      // frame itself — a symmetrical vine surround — looks unchanged.
+      // Ellinia's TV shows it arithmetically: the sprite's two screen
+      // cut-outs begin at local x=117 with origin x=129, so unflipped they
+      // land at npc.x-12, and the WZ asks for the ad at npc.x-11. Mirroring
+      // shifts the sprite by width - 2*originX = 517 - 258 = 259px while the
+      // ad stays put — exactly the gap between the black screens and the
+      // picture sitting beside them.
+      this.flipped = false;
+
       this.mapleTvAdX = npcFile.info.MapleTVadX.nValue;
       this.mapleTvAdY = npcFile.info.MapleTVadY.nValue;
       this.mapleTvMsgX = npcFile.info.MapleTVmsgX.nValue;

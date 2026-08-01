@@ -315,25 +315,23 @@ const UIHotkeyBar = {
         const remaining = MyCharacter.skillManager.getCooldownRemaining(slot.actionId);
         const effect = MyCharacter.skillManager.getSkillEffectSync(slot.actionId);
         const totalMs = ((effect?.cooltime || 1)) * 1000;
-        const ratio = Math.min(1, remaining / totalMs);
 
+        // Frame 0 covers the icon completely and frame 15 is nearly clear, so
+        // the sweep is driven by time ELAPSED, not time remaining: grey at the
+        // moment of casting, uncovering as it recharges. Keying it off
+        // `remaining` ran the animation backwards. No countdown digits — the
+        // original shows the sweep alone.
         if (this._coolTimeFrames.length > 0) {
-          const frameIdx = Math.min(this._coolTimeFrames.length - 1, Math.floor(ratio * this._coolTimeFrames.length));
+          const elapsed = 1 - Math.max(0, Math.min(1, remaining / totalMs));
+          const frameIdx = Math.min(
+            this._coolTimeFrames.length - 1,
+            Math.floor(elapsed * this._coolTimeFrames.length),
+          );
           const cdImg = this._coolTimeFrames[frameIdx];
           if (cdImg && cdImg.complete && cdImg.width > 0) {
             ctx.drawImage(cdImg, sx, sy, SLOT_W, SLOT_H);
           }
         }
-
-        // Cooldown seconds
-        const secs = Math.ceil(remaining / 1000);
-        ctx.save();
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 11px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(String(secs), sx + SLOT_W / 2, sy + SLOT_H / 2);
-        ctx.restore();
       }
 
       // Key label — embossed WZ sprite at the top-left of the keycap

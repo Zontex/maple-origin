@@ -224,20 +224,47 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
     }
   }
 
+  // Portal y is authored at the doorway, not at the floor, and the two differ
+  // by a pixel or so in either direction — Perion's Free Market door sits at
+  // y=581 above a platform at y=580.2. Spawning at the raw y therefore puts
+  // the character *below* the platform they are meant to stand on, and since
+  // a map change clears pos.fh they fall straight past it to whatever is
+  // underneath: in Perion, all the way down to the first floor.
+  //
+  // Snap onto the foothold under the portal, but only when one is genuinely
+  // there — it must span the portal's x (an interpolated point that had to be
+  // clamped belongs to a platform off to the side) and be close enough
+  // vertically that it is the same floor. Anything else is a portal really
+  // meant to be entered in mid-air, and is left alone.
+  // Land *just above* the floor rather than exactly on it. Physics acquires a
+  // foothold by intersecting the movement segment against it, so a character
+  // standing precisely on the line gives an intersection at parameter ~0 that
+  // rounding can push just under — no crossing is detected and they drop
+  // straight through. Portals that already work (the boat's, for one) sit a
+  // couple of pixels above their floor and fall onto it, so this makes every
+  // snapped spawn look like the case that was never broken.
+  const SPAWN_SNAP_MAX_DY = 40;
+  const SPAWN_GROUND_CLEARANCE = 3;
+  const spawnAt = (x: number, y: number) => {
+    MyCharacter.pos.x = x;
+    const ground = MapleMap.getNearestFootholdPosition?.(x, y);
+    const onSameFloor =
+      ground && Math.abs(ground.x - x) <= 1 && Math.abs(ground.y - y) <= SPAWN_SNAP_MAX_DY;
+    MyCharacter.pos.y = onSameFloor ? ground!.y - SPAWN_GROUND_CLEARANCE : y;
+  };
+
   // Spawn at named portal if specified, otherwise first spawn portal (index 0)
   let spawned = false;
   if (typeof portalName === 'number' && MapleMap.portals?.[portalName]) {
     // Portal INDEX (Cosmic warpEveryone(map, pto) semantics — transport arrivals)
     const indexedPortal = MapleMap.portals[portalName];
-    MyCharacter.pos.x = indexedPortal.x;
-    MyCharacter.pos.y = indexedPortal.y;
+    spawnAt(indexedPortal.x, indexedPortal.y);
     spawned = true;
   } else if (typeof portalName === 'string' && portalName && portalName !== 'sp' && MapleMap.portals) {
     // Named portal (e.g. portal-to-portal transitions)
     const namedPortal = MapleMap.portals.find((p: any) => p.name === portalName);
     if (namedPortal) {
-      MyCharacter.pos.x = namedPortal.x;
-      MyCharacter.pos.y = namedPortal.y;
+      spawnAt(namedPortal.x, namedPortal.y);
       spawned = true;
     }
   }
@@ -247,8 +274,7 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
     // Fall back to first portal regardless of type
     const fallbackPortal = spawnPortal || MapleMap.portals[0];
     if (fallbackPortal) {
-      MyCharacter.pos.x = fallbackPortal.x;
-      MyCharacter.pos.y = fallbackPortal.y;
+      spawnAt(fallbackPortal.x, fallbackPortal.y);
       spawned = true;
     }
   }
@@ -456,8 +482,14 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
       if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {
         if (MapleMap.questDialog.handleClick(cx, cy)) return;
       }
-      // Block NPC/map clicks when any dialog is open
-      if (!MapleMap.npcDialog.isHidden || (MapleMap.questDialog && !MapleMap.questDialog.isHidden)) return;
+      // Block NPC/map clicks when any dialog is open.
+      // Both dialogs are created partway through MapleMap.load, so neither
+      // exists if a load throws before that point — and then every frame
+      // rethrows out of the game loop and the tab is dead until a refresh.
+      // questDialog was already null-checked everywhere; npcDialog was not,
+      // which is what turned a failed warp into an unrecoverable crash loop
+      // ("Cannot read properties of undefined (reading 'isHidden')").
+      if ((MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) || (MapleMap.questDialog && !MapleMap.questDialog.isHidden)) return;
       MapleMap.handleClick(event, canvasElement, Camera);
     });
     canvasElement.addEventListener("mousemove", (event) => {
@@ -572,7 +604,7 @@ MapStateInstance.doUpdate = function (
       // are included for the same reason — the character should stand still
       // while an option dialog has the screen.
       const dialogOpen =
-        !MapleMap.npcDialog.isHidden || ShopUI.isVisible || questDialogOpen ||
+        (MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) || ShopUI.isVisible || questDialogOpen ||
         DirectionScene.isActive || UIGameMenu.isVisible ||
         UISystemOption.isVisible || UIGameOption.isVisible ||
         UIChannelSelect.isVisible || UIKeyConfig.isVisible;
@@ -659,7 +691,7 @@ MapStateInstance.doUpdate = function (
         // First check if any dialog is open
         if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {
           MapleMap.questDialog.hide();
-        } else if (!MapleMap.npcDialog.isHidden) {
+        } else if (MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) {
           MapleMap.npcDialog.setIsHidden(true);
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
@@ -834,7 +866,7 @@ MapStateInstance.doRender = function (
     // Player character is now drawn within MapleMap.render() at the correct layer
 
     // NPC dialog on top of player
-    MapleMap.npcDialog.draw(canvas, camera, lag, msPerTick, tdelta);
+    MapleMap.npcDialog?.draw(canvas, camera, lag, msPerTick, tdelta);
 
     // Quest dialog on top of NPC dialog
     if (MapleMap.questDialog && !MapleMap.questDialog.isHidden) {

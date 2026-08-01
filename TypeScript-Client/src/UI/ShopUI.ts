@@ -5,7 +5,8 @@ import { CameraInterface } from '../Camera';
 import ClickManager from './ClickManager';
 import { MapleStanceButton } from './MapleStanceButton';
 import { getShopInfo, getItemSellPrice, getItemUnitPrice, getItemSlotMax, ShopItem } from '../Shop/ShopData';
-import { ensureItemNames, getItemNameSync } from '../Quest/QuestData';
+import { ensureItemNames, getItemNameSync, getItemDescSync } from '../Quest/QuestData';
+import UIEquipTooltip from './UIEquipTooltip';
 import Item from '../Inventory/Item';
 import ItemConstants from '../Constants/Inventory/ItemConstants';
 import UIMesoDropDialog from './UIMesoDropDialog';
@@ -56,6 +57,16 @@ const ShopUI: any = {
   buySelectedIndex: -1,
   buyScrollOffset: 0,
   sellSelectedIndex: -1,
+  // Which list the arrow keys drive. Set by whichever panel was last
+  // clicked so up/down follow the player's attention, as in GMS.
+  focusPanel: 'buy' as 'buy' | 'sell',
+  _prevUp: false,
+  _prevDown: false,
+  // Item under the cursor this frame, resolved during the panel draw so
+  // the tooltip can be painted after everything else
+  _hoverItem: null as any,
+  _hoverX: 0,
+  _hoverY: 0,
   sellScrollOffset: 0,
 
   // WZ assets
@@ -469,6 +480,7 @@ const ShopUI: any = {
     }
 
     // Left panel — shop items (buy)
+    this._hoverItem = null;
     this.drawItemPanel(canvas, this.shopItems, this.buySelectedIndex,
       this.buyScrollOffset, this.x, true);
 
@@ -481,10 +493,16 @@ const ShopUI: any = {
       btn.draw(canvas, camera, 0, 0, 0);
     }
 
+    // Item tooltip — above the buttons, below the quantity dialog, so a
+    // pending buy/sell prompt is never obscured by a hover
+    this.drawHoverTooltip(canvas);
+
     // Buy/sell quantity dialog on top
     if (this._quantityDialog && !this._quantityDialog.isHidden) {
       this._quantityDialog.draw(canvas, camera, 0, 0, 0);
     }
+
+    this.handleArrowKeys(canvas);
 
     // Click handling — wasClicked is a one-shot flag, so holding the button
     // down doesn't refire and break double-click detection
@@ -509,6 +527,116 @@ const ShopUI: any = {
     }
   },
 
+  /**
+   * Tooltip for the row under the cursor — the same information the inventory
+   * shows, since a shop is where you most need it. Equips reuse UIEquipTooltip
+   * (REQ stats, job bar, the lot); everything else gets name + description
+   * from String.wz, with `#c..#` rendered orange as elsewhere.
+   */
+  drawHoverTooltip(canvas: GameCanvas) {
+    const item = this._hoverItem;
+    if (!item) return;
+    const itemId = item.itemId ?? item.id;
+    if (!itemId) return;
+
+    // Anchor beside the shop window, never over it. Anchoring to the hovered
+    // row put the panel straight on top of the list, hiding the very items
+    // being browsed. Prefer the right of the window, fall back to its left
+    // when there is no room there.
+    const NOMINAL_W = 260;
+    let ax = this.x + BG_W + 6;
+    if (ax + NOMINAL_W > canvas.game.width) ax = Math.max(2, this.x - NOMINAL_W - 6);
+    const ay = Math.max(2, this._hoverY - 20);
+
+    if (Math.floor(itemId / 1000000) === 1) {
+      if (UIEquipTooltip.draw(canvas, itemId, item.equipData, ax, ay)) return;
+    }
+
+    const name = getItemNameSync(itemId) || item.name || '';
+    const desc = (getItemDescSync(itemId) || '').replace(/\\n/g, '\n');
+    if (!name && !desc) return;
+
+    const ctx = canvas.context;
+    const W = 210, PAD = 8, LINE = 13;
+    ctx.save();
+    ctx.font = '11px Arial';
+
+    const lines: { text: string; color: string }[] = [];
+    lines.push({ text: name, color: '#ffcc00' });
+    for (const para of desc.split('\n')) {
+      // #c..# is the orange highlight; other codes are chrome and get dropped
+      const cleaned = para.replace(/#c(.*?)#/g, '$1').replace(/#[a-z]/g, '');
+      let line = '';
+      for (const word of cleaned.split(' ')) {
+        const test = line ? line + ' ' + word : word;
+        if (ctx.measureText(test).width > W - PAD * 2 && line) {
+          lines.push({ text: line, color: '#ffffff' });
+          line = word;
+        } else {
+          line = test;
+        }
+      }
+      if (line) lines.push({ text: line, color: '#ffffff' });
+    }
+
+    const H = PAD * 2 + lines.length * LINE;
+    let tx = ax;
+    let ty = ay;
+    if (tx + W > canvas.game.width) tx = canvas.game.width - W - 2;
+    if (ty + H > canvas.game.height) ty = canvas.game.height - H - 2;
+    if (ty < 0) ty = 0;
+
+    ctx.fillStyle = 'rgba(68, 74, 125, 0.9)';
+    ctx.fillRect(tx, ty, W, H);
+    ctx.strokeStyle = 'rgba(150, 158, 200, 0.85)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tx + 0.5, ty + 0.5, W - 1, H - 1);
+
+    ctx.textAlign = 'left';
+    let y = ty + PAD + 10;
+    for (const l of lines) {
+      ctx.fillStyle = l.color;
+      ctx.font = l.color === '#ffcc00' ? 'bold 11px Arial' : '11px Arial';
+      ctx.fillText(l.text, tx + PAD, y);
+      y += LINE;
+    }
+    ctx.restore();
+  },
+
+  /**
+   * Up/down move the selection in whichever panel was last clicked, scrolling
+   * the list to keep it in view. Edge-triggered so a held key steps once per
+   * press; the player cannot walk while a shop is open, so the arrows are free.
+   */
+  handleArrowKeys(canvas: GameCanvas) {
+    if (!this.isVisible) return;
+    if (this._quantityDialog && !this._quantityDialog.isHidden) return;
+
+    const up = canvas.isKeyDown('up');
+    const down = canvas.isKeyDown('down');
+    const stepUp = up && !this._prevUp;
+    const stepDown = down && !this._prevDown;
+    this._prevUp = up;
+    this._prevDown = down;
+    if (!stepUp && !stepDown) return;
+
+    const buy = this.focusPanel === 'buy';
+    const items = buy ? this.shopItems : this.playerItems;
+    if (items.length === 0) return;
+
+    let idx = buy ? this.buySelectedIndex : this.sellSelectedIndex;
+    idx = idx < 0 ? 0 : idx + (stepDown ? 1 : -1);
+    idx = Math.max(0, Math.min(items.length - 1, idx));
+
+    let off = buy ? this.buyScrollOffset : this.sellScrollOffset;
+    if (idx < off) off = idx;
+    else if (idx >= off + VISIBLE_ROWS) off = idx - VISIBLE_ROWS + 1;
+    off = Math.max(0, Math.min(Math.max(0, items.length - VISIBLE_ROWS), off));
+
+    if (buy) { this.buySelectedIndex = idx; this.buyScrollOffset = off; }
+    else { this.sellSelectedIndex = idx; this.sellScrollOffset = off; }
+  },
+
   drawItemPanel(canvas: GameCanvas, items: any[], selectedIdx: number,
     scrollOffset: number, panelX: number, showBuyPrice: boolean) {
     const listY = this.y + LIST_Y;
@@ -517,6 +645,19 @@ const ShopUI: any = {
     for (let i = scrollOffset; i < end; i++) {
       const item = items[i];
       const rowY = listY + (i - scrollOffset) * ROW_H;
+
+      // Record what the cursor is over. Resolved here rather than in a
+      // separate hit-test so it can never drift from where rows are drawn.
+      const mx = (canvas as any).mouseX || 0;
+      const my = (canvas as any).mouseY || 0;
+      // The whole row is hoverable, not just the text strip — the icon column
+      // sits left of STRIP_X and reads as part of the same entry.
+      if (mx >= panelX && mx < panelX + SCROLL_X &&
+          my >= rowY && my < rowY + ROW_H) {
+        this._hoverItem = item;
+        this._hoverX = panelX;
+        this._hoverY = rowY;
+      }
 
       // Selection highlight — covers the content strip exactly (162x35)
       if (i === selectedIdx && this.selectImg && this.selectImg.complete && this.selectImg.naturalWidth > 0) {
@@ -636,6 +777,7 @@ const ShopUI: any = {
       const rowIdx = Math.floor((my - listY) / ROW_H) + this.buyScrollOffset;
       if (rowIdx >= 0 && rowIdx < this.shopItems.length) {
         const now = Date.now();
+        this.focusPanel = 'buy';
         this.buySelectedIndex = rowIdx;
         if (rowIdx === this._lastBuyClickIdx && now - this._lastBuyClickTime < 400) {
           this._lastBuyClickIdx = -1;
@@ -655,6 +797,7 @@ const ShopUI: any = {
       const rowIdx = Math.floor((my - listY) / ROW_H) + this.sellScrollOffset;
       if (rowIdx >= 0 && rowIdx < this.playerItems.length) {
         const now = Date.now();
+        this.focusPanel = 'sell';
         this.sellSelectedIndex = rowIdx;
         if (rowIdx === this._lastSellClickIdx && now - this._lastSellClickTime < 400) {
           this._lastSellClickIdx = -1;
