@@ -721,10 +721,16 @@ class MapleCharacter {
     this.maxExp = ExpTable.getExpNeededForLevel(this.stats.level);
     this.stats.addAbilityPoints();
 
-    // SP gain: Beginners get 1 SP, all other jobs get 3 SP per level — paid
-    // into the pool of the tier the character is in when they earn it.
-    const spGain = this.stats.jobId === 0 ? 1 : 3;
-    this.stats.addSp(this.stats.jobId, spGain);
+    // SP gain, paid into the pool of the tier the character is in when they
+    // earn it. A Beginner earns 1 per level but only up to BEGINNER_SP_TOTAL
+    // — the three basics are the whole allowance, so levelling to 10 as a
+    // Beginner leaves 3, not 9. Every job earns 3 per level with no cap.
+    if (this.stats.jobId === 0) {
+      // Levels 2, 3 and 4 only — three points, one per level.
+      if (this.stats.level <= 4) this.stats.addSp(0, 1);
+    } else {
+      this.stats.addSp(this.stats.jobId, 3);
+    }
 
     // v83 HP/MP gains per level based on job
     const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;

@@ -45,6 +45,11 @@ export interface SkillInfo {
   isBuff: boolean;
   isAttack: boolean;
   invisible: boolean;
+  /**
+   * Skills that must be raised first, from the WZ `req` node — Magic Claw
+   * carries `2001002: 3`, so Energy Bolt at level 3 before it can be taken.
+   */
+  reqs: { skillId: number; level: number }[];
   effects: SkillLevelEffect[];
   helpStrings: Map<string, string>;
   action: string | null; // Body stance to play (e.g., 'alert2', 'alert4') from WZ action node
@@ -233,6 +238,18 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     isBuff,
     isAttack,
     invisible,
+    reqs: (() => {
+      const out: { skillId: number; level: number }[] = [];
+      const reqNode: any = skillNode?.nGet?.('req');
+      for (const child of reqNode?.nChildren ?? []) {
+        const id = Number(child?.nName);
+        const lvl = Number(child?.nValue);
+        if (Number.isFinite(id) && Number.isFinite(lvl)) {
+          out.push({ skillId: id, level: lvl });
+        }
+      }
+      return out;
+    })(),
     effects,
     helpStrings: skillHelp.get(skillId) || new Map(),
     action: actionStance,

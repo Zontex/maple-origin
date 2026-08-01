@@ -250,7 +250,33 @@ class SkillMenuSprite extends DragableMenu {
     await SkillData.preloadForJob(jobId);
     this.skillsLoaded = true;
     this.currentTab = 0;
+    await this.rebuildLegacySpPools();
     this.refreshTabSkills();
+  }
+
+  /**
+   * A pre-split save carries one SP number, which the loader drops into the
+   * current job's tier — leaving Beginner empty and everything in the job
+   * pool. Rebuild the real split from what each tier earned minus what it has
+   * already spent. Done here because it needs the learned skill levels, and
+   * only once per character.
+   */
+  private async rebuildLegacySpPools() {
+    const stats = this.charecter?.stats;
+    if (!stats || stats.spPoolsRebuilt) return;
+    const spent: Record<number, number> = {};
+    for (const tierId of this.jobTierIds) {
+      let total = 0;
+      try {
+        const skills = await SkillData.getVisibleJobSkills(tierId);
+        for (const s of skills) {
+          total += this.charecter?.skillManager?.getSkillLevel(s.id) ?? 0;
+        }
+      } catch { /* a tier that will not load contributes nothing */ }
+      spent[tierId] = total;
+    }
+    stats.rebuildSpPools(spent);
+    console.log('[SkillMenu] rebuilt SP pools from progress:', JSON.stringify(stats.spByTier));
   }
 
   private async refreshTabSkills() {
@@ -445,7 +471,7 @@ class SkillMenuSprite extends DragableMenu {
       // SP+ button — the pool belongs to the tab being viewed, not to the
       // character as a whole
       const sp = this.currentTabSp();
-      const canLevel = sp > 0 && playerLevel < skill.maxLevel;
+      const canLevel = sp > 0 && playerLevel < skill.maxLevel && this.reqsMet(skill);
       const btnImg = canLevel ? this.spBtnNormal : this.spBtnDisabled;
       if (btnImg) {
         canvas.drawImage({ img: btnImg, dx: sx + SP_BTN_X, dy: sy + SP_BTN_Y });
@@ -502,6 +528,20 @@ class SkillMenuSprite extends DragableMenu {
    * switches pools, which is the whole point — a Beginner point and a
    * 1st-job point are not interchangeable.
    */
+  /**
+   * Whether every skill this one depends on is high enough yet.
+   *
+   * Magic Claw needs Energy Bolt at 3; nothing checked, so it could be
+   * raised straight away and the arrow looked available.
+   */
+  private reqsMet(skill: SkillInfo): boolean {
+    if (!skill.reqs?.length) return true;
+    const sm = this.charecter?.skillManager;
+    return skill.reqs.every(
+      (r) => (sm?.getSkillLevel(r.skillId) ?? 0) >= r.level
+    );
+  }
+
   private currentTabSp(): number {
     const tierJobId = this.jobTierIds[this.currentTab];
     if (tierJobId === undefined || !this.charecter) return 0;
@@ -730,6 +770,16 @@ class SkillMenuSprite extends DragableMenu {
       if (sp > 0 && mx >= btnX && mx <= btnX + btnW && my >= btnY && my <= btnY + btnH) {
         const currentLevel = this.charecter?.skillManager?.getSkillLevel(skill.id) ?? 0;
         const tierJobId = this.jobTierIds[this.currentTab];
+        // Prerequisites are checked here too, not only when drawing the
+        // arrow — the greyed button must actually be inert, not just look it.
+        if (!this.reqsMet(skill)) {
+          const missing = skill.reqs
+            .filter((r) => (this.charecter?.skillManager?.getSkillLevel(r.skillId) ?? 0) < r.level)
+            .map((r) => `${r.skillId} lvl ${r.level}`)
+            .join(', ');
+          console.log(`[SkillMenu] ${skill.name} still needs: ${missing}`);
+          return;
+        }
         // Take the point from the tab's own pool, and only raise the skill if
         // that pool actually had one to give.
         if (currentLevel < skill.maxLevel && this.charecter?.stats.spendSp(tierJobId)) {

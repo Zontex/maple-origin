@@ -12,6 +12,9 @@ export class DamageRange {
   }
 }
 
+/** Total SP a Beginner ever earns: 1 each at levels 2, 3 and 4. */
+export const BEGINNER_SP_TOTAL = 3;
+
 const defaultCritChance = 0.05;
 const defaultCritDamagePercent = 1.0;
 
@@ -62,6 +65,12 @@ class Stats {
    * newly advanced character spend Beginner points on job skills.
    */
   spByTier: Record<number, number> = {};
+  /**
+   * False for a character loaded from a pre-split save, where `sp` was one
+   * number. The skill window rebuilds the pools once skills are loaded, then
+   * sets this — it needs the learned skill levels, which Stats does not have.
+   */
+  spPoolsRebuilt: boolean = false;
   criticalChance: number;
   criticalDamage: number;
 
@@ -102,6 +111,7 @@ class Stats {
     // the current tier so old saves keep their points somewhere spendable.
     if (opts.spByTier && typeof opts.spByTier === "object") {
       this.spByTier = { ...opts.spByTier };
+      this.spPoolsRebuilt = true;
     } else {
       this.sp = opts.sp || 0;
     }
@@ -230,6 +240,24 @@ class Stats {
     this.localMaxMp = Math.min(this.localMaxMp, 30000);
   }
 
+  /**
+   * The tier ids for a job, mirroring SkillData.getJobTierFileIds. Duplicated
+   * rather than imported so Stats stays free of the skill layer.
+   */
+  private static tiersFor(jobId: number): number[] {
+    const base = Math.floor(jobId / 1000) * 1000;
+    const tiers = [base];
+    if (jobId === base) return tiers;
+    const first = Math.floor(jobId / 100) * 100;
+    tiers.push(first);
+    if (jobId === first) return tiers;
+    const second = Math.floor(jobId / 10) * 10;
+    tiers.push(second);
+    if (jobId === second) return tiers;
+    tiers.push(jobId);
+    return tiers;
+  }
+
   /** SP available in one tier's pool. */
   getSp(tierJobId: number): number {
     return this.spByTier[tierJobId] ?? 0;
@@ -259,6 +287,48 @@ class Stats {
   /** Legacy assignment: a bare number belongs to the current job's tier. */
   set sp(value: number) {
     this.spByTier = { [this.jobId ?? 0]: value || 0 };
+  }
+
+  /**
+   * Rebuild the pools for a character saved before the split existed.
+   *
+   * The old save is one number, so dumping it into the current tier left
+   * Beginner empty and everything in the job pool. What each tier actually
+   * earned is derivable — 1/level as a Beginner up to the advancement, 3 per
+   * level after it plus 3 for the advancement itself — so subtract what has
+   * already been spent in that tier and the split falls out.
+   *
+   * `spentByTier` is the sum of learned skill levels per tier, which the
+   * caller has and this class does not.
+   */
+  rebuildSpPools(spentByTier: Record<number, number>) {
+    const level = this.level || 1;
+    // Magicians take 1st job at 8, everyone else at 10 — the one v83
+    // exception, and the reason a level-10 Magician has 9 job SP
+    // (3 x (10 - 8 + 1)) where a level-10 Warrior has 3.
+    const isMagician = Math.floor(this.jobId / 100) === 2;
+    const advancedAt: Record<number, number> = {
+      1: isMagician ? 8 : 10, 2: 30, 3: 70, 4: 120,
+    };
+    const pools: Record<number, number> = {};
+
+    // Beginner: 1 per level from 2, and it stops at 3 — that is the whole
+    // Beginner allowance, enough for the three basics and no more. Levels
+    // past that pay nothing until the character advances.
+    const beginnerEarned = Math.min(Math.max(0, level - 1), BEGINNER_SP_TOTAL);
+    pools[0] = Math.max(0, beginnerEarned - (spentByTier[0] ?? 0));
+
+    // Job tiers: 3 per level from the advancement level onward, inclusive.
+    const tiers = Stats.tiersFor(this.jobId);
+    tiers.forEach((tierId, idx) => {
+      if (idx === 0) return; // handled above
+      const from = advancedAt[idx] ?? 10;
+      const earned = Math.max(0, 3 * (level - from + 1));
+      pools[tierId] = Math.max(0, earned - (spentByTier[tierId] ?? 0));
+    });
+
+    this.spByTier = pools;
+    this.spPoolsRebuilt = true;
   }
 
   setJobId(id: number) {
