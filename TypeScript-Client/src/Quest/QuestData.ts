@@ -288,8 +288,19 @@ class QuestDataManager {
   dialogues: Map<number, { start: QuestDialogue; complete: QuestDialogue }> = new Map();
   npcToQuests: Map<number, number[]> = new Map();
   private initialized: boolean = false;
+  private initPromise: Promise<void> | null = null;
 
+  /**
+   * Idempotent: concurrent callers share one load. Without the guard, a
+   * second call while the first was still fetching started the whole load
+   * again — and callers that awaited it still returned before data existed.
+   */
   async initialize(): Promise<void> {
+    if (!this.initPromise) this.initPromise = this.doInitialize();
+    return this.initPromise;
+  }
+
+  private async doInitialize(): Promise<void> {
     if (this.initialized) return;
 
     try {

@@ -170,8 +170,10 @@ class MapleCharacter {
   // they use different stances (v83: 'ladder' vs 'rope')
   climbingIsLadder: boolean = false;
   /** y-extent of the rope currently held, so the climb can be stopped at its
-   *  ends instead of running past them. */
-  climbRopeBounds: { y1: number; y2: number; x: number; xRange: number } | null = null;
+   *  ends instead of running past them. `uf` mirrors the WZ ladderRope flag:
+   *  whether the head exits onto the terrain above (uf=0 ropes are
+   *  free-hanging — the climb stops at the top instead of letting go). */
+  climbRopeBounds: { y1: number; y2: number; x: number; xRange: number; uf: boolean } | null = null;
   /**
    * A rope the character has just pushed off sideways, ignored for grabbing
    * until they are clear of its box. Without it, holding up after a jump+left
@@ -1800,6 +1802,7 @@ isCloseToMob = (inAllDirections = true) => {
         y2: ropeBottom,
         x: ladderRope.x.nValue,
         xRange: this.climbingIsLadder ? 15 : 8,
+        uf: ladderRope.nGet("uf").nGet("nValue", 1) !== 0,
       };
       this.pos.x = ladderRope.x.nValue;
       // That slack means you can grab from just outside the rope's span, so
@@ -1825,6 +1828,12 @@ isCloseToMob = (inAllDirections = true) => {
 
   async checkForPortal() {
     if (this.isInPortal) return;
+
+    // Portals can only be entered from the ground (v83: standing or walking,
+    // never mid-jump or hanging on a rope). fh is null the whole time the
+    // character is airborne, so it doubles as the grounded test — but climbing
+    // keeps a stale fh (see Physics.jump), hence the explicit rope guard.
+    if (!this.pos?.fh || this.isInClimbingRope) return;
 
     const portal = this.map!.portals.filter(
       (portal: Portal) => portal.rect
@@ -1985,22 +1994,41 @@ isCloseToMob = (inAllDirections = true) => {
    */
   releaseRope() {
     const bounds = this.climbRopeBounds;
-    // Leaving at the head: lift clear of the rope top first. y1 sits 2px
-    // BELOW the platform the rope hangs from, so letting go anywhere in that
-    // 2px band leaves the character just under the lip with nothing above to
-    // land on, and they drop the entire shaft instead of stepping off. Which
-    // side of the lip they landed on came down to which frame the release
-    // happened to fall on. Lifting above y1 makes it land on the platform
-    // every time; if there is no platform up there they fall anyway, which
-    // is what should happen at the top of a free-hanging rope.
+    // Leaving at the head: lift clear of the rope top first. y1 sits BELOW
+    // the platform the rope hangs from, so letting go anywhere in that band
+    // leaves the character just under the lip with nothing above to land on,
+    // and they drop the entire shaft instead of stepping off. Snap to the
+    // actual foothold above the head rather than a fixed few px: the lip is
+    // 2px up on the ropes first measured, but others hang lower — a fixed
+    // GRAB_SLACK lift left the character still under those lips, falling
+    // back into the grab box and climbing forever. If there is no platform
+    // up there they fall, which is what should happen at the top of a
+    // free-hanging rope.
     if (bounds && this.pos.y < bounds.y1) {
-      this.pos.y = bounds.y1 - GRAB_SLACK;
+      const lip = this.footholdLipAbove(bounds.x, bounds.y1);
+      this.pos.y = lip !== null ? lip - 1 : bounds.y1 - GRAB_SLACK;
     }
     this.isInClimbingRope = false;
     this.isClimbMoving = false;
     this.climbRopeBounds = null;
     this.pos.fh = null;
     this.pos.lf = null;
+  }
+
+  /**
+   * Interpolated y of the nearest walkable foothold at x that sits at or
+   * above y, within maxRise px. Vertical walls (x1 === x2) don't count.
+   */
+  private footholdLipAbove(x: number, y: number, maxRise = 20): number | null {
+    let best: number | null = null;
+    for (const f of this.map?.footholdList || []) {
+      if (!(f.x1 < f.x2) || x < f.x1 || x > f.x2) continue;
+      const fy = f.y1 + ((f.y2 - f.y1) * (x - f.x1)) / (f.x2 - f.x1);
+      // Small tolerance below y: rope heads can poke a hair through the floor
+      if (fy > y + 2 || fy < y - maxRise) continue;
+      if (best === null || fy > best) best = fy;
+    }
+    return best;
   }
 
   // ClimbDirections enum
@@ -2014,7 +2042,16 @@ isCloseToMob = (inAllDirections = true) => {
     this.pos.up = false;
 
     if (direction === ClimbDirections.UP) {
-      this.pos.climbUp();
+      const bounds = this.climbRopeBounds;
+      if (bounds && !bounds.uf && this.pos.y <= bounds.y1) {
+        // Free-hanging rope (uf=0): no exit at the head. Hang still at the
+        // top instead of climbing past it — releasing there just fell back
+        // into the grab box and re-climbed forever.
+        this.pos.stopClimbMovement();
+        this.isClimbMoving = false;
+      } else {
+        this.pos.climbUp();
+      }
     } else {
       this.pos.climbDown();
     }
@@ -2724,15 +2761,24 @@ isCloseToMob = (inAllDirections = true) => {
     // onto it. Climb a little past the head, then let go and drop onto the
     // platform — the same few pixels of slack the grab box uses.
     if (this.isInClimbingRope && this.pos.isClimbing && this.climbRopeBounds) {
-      const { y1, y2 } = this.climbRopeBounds;
-      const offBottom = this.pos.y > y2;
-      const offTop = this.pos.y + GRAB_SLACK < y1;
-      if (offBottom || offTop) {
-        // Only the foot needs snapping back; overshoot at the head is what
-        // carries the character up over the lip of the platform.
-        if (offBottom) this.pos.y = y2;
-        this.pos.stopClimb();
-        this.releaseRope();
+      const { y1, y2, uf } = this.climbRopeBounds;
+      if (this.pos.y < y1 && !uf) {
+        // Overshot the head of a free-hanging rope (uf=0) — there is no exit
+        // up there, so snap back to the top and keep hanging instead of
+        // letting go (see the matching gate in climbRope).
+        this.pos.y = y1;
+        this.pos.stopClimbMovement();
+        this.isClimbMoving = false;
+      } else {
+        const offBottom = this.pos.y > y2;
+        const offTop = this.pos.y + GRAB_SLACK < y1;
+        if (offBottom || offTop) {
+          // Only the foot needs snapping back; overshoot at the head is what
+          // carries the character up over the lip of the platform.
+          if (offBottom) this.pos.y = y2;
+          this.pos.stopClimb();
+          this.releaseRope();
+        }
       }
     }
 

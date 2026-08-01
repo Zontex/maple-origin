@@ -92,6 +92,20 @@ export default class QuestManager {
     }
   }
 
+  /**
+   * Recompute the fulfilled seed for every active quest without firing the
+   * notification. Login restore replays quests one at a time, so the seed a
+   * single forceStartQuest computes can be wrong — quest data still loading,
+   * or a prereq quest not replayed yet. A wrong false there made the poll see
+   * a false→true transition and pop the GMS "Quest completed" balloon on
+   * every login. Call once after the whole restore has settled.
+   */
+  reseedFulfilled(): void {
+    for (const questId of this.activeQuests.keys()) {
+      this.fulfilledState.set(questId, this.canCompleteQuest(questId));
+    }
+  }
+
   async initialize(): Promise<void> {
     await QuestData.initialize();
   }

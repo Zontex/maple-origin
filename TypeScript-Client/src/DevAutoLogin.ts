@@ -8,7 +8,7 @@
  */
 
 import MySocket from './mysocket';
-import MyCharacter from './MyCharacter';
+import MyCharacter, { reviveOfflineDeath } from './MyCharacter';
 import LoginState from './LoginState';
 import StateManager from './StateManager';
 import GameCanvas from './GameCanvas';
@@ -200,6 +200,10 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
         }
       } catch { /* use server data */ }
     }
+    // Died and closed the game before respawning → revive like the original
+    // server does on load (50 HP at the death map's returnMap)
+    await reviveOfflineDeath(charData);
+
     // 4. Apply character data — set properties only (no WZ loading here,
     //    MapState.initialize → MyCharacter.load() handles sprite loading)
     // Block saves until the restore below succeeds (prevents empty-state
@@ -265,8 +269,11 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
       MyCharacter.inventory.mesos = charData.mesos ?? 0;
     }
 
-    // Quests
+    // Quests. Quest data must be loaded first — see the same block in
+    // UILogin: a mid-load replay lost mob progress and re-fired the
+    // "Quest completed" balloon on every login.
     if (MyCharacter.questManager && charData.quests) {
+      await MyCharacter.questManager.initialize();
       for (const q of charData.quests) {
         if (q.state === 2) {
           MyCharacter.questManager.forceCompleteQuest(q.quest_id, q.completed_at ?? 0);
@@ -276,6 +283,8 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
           MyCharacter.questManager.forceStartQuest(q.quest_id, mobProgress);
         }
       }
+      // After every quest is back (prereq-quest ordering settled)
+      MyCharacter.questManager.reseedFulfilled();
     }
 
     // Skills

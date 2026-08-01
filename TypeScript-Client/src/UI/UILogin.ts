@@ -277,7 +277,10 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       if (uiLoginRef.gameInAudio) PLAY_AUDIO(uiLoginRef.gameInAudio);
 
       const charData = result.character;
-      const MyChar = (await import('../MyCharacter')).default;
+      const { default: MyChar, reviveOfflineDeath } = await import('../MyCharacter');
+      // Died and closed the game before respawning → revive like the original
+      // server does on load (50 HP at the death map's returnMap)
+      await reviveOfflineDeath(charData);
       // Block saves until the full restore below succeeds — a save with a
       // half-restored character would wipe DB inventory/equips
       (MyChar as any)._restoreComplete = false;
@@ -356,8 +359,12 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         MyChar.inventory.mesos = charData.mesos ?? 0;
       }
 
-      // Apply quests
+      // Apply quests. Quest data must be loaded first: forceStartQuest reads
+      // requirements to rebuild mob progress — with the data still loading it
+      // restored nothing and seeded "not fulfilled", so the poll later saw a
+      // false→true flip and popped "Quest completed" on every login.
       if (MyChar.questManager && charData.quests) {
+        await MyChar.questManager.initialize();
         for (const q of charData.quests) {
           if (q.state === 2) {
             MyChar.questManager.forceCompleteQuest(q.quest_id, q.completed_at ?? 0);
@@ -369,6 +376,8 @@ UILogin.initialize = async function (canvas: GameCanvas) {
             MyChar.questManager.forceStartQuest(q.quest_id, mobProgress);
           }
         }
+        // After every quest is back (prereq-quest ordering settled)
+        MyChar.questManager.reseedFulfilled();
       }
 
       // Apply skills
