@@ -31,10 +31,17 @@ const GAME_OPTION_KEYS = [
 type GameOptionKey = (typeof GAME_OPTION_KEYS)[number];
 type GameOptions = Record<GameOptionKey, boolean>;
 
+interface Resolution {
+  width: number;
+  height: number;
+}
+
 interface SettingsShape {
   bgmVolume: number;
   sfxVolume: number;
   gameOptions: GameOptions;
+  /** null = classic 800x600 */
+  resolution: Resolution | null;
 }
 
 const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
@@ -51,7 +58,17 @@ interface SettingsInterface extends SettingsShape {
   setBgmVolume: (volume: number) => void;
   setSfxVolume: (volume: number) => void;
   setGameOption: (key: GameOptionKey, allowed: boolean) => void;
+  setResolution: (width: number, height: number) => void;
   save: () => void;
+}
+
+function loadResolution(raw: any): Resolution | null {
+  if (!raw || typeof raw !== "object") return null;
+  const w = Number(raw.width);
+  const h = Number(raw.height);
+  if (!Number.isFinite(w) || !Number.isFinite(h)) return null;
+  if (w < 800 || h < 600 || w > 3840 || h > 2160) return null;
+  return { width: Math.floor(w), height: Math.floor(h) };
 }
 
 function loadGameOptions(raw: any): GameOptions {
@@ -74,12 +91,14 @@ function load(): SettingsShape {
       bgmVolume: clamp01(parsed.bgmVolume ?? DEFAULT_BGM_VOLUME),
       sfxVolume: clamp01(parsed.sfxVolume ?? DEFAULT_SFX_VOLUME),
       gameOptions: loadGameOptions(parsed.gameOptions),
+      resolution: loadResolution(parsed.resolution),
     };
   } catch {
     return {
       bgmVolume: DEFAULT_BGM_VOLUME,
       sfxVolume: DEFAULT_SFX_VOLUME,
       gameOptions: defaultGameOptions(),
+      resolution: null,
     };
   }
 }
@@ -90,6 +109,7 @@ const Settings: SettingsInterface = {
   bgmVolume: stored.bgmVolume,
   sfxVolume: stored.sfxVolume,
   gameOptions: stored.gameOptions,
+  resolution: stored.resolution,
   onBgmVolumeChange: null,
 
   setBgmVolume(volume: number) {
@@ -110,6 +130,12 @@ const Settings: SettingsInterface = {
     this.save();
   },
 
+  setResolution(width: number, height: number) {
+    this.resolution =
+      width === 800 && height === 600 ? null : { width, height };
+    this.save();
+  },
+
   save() {
     try {
       localStorage.setItem(
@@ -118,6 +144,7 @@ const Settings: SettingsInterface = {
           bgmVolume: this.bgmVolume,
           sfxVolume: this.sfxVolume,
           gameOptions: this.gameOptions,
+          resolution: this.resolution,
         })
       );
     } catch (e) {

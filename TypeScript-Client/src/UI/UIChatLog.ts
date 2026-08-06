@@ -131,7 +131,9 @@ const UIChatLog = {
   render(canvas: GameCanvas) {
     this.loadAssets();
     const ctx = canvas.context;
-    const uiX = 0;
+    // The chat row lives inside the 800-wide status bar, which is centered
+    // as one island on wider screens
+    const uiX = Math.floor((config.width - 800) / 2);
     const uiY = config.height - 600; // offset for taller resolutions
 
     const rowY = uiY + 536;        // input row / minimized strip top
@@ -186,7 +188,7 @@ const UIChatLog = {
       if (this._downImg?.complete) ctx.drawImage(this._downImg, uiX + LOG_W - 17, logBottom - 15);
     }
 
-    this.handleInput(canvas, btnX, btnY, logBottom);
+    this.handleInput(canvas, btnX, btnY, logBottom, uiX);
   },
 
   drawShadowText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
@@ -201,7 +203,7 @@ const UIChatLog = {
     ctx.restore();
   },
 
-  handleInput(canvas: GameCanvas, btnX: number, btnY: number, logBottom: number) {
+  handleInput(canvas: GameCanvas, btnX: number, btnY: number, logBottom: number, uiX: number = 0) {
     const mx = (canvas as any).mouseX || 0;
     const my = (canvas as any).mouseY || 0;
     const logTop = logBottom - VISIBLE_ROWS * LINE_H - 4;
@@ -212,14 +214,14 @@ const UIChatLog = {
         this.toggle();
         return;
       }
-      if (this.expanded && mx >= LOG_W - 17 && mx < LOG_W - 2) {
+      if (this.expanded && mx >= uiX + LOG_W - 17 && mx < uiX + LOG_W - 2) {
         if (my >= logTop + 2 && my < logTop + 15) { this.scrollOffset++; return; }
         if (my >= logBottom - 15 && my < logBottom - 2) { this.scrollOffset--; return; }
       }
     }
 
     // Mouse wheel over the expanded log
-    if (this.expanded && mx < LOG_W && my >= logTop && my < logBottom) {
+    if (this.expanded && mx >= uiX && mx < uiX + LOG_W && my >= logTop && my < logBottom) {
       if ((canvas as any).scrolledUp) this.scrollOffset++;
       if ((canvas as any).scrolledDown) this.scrollOffset--;
       if (this.scrollOffset < 0) this.scrollOffset = 0;

@@ -78,6 +78,41 @@ export async function getItemSellPrice(itemId: number): Promise<number> {
   }
 }
 
+/**
+ * WZ info/notSale flag — items a shop refuses to buy (event potions, quest
+ * drops and the like). GMS lists them in the sell panel like anything else
+ * and rejects the sale attempt with a message box.
+ */
+export async function getItemNotSale(itemId: number): Promise<boolean> {
+  const category = Math.floor(itemId / 1000000);
+  const strId = itemId.toString().padStart(8, '0');
+  const prefix = strId.slice(0, 4);
+
+  try {
+    if (category === 1) {
+      const firstThreeDigits = Math.floor(itemId / 10000);
+      const equipDirMap: Record<number, string> = {
+        100: 'Cap', 101: 'Accessory', 102: 'Accessory', 103: 'Accessory',
+        104: 'Coat', 105: 'Longcoat', 106: 'Pants', 107: 'Shoes',
+        108: 'Glove', 109: 'Shield', 110: 'Cape', 111: 'Ring',
+        112: 'Accessory', 113: 'Accessory', 114: 'Accessory',
+      };
+      for (let w = 130; w <= 170; w++) equipDirMap[w] = 'Weapon';
+      const dir = equipDirMap[firstThreeDigits];
+      if (!dir) return false;
+      const infoNode: any = await WZManager.get(`Character.wz/${dir}/0${itemId}.img/info`);
+      return Number(infoNode?.notSale?.nValue ?? 0) === 1;
+    }
+
+    const wzType = MapleInventory.getWzNameFromInventoryId(strId);
+    if (!wzType) return false;
+    const infoNode: any = await WZManager.get(`Item.wz/${wzType}/${prefix}.img/${strId}/info`);
+    return Number(infoNode?.notSale?.nValue ?? 0) === 1;
+  } catch {
+    return false;
+  }
+}
+
 /** Per-unit price for rechargeables (stars/bullets) from WZ info/unitPrice */
 export async function getItemUnitPrice(itemId: number): Promise<number> {
   try {

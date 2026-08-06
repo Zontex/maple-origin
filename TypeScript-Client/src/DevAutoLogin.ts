@@ -12,6 +12,7 @@ import MyCharacter, { reviveOfflineDeath } from './MyCharacter';
 import LoginState from './LoginState';
 import StateManager from './StateManager';
 import GameCanvas from './GameCanvas';
+import { serializeFullKeymap } from './KeyBindings';
 
 const SESSION_KEY = 'maple_dev_session';
 
@@ -117,6 +118,9 @@ export function saveDevSnapshot() {
       },
       quests,
       skills: MyCharacter.skillManager?.serialize() || [],
+      // Without this, every refresh shadowed the DB's keymap with nothing —
+      // and the post-login initial save then wiped the DB rows too
+      keymap: serializeFullKeymap(),
     };
     sessionStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -197,6 +201,11 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
         } else {
           console.log('[DevAutoLogin] Using sessionStorage snapshot (fresher than DB)');
           charData = snapshot;
+          // Older snapshots predate the keymap field — fall back to the
+          // DB's bindings rather than restoring none and wiping them
+          if (!charData.keymap?.length && result.character.keymap?.length) {
+            charData.keymap = result.character.keymap;
+          }
         }
       } catch { /* use server data */ }
     }
@@ -325,6 +334,15 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
         MyCharacter.pos.y = charData.posY;
       }
     }
+
+    // Initialize multiplayer, exactly as LoginState.enterGame does. This is
+    // what registers with the game server (player_info → mob host), starts
+    // the update/registration-retry/mob-batch loops, arms the 30s autosave
+    // and the beforeunload save. Without it every HMR reload landed in a
+    // half-dead session: mobs frozen in remote mode, attacks doing nothing,
+    // and no save ever sent — fixable only by closing the tab, since a
+    // refresh just re-ran this same path.
+    await MySocket.initialize();
 
     console.log('[DevAutoLogin] Auto-login complete! Entered game.');
     return true;

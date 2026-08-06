@@ -137,6 +137,9 @@ const UIHotkeyBar = {
       icon: info?.icon || null,
     };
     console.log(`[HotkeyBar] Assigned skill ${info?.name || skillId} to slot ${slotIndex} (${this.slots[slotIndex].label})`);
+    // Bindings are part of the save payload — persist soon, like every
+    // other gameplay change (they used to ride only the 30s backstop)
+    (window as any).__mySocket?.requestSave?.();
   },
 
   // Clear a slot
@@ -145,6 +148,7 @@ const UIHotkeyBar = {
     this.slots[slotIndex].type = 'none';
     this.slots[slotIndex].actionId = 0;
     this.slots[slotIndex].icon = null;
+    (window as any).__mySocket?.requestSave?.();
   },
 
   // Check key activations and execute bound skills
@@ -263,9 +267,10 @@ const UIHotkeyBar = {
   render(canvas: GameCanvas, _camera: CameraInterface) {
     if (!this._initialized || !this.isVisible) return;
 
-    // Position at bottom-right, vertically aligned with status bar top
+    // Bottom-right of the 800-wide status bar island (centered on wider
+    // screens) — attached to the bar like GMS, not to the screen corner
     // Status bar starts at config.height - 71
-    this.barX = config.width - QS_W;
+    this.barX = Math.floor((config.width - 800) / 2) + 800 - QS_W;
     this.barY = config.height - 71 - QS_H + 9; // overlap slightly into status bar like GMS
 
     const ctx = canvas.context;
@@ -421,6 +426,7 @@ const UIHotkeyBar = {
       actionId: itemId,
       icon: icon,
     };
+    (window as any).__mySocket?.requestSave?.();
   },
 
   async playSkillSound(skillId: number) {
@@ -472,11 +478,20 @@ const UIHotkeyBar = {
       }));
   },
 
-  // Deserialize from DB load
+  // Deserialize from DB load. The keymap table also carries the keyboard
+  // bindings (bindType 3/4/5) — route those to KeyBindings; 1/2 are ours.
   async deserialize(data: { keyCode: string; bindType: number; actionId: number }[]) {
     if (!this._initialized) this.initialize();
 
+    try {
+      const { applyKeyboardBindings } = await import('../KeyBindings');
+      applyKeyboardBindings(data);
+    } catch (e) {
+      console.warn('[UIHotkeyBar] keyboard binding restore failed', e);
+    }
+
     for (const entry of data) {
+      if (entry.bindType >= 3) continue;
       const slotIdx = this.slots.findIndex(s => s.key === entry.keyCode);
       if (slotIdx >= 0) {
         if (entry.bindType === 1) {

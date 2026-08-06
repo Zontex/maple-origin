@@ -1,4 +1,5 @@
 import WZManager from "./wz-utils/WZManager";
+import config from "./Config";
 import GUIUtil from "./GuiUtils";
 import PLAY_AUDIO from "./Audio/PlayAudio";
 import { Physics } from "./Physics";
@@ -538,6 +539,23 @@ class MapleCharacter {
       this.setFaceFrame(faceFrame);
     }
   }
+
+  /** Face emote — F1-F7 in v83, held for 5 seconds like the original */
+  emoteUntil: number = 0;
+  private emoteFrameTimer: number = 0;
+  playEmote(expr: string) {
+    if (!this.Face?.[expr]) return;
+    this.setFaceExpr(expr, 0);
+    this.emoteUntil = Date.now() + 5000;
+    this.emoteFrameTimer = 0;
+  }
+
+  /** Remote player's emote, refreshed by each incoming update that carries it */
+  applyRemoteEmote(expr?: string | null) {
+    if (!expr) return;
+    if (this.faceExpr !== expr) this.playEmote(expr);
+    else this.emoteUntil = Math.max(this.emoteUntil, Date.now() + 1000);
+  }
   setFaceFrame(faceFrame = 0) {
     this.faceFrame = !this.Face[this.faceExpr][faceFrame] ? 0 : faceFrame;
   }
@@ -956,7 +974,14 @@ class MapleCharacter {
    * reqJob is display-only in GMS — any class may wear any equip whose stat
    * requirements are met.
    */
-  canEquip(infoNode: any): boolean {
+  canEquip(infoNode: any, itemId?: number): boolean {
+    // Gender lives in the item ID, not the info node: the thousands digit of
+    // an equip id is 0 = male, 1 = female, anything higher unisex (Cosmic's
+    // getGenderFromId). Sophia Pants 1061006 → 1, wearable only by women.
+    if (itemId && Math.floor(itemId / 1000000) === 1) {
+      const itemGender = Math.floor(itemId / 1000) % 10;
+      if (itemGender <= 1 && itemGender !== this.gender) return false;
+    }
     if (!infoNode) return true;
     const req = (key: string) => {
       const v = infoNode.nGet?.(key)?.nGet?.("nValue", 0) ?? 0;
@@ -1659,7 +1684,7 @@ async fireProjectile(weaponType: number) {
 /**
  * Create a visual hit effect at the specified position
  */
-async createHitEffect(x, y) {
+async createHitEffect(x: number, y: number) {
   try {
     // This is a placeholder for creating hit effects
     // You would typically load a sprite sheet and animate it
@@ -1835,19 +1860,31 @@ isCloseToMob = (inAllDirections = true) => {
     // keeps a stale fh (see Physics.jump), hence the explicit rope guard.
     if (!this.pos?.fh || this.isInClimbingRope) return;
 
-    const portal = this.map!.portals.filter(
-      (portal: Portal) => portal.rect
-    ).find((portal: Portal) => {
-      return isPositionInsideRect(
-        {
-          x: this.pos.x,
-          y: this.pos.y,
-        },
-        portal.rect!
-      );
-    });
+    // A portal's entry box reaches 173px above its own y (it is sized from the
+    // tall `pv` doorway sprite), so boxes on stacked platforms overlap and the
+    // player can stand inside two at once. Taking the first match in WZ order
+    // then picks the wrong one: in Henesys' An Empty House (100000002) you
+    // arrive on the ledge holding the exit `out00`, 158px above the invisible
+    // `up00` whose only job is to lift you onto that ledge — and up00 comes
+    // first, so every press of up warped you back to where you already stood
+    // and the room had no way out. Take the nearest portal instead.
+    let nearest: Portal | undefined;
+    let closest = Infinity;
+    for (const candidate of this.map!.portals as Portal[]) {
+      if (!candidate.rect) continue;
+      if (!isPositionInsideRect({ x: this.pos.x, y: this.pos.y }, candidate.rect)) continue;
 
-    if (!portal) return;
+      const dx = candidate.x - this.pos.x;
+      const dy = candidate.y - this.pos.y;
+      const distance = dx * dx + dy * dy;
+      if (distance < closest) {
+        closest = distance;
+        nearest = candidate;
+      }
+    }
+
+    if (!nearest) return;
+    const portal = nearest;
 
     this.isInPortal = true;
 
@@ -2068,6 +2105,22 @@ isCloseToMob = (inAllDirections = true) => {
     this.deathPosX = this.pos.x;
     this.deathPosY = this.pos.y;
 
+    // The monument is built on the ground. HP can hit zero mid-air (knockback,
+    // touch damage on the way down), and with movement frozen the raw position
+    // would leave the tomb hanging in the air or sunk below the platform edge.
+    const ground = this.map?.getFootholdBelow?.(this.deathPosX, this.deathPosY);
+    if (ground) {
+      this.deathPosY = ground.y;
+      this.pos.y = ground.y;
+      this.pos.vx = 0;
+      this.pos.vy = 0;
+      // The render pass draws the player after its own layer's tiles and mobs
+      // (from pos.fh.layer). A death mid-air keeps the layer of whatever was
+      // last stood on, which can be a lower layer — the tomb then draws
+      // *behind* the platform face and mobs it is supposed to rest among.
+      if (ground.fh) this.pos.fh = ground.fh;
+    }
+
     // v83 death EXP loss (Beginners exempt, no de-leveling): 1% in town,
     // otherwise 10% (LUK < 50) or 5% of the level's total EXP
     if (this.stats.jobId !== 0 && !this.isRemote) {
@@ -2081,6 +2134,9 @@ isCloseToMob = (inAllDirections = true) => {
     this.tombstoneYOffset = -300;
     this.tombstoneActive = true;
     this.tombstoneDone = false;
+    // Each death recentres the revive dialog on the current screen
+    this.deathDialogPos = null;
+    this._deathDragging = false;
 
     // Load tombstone animation
     try {
@@ -2102,6 +2158,9 @@ isCloseToMob = (inAllDirections = true) => {
   }
 
   async showDeathDialog() {
+    // A remote player's tombstone must never raise the local revive dialog
+    // (or, through the load-failure fallback, warp the local player to town)
+    if (this.isRemote) return;
     // Load death dialog assets once
     if (!this.deathDialogLoaded) {
       try {
@@ -2121,11 +2180,18 @@ isCloseToMob = (inAllDirections = true) => {
     this.deathDialogVisible = true;
   }
 
+  // Where the revive dialog sits: screen-centred at the current resolution
+  // until the player drags it somewhere, then wherever they put it
+  deathDialogPos: { x: number; y: number } | null = null;
+  _deathDragging: boolean = false;
+  _deathDragOffX: number = 0;
+  _deathDragOffY: number = 0;
+
   getDeathDialogRect() {
     const bgImg = this.deathDialogBg?.nGetImage();
     if (!bgImg) return null;
-    const x = Math.floor(400 - bgImg.width / 2);
-    const y = Math.floor(300 - bgImg.height / 2);
+    const x = this.deathDialogPos?.x ?? Math.floor((config.width - bgImg.width) / 2);
+    const y = this.deathDialogPos?.y ?? Math.floor((config.height - bgImg.height) / 2);
     return { x, y, width: bgImg.width, height: bgImg.height };
   }
 
@@ -2134,6 +2200,39 @@ isCloseToMob = (inAllDirections = true) => {
 
     const bgImg = this.deathDialogBg?.nGetImage();
     if (!bgImg) return;
+
+    // Drag anywhere on the dialog except the OK button. Grab is judged from
+    // where the press STARTED (mouseDownX/Y), so a drag that wanders over
+    // the button keeps dragging and a click that starts on the button never
+    // moves the dialog.
+    if (canvas.clicked) {
+      if (this._deathDragging) {
+        const rect = this.getDeathDialogRect()!;
+        this.deathDialogPos = {
+          x: Math.max(0, Math.min(config.width - rect.width, canvas.mouseX - this._deathDragOffX)),
+          y: Math.max(0, Math.min(config.height - rect.height, canvas.mouseY - this._deathDragOffY)),
+        };
+      } else {
+        const rect = this.getDeathDialogRect()!;
+        const dx = canvas.mouseDownX;
+        const dy = canvas.mouseDownY;
+        const okImg = this.deathDialogOkNormal?.nGetImage();
+        const okX = rect.x + Math.floor(rect.width / 2) - Math.floor((okImg?.width || 0) / 2);
+        const okY = rect.y + rect.height - (okImg?.height || 0) - 12;
+        const onOk = okImg &&
+          dx >= okX && dx <= okX + okImg.width &&
+          dy >= okY && dy <= okY + okImg.height;
+        if (!onOk &&
+            dx >= rect.x && dx <= rect.x + rect.width &&
+            dy >= rect.y && dy <= rect.y + rect.height) {
+          this._deathDragging = true;
+          this._deathDragOffX = canvas.mouseX - rect.x;
+          this._deathDragOffY = canvas.mouseY - rect.y;
+        }
+      }
+    } else {
+      this._deathDragging = false;
+    }
 
     const dlg = this.getDeathDialogRect()!;
 
@@ -2211,6 +2310,9 @@ isCloseToMob = (inAllDirections = true) => {
       this.pos.x = spawnLocation.x;
       this.pos.y = spawnLocation.y;
     }
+    // die() froze movement; a fresh Physics re-enables it, but not the
+    // fallback path where no spawn location was found
+    this.pos.isMoveEnalbed = true;
   }
 
   tombstoneYOffset: number = 0;
@@ -2218,18 +2320,31 @@ isCloseToMob = (inAllDirections = true) => {
   updateTombstone(msPerTick: number) {
     if (!this.tombstoneActive || !this.tombstoneNode) return;
 
+    // Effect.wz/Tomb.img/fall is one strip with three acts: frames 0-11 are
+    // the stone tumbling end over end, 12-18 the ground impact with its dust
+    // cloud, and 19 the settled tombstone ('land' is just a UOL back to 19).
+    // Tumble loops while airborne and the impact only plays on touchdown —
+    // running the strip straight through kicked the dust up in mid-air.
+    const TUMBLE_FRAMES = 12;
+    const frames = this.tombstoneNode.nChildren;
+
     // Animate the tombstone falling from the sky
     if (this.tombstoneYOffset < 0) {
-      // Fall speed: accelerate with gravity
       this.tombstoneYOffset += msPerTick * 0.6;
       if (this.tombstoneYOffset >= 0) {
         this.tombstoneYOffset = 0;
       }
     }
+    const falling = this.tombstoneYOffset < 0;
+    if (!falling && this.tombstoneFrame < TUMBLE_FRAMES) {
+      // Touched down mid-tumble — cut straight to the impact
+      this.tombstoneFrame = TUMBLE_FRAMES;
+      this.tombstoneDelay = 0;
+    }
 
     // Animate sprite frames
     this.tombstoneDelay += msPerTick;
-    const frameNode = this.tombstoneNode.nChildren[this.tombstoneFrame];
+    const frameNode = frames[this.tombstoneFrame];
     if (!frameNode) {
       this.tombstoneActive = false;
       this.tombstoneDone = true;
@@ -2241,9 +2356,11 @@ isCloseToMob = (inAllDirections = true) => {
     if (this.tombstoneDelay >= frameDelay) {
       this.tombstoneDelay -= frameDelay;
       this.tombstoneFrame++;
-      if (this.tombstoneFrame >= this.tombstoneNode.nChildren.length) {
-        // Keep showing last frame, mark done
-        this.tombstoneFrame = this.tombstoneNode.nChildren.length - 1;
+      if (falling) {
+        this.tombstoneFrame %= TUMBLE_FRAMES;
+      } else if (this.tombstoneFrame >= frames.length) {
+        // Keep showing the settled stone, mark done
+        this.tombstoneFrame = frames.length - 1;
         this.tombstoneActive = false;
         this.tombstoneDone = true;
         this.showDeathDialog();
@@ -2548,6 +2665,23 @@ isCloseToMob = (inAllDirections = true) => {
       return;
     }
 
+    // Face emote: animate its frames while it lasts, then back to blink
+    if (this.emoteUntil) {
+      const now = Date.now();
+      if (now >= this.emoteUntil) {
+        this.emoteUntil = 0;
+        this.setFaceExpr('blink', 0);
+      } else {
+        this.emoteFrameTimer += msPerTick;
+        if (this.emoteFrameTimer >= 180) {
+          this.emoteFrameTimer = 0;
+          const frames = this.Face?.[this.faceExpr];
+          const count = frames?.nChildren?.length ?? 1;
+          if (count > 1) this.setFaceFrame((this.faceFrame + 1) % count);
+        }
+      }
+    }
+
     // Update buff timers
     if (this.buffManager) {
       this.buffManager.update(msPerTick);
@@ -2813,13 +2947,23 @@ isCloseToMob = (inAllDirections = true) => {
     const isDrawable = (n: any) =>
       n.nTagName === "canvas" || n.nTagName === "uol";
     const isClimbStance = realStance === 'ladder' || realStance === 'rope';
+    const isDeadStance = realStance === 'dead';
     const getParts = (img: any) => {
       const stanceNode = img.nGet(realStance);
       if (!stanceNode || !stanceNode.nChildren || stanceNode.nChildren.length === 0) {
         // Climbing (back view): parts without ladder/rope frames are simply
         // not drawn in GMS — weapons have none, so no sword across the face
         if (isClimbStance) return [];
-        // Fallback to stand1 if the part doesn't have this stance (e.g. hair has no 'dead')
+        // Dead: only the body carries 'dead' frames. Hair keeps its
+        // front-facing 'default' part so the head isn't bald; equips, weapon
+        // and hat have no default node and are simply not drawn — falling
+        // back to stand1 strewed the outfit across the ground, since those
+        // parts anchor to a navel the lying body never registers.
+        if (isDeadStance) {
+          const def = img.nGet('default');
+          return def?.nChildren?.length ? def.nChildren : [];
+        }
+        // Fallback to stand1 if the part doesn't have this stance
         return img.nGet('stand1').nGet(0).nChildren;
       }
       return stanceNode.nGet(realFrame).nChildren;
@@ -3121,7 +3265,11 @@ isCloseToMob = (inAllDirections = true) => {
       }
     }
   
-    // Draw tombstone behind character when dead
+    // Death: the tombstone lands where they died and the body lies at its
+    // foot — stone drawn first (behind), then the composed 'dead' body over
+    // it. Which parts compose is decided in getDrawableFrames: only the body
+    // has 'dead' frames, so equips/weapon/hat are skipped rather than falling
+    // back to stand1 parts strewn across the ground.
     this.drawChair(canvas, camera);
     this.drawTombstone(canvas, camera);
 

@@ -79,13 +79,22 @@ const UIMiniMap = {
     minBtnX: number; minBtnY: number;
     minBtnW: number; minBtnH: number;
   } | null,
+
+  // Methods are attached below (UIMiniMap.initialize = ...); declared here
+  // so the inferred type carries them for the callers in MapState/MapleMap
+  initialize: undefined as unknown as () => Promise<void>,
+  loadMapData: undefined as unknown as () => void,
+  _buildCache: undefined as unknown as () => void,
+  update: undefined as unknown as (msPerTick: number) => void,
+  render: undefined as unknown as (canvas: GameCanvas, camera: CameraInterface) => void,
+  handleClick: undefined as unknown as (cx: number, cy: number) => boolean,
 };
 
 UIMiniMap.initialize = async function () {
   if (this.initialized) return;
 
   try {
-    const uiWindow = await WZManager.get('UI.wz/UIWindow.img');
+    const uiWindow: any = await WZManager.get('UI.wz/UIWindow.img');
     const miniMapNode = uiWindow.MiniMap;
 
     const maxMap = miniMapNode.MaxMap;
@@ -112,11 +121,11 @@ UIMiniMap.initialize = async function () {
     };
 
     // v83 minimap header buttons: blue -/+ squares from Basic.img
-    const basic = await WZManager.get('UI.wz/Basic.img');
+    const basic: any = await WZManager.get('UI.wz/Basic.img');
     this.btMin = basic.BtMin.normal.nGet('0').nGetImage();
     this.btMax = basic.BtMax.normal.nGet('0').nGetImage();
 
-    const mapHelper = await WZManager.get('Map.wz/MapHelper.img');
+    const mapHelper: any = await WZManager.get('Map.wz/MapHelper.img');
     const mmIcons = mapHelper.minimap;
     this.icons = {
       user: mmIcons.user.nGetImage(),

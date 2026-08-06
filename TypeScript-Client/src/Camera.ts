@@ -96,8 +96,11 @@ Camera.lookAt = function (x, y) {
   }
 
   if (boundaries.bottom - boundaries.top < height) {
-    const topGap = (height - (boundaries.bottom - boundaries.top)) / 2;
-    targetY = Math.round(boundaries.top - topGap);
+    // Map shorter than the viewport (tall resolutions): anchor the BOTTOM
+    // edge rather than centering. v83 maps put the ground at the bottom and
+    // sky above — centering split the overflow and exposed the void under
+    // the floor, while sky overflow above is covered by tiling backgrounds.
+    targetY = Math.round(boundaries.bottom - height);
   } else if (y - height / 2 < boundaries.top) {
     targetY = boundaries.top;
   } else if (y + height / 2 > boundaries.bottom) {

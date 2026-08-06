@@ -5,6 +5,14 @@ import { CameraInterface } from './Camera';
 import DropItemSprite from './DropItem/DropItemSprite';
 import REACTOR_DROPS from './Constants/ReactorDropData';
 
+interface ReactorItemEvent {
+  itemId: number;
+  count: number;
+  lt: { x: number; y: number };
+  rb: { x: number; y: number };
+  nextState: number;
+}
+
 interface ReactorState {
   frames: HTMLImageElement[];
   origins: { x: number; y: number }[];
@@ -14,6 +22,9 @@ interface ReactorState {
   hitDelays: number[];
   hitSound: HTMLAudioElement | null;
   nextState: number; // state to transition to on hit (from event)
+  // Type-100 event: reactor advances when the matching item is dropped
+  // inside its lt/rb box (HPQ moonflowers take primrose seeds this way)
+  itemEvent: ReactorItemEvent | null;
 }
 
 // Reactors with no entry of their own in Sound.wz/Reactor.img borrow a sibling's sounds
@@ -21,6 +32,10 @@ interface ReactorState {
 const REACTOR_SOUND_FALLBACK: Record<number, number> = {
   2001: 2000,
 };
+
+// Reactors that only scripts may advance (weapon hits pass through):
+// 9101000 = the HPQ moon, filled one state per planted primrose
+const SCRIPT_ONLY_REACTORS = new Set<number>([9101000]);
 
 export default class Reactor {
   id: number = 0;
@@ -57,6 +72,8 @@ export default class Reactor {
   height: number = 34;
 
   pos: { x: number; y: number } = { x: 0, y: 0 };
+  /** WZ info/link target — sprite/state donor for stateless reactors */
+  private linkId: number = 0;
 
   static async fromOpts(opts: {
     id: number;
@@ -107,10 +124,22 @@ export default class Reactor {
     const path = `Reactor.wz/${padded}.img`;
 
     try {
-      const node: any = await WZManager.get(path);
+      let node: any = await WZManager.get(path);
       if (!node) {
         console.warn(`[Reactor] No WZ data for reactor ${this.id}`);
         return;
+      }
+
+      // Linked reactors (info/link, like mobs) carry no states of their own —
+      // the HPQ primrose leaves 9102003-9102007 all borrow 9102002's sprites
+      // and hit chain while keeping their own id (and so their own drops)
+      const linkId = node.info?.link?.nValue;
+      if (linkId) {
+        this.linkId = Number(linkId);
+        const linkedPath = `Reactor.wz/${String(linkId).padStart(7, '0')}.img`;
+        const linked: any = await WZManager.get(linkedPath);
+        if (linked) node = linked;
+        else console.warn(`[Reactor] Broken link ${this.id} -> ${linkId}`);
       }
 
       // Parse states (numbered 0, 1, 2, ...)
@@ -130,6 +159,7 @@ export default class Reactor {
           hitDelays: [],
           hitSound: null,
           nextState: stateIndex + 1,
+          itemEvent: null,
         };
 
         // Parse event (tells us what triggers state transition)
@@ -138,6 +168,17 @@ export default class Reactor {
           for (const evt of eventNode.nChildren) {
             if (evt.state?.nValue !== undefined) {
               state.nextState = evt.state.nValue;
+            }
+            // type 100 = item-drop trigger: child "0" is the item id, "1" the
+            // count, lt/rb the activation box relative to the reactor position
+            if (evt.type?.nValue === 100) {
+              state.itemEvent = {
+                itemId: evt['0']?.nValue ?? 0,
+                count: evt['1']?.nValue ?? 1,
+                lt: { x: evt.lt?.nX ?? 0, y: evt.lt?.nY ?? 0 },
+                rb: { x: evt.rb?.nX ?? 0, y: evt.rb?.nY ?? 0 },
+                nextState: evt.state?.nValue ?? stateIndex + 1,
+              };
             }
           }
         }
@@ -207,6 +248,7 @@ export default class Reactor {
     if (REACTOR_SOUND_FALLBACK[this.id] !== undefined) {
       soundIds.push(REACTOR_SOUND_FALLBACK[this.id]);
     }
+    if (this.linkId) soundIds.push(this.linkId);
 
     for (const soundId of soundIds) {
       try {
@@ -232,6 +274,10 @@ export default class Reactor {
 
     const state = this.states[this.currentState];
     if (!state) return false;
+
+    // Item-triggered states (HPQ moonflowers) and script-driven reactors
+    // (the HPQ moon) don't respond to weapon hits at all
+    if (state.itemEvent || SCRIPT_ONLY_REACTORS.has(this.id)) return false;
 
     // Check if this hit will destroy the reactor
     // The last state (e.g. state 4) is always the "destroyed" state (1x1 pixel).
@@ -269,6 +315,47 @@ export default class Reactor {
     }
 
     return willDestroy;
+  }
+
+  getState(): number {
+    return this.currentState;
+  }
+
+  /** The item-drop trigger of the current state, if any (and still pending) */
+  getItemEvent(): ReactorItemEvent | null {
+    if (this.destroyed || this.isHit || this.pendingAdvance >= 0) return null;
+    return this.states[this.currentState]?.itemEvent ?? null;
+  }
+
+  /**
+   * Advance to a specific state without the last-state-destroys heuristic —
+   * used by scripted transitions (moonflower blooming on a planted seed, the
+   * HPQ moon filling per bloom). Plays the current state's hit animation as
+   * the transition when one exists.
+   */
+  forceAdvance(toState: number): void {
+    if (this.destroyed || toState === this.currentState) return;
+    if (toState < 0 || toState >= this.states.length) return;
+
+    const state = this.states[this.currentState];
+    if (state?.hitSound) {
+      try { PLAY_AUDIO(state.hitSound); } catch {}
+    }
+    if (this.isHit) {
+      // A transition animation is still playing — retarget it so the stale
+      // pendingAdvance can't rewind a newer state (two quick moon fills)
+      this.pendingAdvance = toState;
+    } else if (state && state.hitFrames.length > 0) {
+      this.isHit = true;
+      this.hitFrame = 0;
+      this.hitTimer = 0;
+      this.hitAnimState = this.currentState;
+      this.pendingAdvance = toState;
+    } else {
+      this.currentState = toState;
+      this.frame = 0;
+      this.frameTimer = 0;
+    }
   }
 
   private destroy(): void {

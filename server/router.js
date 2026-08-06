@@ -9,6 +9,7 @@ const { handleRegister, handleLogin, handleGetWorlds, handleGetCharacters, handl
 const { players } = require('./state');
 const { sendToPlayer } = require('./network');
 const { assignMapHost } = require('./hostManager');
+const { handlePartyCreate, handlePartyInvite, handlePartyInviteResponse, handlePartyLeave, handlePartyExpel, handlePartyChangeLeader, handlePartyExp, handlePartyWarp } = require('./handlers/party');
 
 /**
  * A client that believes it is not the mob host but is receiving no mob
@@ -124,6 +125,30 @@ function handleMessage(playerId, data) {
       break;
     case 'save_character':
       handleSaveCharacter(playerId, data.data);
+      break;
+    case 'party_create':
+      handlePartyCreate(playerId);
+      break;
+    case 'party_invite':
+      handlePartyInvite(playerId, data.data);
+      break;
+    case 'party_invite_response':
+      handlePartyInviteResponse(playerId, data.data);
+      break;
+    case 'party_leave':
+      handlePartyLeave(playerId);
+      break;
+    case 'party_expel':
+      handlePartyExpel(playerId, data.data);
+      break;
+    case 'party_change_leader':
+      handlePartyChangeLeader(playerId, data.data);
+      break;
+    case 'party_exp':
+      handlePartyExp(playerId, data.data);
+      break;
+    case 'party_warp':
+      handlePartyWarp(playerId, data.data);
       break;
     default:
       console.warn('Unknown message type:', data.type);

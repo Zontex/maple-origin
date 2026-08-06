@@ -26,6 +26,7 @@ import UIShipClock from './UI/UIShipClock';
 import ShipObject from './Transport/ShipObject';
 import { _setMapleMap } from './Physics';
 import { drawSkillHits, clearSkillHits } from './Effects/SkillHitEffect';
+import HenesysPQ from './Events/HenesysPQ';
 
 export interface MapleMap {
   id: number | string;
@@ -69,6 +70,7 @@ export interface MapleMap {
   getLocationAboveRandomFoothold: () => any;
   getCenterFootholdLocation: () => any;
   getNearestFootholdPosition: (x: number, y: number) => { x: number; y: number } | null;
+  getFootholdBelow: (x: number, y: number) => { x: number; y: number; fh?: any } | null;
   isPositionValid: (x: number, y: number) => boolean;
   loadBoundaries: (wzNode: any, footholds: any) => any;
   getNearbyTownMapId: () => any;
@@ -85,6 +87,7 @@ export interface MapleMap {
   setMobHostMode: (isHost: boolean) => void;
   findMonsterByOId: (oId: number) => Monster | undefined;
   getMonsterSpawnDefs: () => any[];
+  releaseSuppressedMobs: () => void;
   update: (msPerTick: number) => void;
   render: (
     canvas: any,
@@ -155,7 +158,43 @@ MapleMap.load = async function (id: number | string) {
     const strId = `${id}`.padStart(9, "0");
     filename = `Map.wz/Map/Map${prefix}/${strId}.img`;
   }
-  this.wzNode = await WZManager.get(filename);
+  // A map id can be valid-shaped but simply not exist (a corrupted save, a
+  // script warping to a bogus id) — the fetch then rejects (or yields a node
+  // with no info), and loading it used to strand the player in a black void
+  // with a floating character. Fall back to Henesys instead.
+  try {
+    this.wzNode = await WZManager.get(filename);
+  } catch (e) {
+    this.wzNode = null;
+  }
+  if (!this.wzNode || !this.wzNode.info) {
+    if (id === "MapLogin" || Number(id) === 100000000) {
+      throw new Error(`Essential map ${id} missing from WZ data`);
+    }
+    console.error(`[MapleMap] Map ${id} does not exist — falling back to Henesys`);
+    return this.load(100000000);
+  }
+
+  // Link maps carry ONLY an info node — footholds, portals, tiles and life
+  // all live in the donor map named by info/link (Training Center rooms 1-4
+  // link room 0; ~2,200 duplicate hunting grounds and PQ rooms work this
+  // way). Without following the link the map loads as an empty void with no
+  // exit. Same donor pattern mobs and reactors use; the map keeps its own id.
+  const mapLink = this.wzNode.info.nGet?.("link")?.nValue;
+  if (mapLink && Number(mapLink) !== Number(id)) {
+    const linkStr = `${mapLink}`.padStart(9, "0");
+    const linkPrefix = Math.floor(Number(mapLink) / 100000000);
+    try {
+      const donor: any = await WZManager.get(`Map.wz/Map/Map${linkPrefix}/${linkStr}.img`);
+      if (donor?.info) {
+        this.wzNode = donor;
+      } else {
+        console.error(`[MapleMap] Map ${id} links to missing donor ${mapLink}`);
+      }
+    } catch (e) {
+      console.error(`[MapleMap] Failed to follow map link ${id} -> ${mapLink}:`, e);
+    }
+  }
   this.isTown = !!this.wzNode.info.town.nValue;
   // Swim maps (info/swim=1) switch airborne physics to water physics
   this.isSwimMap = !!this.wzNode.info.nGet("swim").nGet("nValue", 0);
@@ -186,6 +225,30 @@ MapleMap.load = async function (id: number | string) {
   this.objects = objects;
   this.portals = portals;
   this.names = names;
+
+  // Tighten the camera's floor to the map's actually-drawn extent. The
+  // synthesized boundary pads the lowest foothold by +110, but Henesys's
+  // deepest tile row is a 22px edge piece — the camera could sink 88px past
+  // the art into the void, a strip of bare sky-blue under the dirt (barely
+  // hidden at 800x600, a full band at taller resolutions). Only ever
+  // tightens, never widens, and only when tiles actually define the floor.
+  if (this.tiles.length > 0) {
+    let drawnBottom = -Infinity;
+    for (const t of this.tiles) {
+      const b = t.y - t.originY + (t.height || 0);
+      if (b > drawnBottom) drawnBottom = b;
+    }
+    if (Number.isFinite(drawnBottom) && drawnBottom < this.boundaries.bottom) {
+      // Never rise above the lowest foothold — mid-air maps (towers,
+      // Ludibrium) draw tiles high while play continues below on objects
+      const floor = Math.max(drawnBottom, (this.footholdList as any[]).reduce(
+        (m: number, fh: any) => Math.max(m, fh.y1, fh.y2), -Infinity) + 20);
+      if (floor < this.boundaries.bottom) {
+        this.boundaries.bottom = floor;
+        Camera.setBoundaries(this.boundaries);
+      }
+    }
+  }
 
   // Bucket static geometry by layer once — render() walks layers every frame
   // and filtering the full arrays 8x per frame is wasted work
@@ -242,6 +305,9 @@ MapleMap.load = async function (id: number | string) {
 
   // Update minimap for the new map
   UIMiniMap.loadMapData();
+
+  // Party quest lifecycle — leaving the event's map range ends the instance
+  HenesysPQ.onMapChanged(Number(id));
 };
 
 MapleMap.addItemDrop = function (itemDrop) {
@@ -365,6 +431,27 @@ MapleMap.getNearestFootholdPosition = function (x: number, y: number) {
   }
 
   return bestDist < Infinity ? { x: bestX, y: bestY } : null;
+};
+
+// The ground directly under a point: the highest foothold that spans x at or
+// below y (a little slack above catches a point resting a pixel under its own
+// platform). Unlike getNearestFootholdPosition this never picks a platform off
+// to the side or overhead — it answers "where would something dropped here land".
+MapleMap.getFootholdBelow = function (x: number, y: number) {
+  const SLACK_ABOVE = 20;
+  let best: any = null;
+  let bestY = Infinity;
+  for (const fh of Object.values(this.footholds || {}) as any[]) {
+    if (fh.x1 >= fh.x2) continue; // walls and ceilings
+    if (x < fh.x1 || x > fh.x2) continue;
+    const t = (x - fh.x1) / (fh.x2 - fh.x1);
+    const fhY = fh.y1 + t * (fh.y2 - fh.y1);
+    if (fhY >= y - SLACK_ABOVE && fhY < bestY) {
+      bestY = fhY;
+      best = fh;
+    }
+  }
+  return best ? { x, y: bestY, fh: best } : null;
 };
 
 // Check if a position is within the map boundaries (with margin)
@@ -508,6 +595,16 @@ MapleMap.spawnMonster = async function (opts: any = {}) {
   this.monsters.push(mob);
 };
 
+// HPQ moon-full: wake every parked spawn def at once (fade-in like respawns)
+MapleMap.releaseSuppressedMobs = function () {
+  for (const def of monsterSpawnDefs) {
+    if (def.alive || def.nextPossibleSpawn !== Number.POSITIVE_INFINITY) continue;
+    def.alive = true;
+    def.nextPossibleSpawn = 0;
+    void this.spawnMonster({ ...def, fadeIn: true });
+  }
+};
+
 MapleMap.setMobHostMode = function (isHost: boolean) {
   // Host assignment can arrive while the map is still loading — remember it
   // and apply when the monsters exist (late-spawned mobs also read
@@ -573,6 +670,15 @@ MapleMap.loadMonsters = async function (wzNode) {
       nextPossibleSpawn: 0,
     };
     monsterSpawnDefs.push(spawnDef);
+
+    // HPQ: the hill's monsters stay hidden until the moon is full — defs are
+    // parked with an infinite respawn deadline and released all at once by
+    // releaseSuppressedMobs() when the Moon Bunny appears
+    if (HenesysPQ.shouldSuppressMobs(Number(this.id))) {
+      spawnDef.alive = false;
+      spawnDef.nextPossibleSpawn = Number.POSITIVE_INFINITY;
+      continue;
+    }
 
     // Re-entering a map we have been on: a mob still inside its respawn
     // window stays down, and a survivor comes back hurt and where we left it
@@ -1153,6 +1259,12 @@ async function _handleClickInner(
   // over an NPC ate the apple AND opened the NPC's dialogue.
   const { default: DragableMenu } = await import("./UI/Menu/DragableMenu");
   if (DragableMenu.anyHits(mouseX, mouseY)) return;
+  // A pending party invite popup owns the screen — its yes/no is handled by
+  // the party window's own mouse-down path
+  {
+    const { default: PartyMgr } = await import('./Party/PartyManager');
+    if (PartyMgr.pendingInvite) return;
+  }
   const { default: UIKeyConfigRef } = await import("./UI/UIKeyConfig");
   if (
     UIKeyConfigRef.isVisible &&
@@ -1340,10 +1452,46 @@ async function _handleClickInner(
       } catch (err) {
         console.error(`[NPC Click] Error handling NPC ${npc.id}:`, err);
       }
-      break; // Only handle the first NPC clicked
+      return; // Only handle the first NPC clicked
     }
   }
+
+  // Characters — double-click opens the Character Info window (own or remote).
+  // NPCs take priority above, like the original client.
+  const candidates = [
+    (window as any).charecter,
+    ...((this.characters as any[]) ?? []),
+  ].filter((c) => c && c.pos && !c.isDead);
+  for (const ch of candidates) {
+    const cx = ch.pos.x - camera.x;
+    const cy = ch.pos.y - camera.y;
+    if (mouseX < cx - 25 || mouseX > cx + 25 || mouseY < cy - 75 || mouseY > cy) continue;
+
+    // Party invite mode (armed from the party window): the next click on a
+    // player sends the invite instead of opening character info
+    const { default: PartyManager } = await import('./Party/PartyManager');
+    if (PartyManager.inviteMode) {
+      PartyManager.inviteMode = false;
+      if (ch !== (window as any).charecter && ch.id) {
+        PartyManager.invite(String(ch.id));
+      }
+      return;
+    }
+
+    const now = Date.now();
+    if (_lastCharClick.target === ch && now - _lastCharClick.time < 400) {
+      _lastCharClick = { target: null, time: 0 };
+      const menu = (window as any).MapStateInstance?.charInfoMenu;
+      menu?.show?.(ch);
+    } else {
+      _lastCharClick = { target: ch, time: now };
+    }
+    return;
+  }
 };
+
+// Double-click bookkeeping for the character-info window
+let _lastCharClick: { target: any; time: number } = { target: null, time: 0 };
 
 
 // Run a quest's start/end script (QuestScriptEngine) for the given NPC.

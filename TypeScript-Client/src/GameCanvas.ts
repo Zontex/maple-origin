@@ -141,6 +141,11 @@ class GameCanvas {
     if (this.game.width === width && this.game.height === height) return;
     this.game.width = width;
     this.game.height = height;
+    // The stylesheet's #game rule is fixed 4:3 — override it with the actual
+    // internal aspect so a widescreen resolution fills a widescreen window
+    // edge to edge instead of being pillarboxed back to 4:3.
+    this.game.style.width = `min(100vw, calc(100vh * ${width} / ${height}))`;
+    this.game.style.height = `min(100vh, calc(100vw * ${height} / ${width}))`;
     // Resizing a canvas resets its context state
     this.context.imageSmoothingEnabled = false;
     // Reposition DOM overlays (MapleInput) that scale off canvas size

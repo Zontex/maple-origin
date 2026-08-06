@@ -1,4 +1,5 @@
 import WZManager from "./wz-utils/WZManager";
+import config from "./Config";
 import Random from "./Random";
 import GameCanvas from "./GameCanvas";
 import GUIUtil from "./GuiUtils";
@@ -316,7 +317,7 @@ class NPC {
     // quest icons and chat balloons drawn around the sprite)
     const screenX = this.x - camera.x;
     const screenY = this.cy - camera.y;
-    if (screenX < -300 || screenX > 1100 || screenY < -300 || screenY > 900) return;
+    if (screenX < -300 || screenX > config.width + 300 || screenY < -300 || screenY > config.height + 300) return;
 
     // Draw the NPC's stance
     const currentFrame = this.stances[this.stance]?.frames[this.frame];
@@ -354,7 +355,7 @@ class NPC {
     if (this.hide) return;
     const screenX = this.x - camera.x;
     const screenY = this.cy - camera.y;
-    if (screenX < -300 || screenX > 1100 || screenY < -300 || screenY > 900) return;
+    if (screenX < -300 || screenX > config.width + 300 || screenY < -300 || screenY > config.height + 300) return;
 
     this.drawQuestIndicator(canvas, camera);
     if (this.showDialog) {
@@ -539,7 +540,7 @@ class NPC {
     const npcScreenY = this.cy - camera.y;
 
     // Skip if NPC is off screen
-    if (npcScreenX < -100 || npcScreenX > 900 || npcScreenY < -100 || npcScreenY > 700) return;
+    if (npcScreenX < -100 || npcScreenX > config.width + 100 || npcScreenY < -100 || npcScreenY > config.height + 100) return;
 
     // Only NPCs with authentic speak lines (Npc.wz info/speak) show balloons
     if (!this.strings.dialogues || this.strings.dialogues.length === 0) return;

@@ -1,4 +1,5 @@
 import WZManager from '../../wz-utils/WZManager';
+import config from '../../Config';
 import ClickManager from '../ClickManager';
 import DragableMenu from './DragableMenu';
 import { CameraInterface } from '../../Camera';
@@ -430,8 +431,8 @@ class EquipMenuSprite extends DragableMenu {
     // Clamp to screen
     let tx = slotScreenX;
     let ty = slotScreenY;
-    if (tx + tooltipW > 800) tx = this.x + this.hoveredSlot.x - tooltipW - 4;
-    if (ty + tooltipH > 600) ty = 600 - tooltipH;
+    if (tx + tooltipW > config.width) tx = this.x + this.hoveredSlot.x - tooltipW - 4;
+    if (ty + tooltipH > config.height) ty = config.height - tooltipH;
 
     const ctx = canvas.context;
 

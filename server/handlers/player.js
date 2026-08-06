@@ -3,6 +3,7 @@
 const { players } = require('../state');
 const { sendToPlayer, broadcastToMap } = require('../network');
 const { assignMapHost } = require('../hostManager');
+const { refreshPartyOf } = require('./party');
 
 function handlePlayerInfo(playerId, playerInfo) {
   const player = players.get(playerId);
@@ -56,6 +57,8 @@ function handlePlayerUpdate(playerId, updateData) {
   if (updateData.frame !== undefined) updatedInfo.frame = updateData.frame;
   if (updateData.flipped !== undefined) updatedInfo.flipped = updateData.flipped;
   if (updateData.attacking !== undefined) updatedInfo.attacking = updateData.attacking;
+  // Face emote is transient — present while held, absent otherwise
+  updatedInfo.emote = updateData.emote;
 
   const currentMapId = Number(player.mapId);
   const newMapId = updateData.mapId;
@@ -73,6 +76,9 @@ function handlePlayerUpdate(playerId, updateData) {
 
     assignMapHost(currentMapId);
     assignMapHost(newMapId, playerId);
+
+    // Party rosters show each member's map — keep them fresh
+    refreshPartyOf(playerId);
   } else {
     const now = Date.now();
     const timeSinceLastBroadcast = now - (player.lastBroadcast || 0);
@@ -90,7 +96,11 @@ function handlePlayerLevelUp(playerId, levelData) {
   const player = players.get(playerId);
   if (!player || !player.info) return;
   const mapId = Number(levelData.mapId || player.mapId);
+  if (Number.isFinite(Number(levelData.level))) {
+    player.info.level = Number(levelData.level);
+  }
   broadcastToMap(mapId, { type: 'player_level_up', data: { ...levelData, playerId } }, playerId);
+  refreshPartyOf(playerId);
 }
 
 function handlePlayerHitByMob(playerId, hitData) {

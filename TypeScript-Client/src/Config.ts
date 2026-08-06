@@ -9,7 +9,12 @@ interface Config {
 
 // Authentic pre-Big Bang v83 client resolution. The whole HUD (UIMap.ts)
 // is natively laid out for 800x600 and the WZ status bar art is 800 wide;
-// CSS scales the canvas up to the window (4:3, single resample).
+// CSS scales the canvas up to the window, keeping the internal aspect.
+// The saved SYSTEM OPTION resolution is applied by MapState.initialize when
+// entering the game (Resolution.applyConfiguredResolution) — NOT here. The
+// login flow renders at the classic size, and booting config wide displaced
+// every login background: parallax shifts read config.width/2 while the
+// canvas was still 800 wide.
 const originalHeight: number = 600;
 const originalWidth: number = 800;
 

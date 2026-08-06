@@ -119,8 +119,9 @@ UIGameMenu.initialize = async function (canvas: GameCanvas) {
   this.background = gameMenu.nGet("backgrnd").nGetImage();
 
   // Anchored above the status bar, horizontally centred on the MENU button
-  // (54 wide at x=682 in the 800x600 layout).
-  const menuButtonX = 682 + (config.width - 800);
+  // (54 wide at x=682 in the 800x600 layout; the bar itself is centered on
+  // wider screens, so the button rides the same offset).
+  const menuButtonX = 682 + Math.floor((config.width - 800) / 2);
   this.x = Math.round(menuButtonX + (54 - PANEL_W) / 2);
   this.y = config.height - STATUS_BAR_H - PANEL_H - 2;
 

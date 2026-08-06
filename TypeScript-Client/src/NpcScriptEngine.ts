@@ -3,6 +3,8 @@ import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
 import ShopUI from './UI/ShopUI';
 import TransportationManager from './Transport/TransportationManager';
+import HenesysPQ from './Events/HenesysPQ';
+import PartyManager from './Party/PartyManager';
 
 export type ScriptDialogType =
   | 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple'
@@ -380,6 +382,11 @@ export default class NpcScriptEngine {
         return { getId() { return jobId; }, id: jobId };
       },
       getMapId() { return character?.map?.mapId ?? 0; },
+      getMap() {
+        return makeSafeScriptApi({
+          getId() { return character?.map?.mapId ?? 0; },
+        }, 'NpcScript player map');
+      },
       // Cosmic saved-location API (FLORINA, MIRROR, EVENT, ...): entry NPCs
       // save the origin map before warping, exit NPCs read it to warp back.
       // Stored on the character so it survives map changes (this engine is
@@ -418,7 +425,14 @@ export default class NpcScriptEngine {
       getParty() { return null; },
       getGuild() { return null; },
       getGuildId() { return 0; },
-      getEventInstance() { return null; },
+      getEventInstance() {
+        return HenesysPQ.isRegistered()
+          ? makeSafeScriptApi(HenesysPQ.getInstanceApi(), 'EventInstance:HenesysPQ')
+          : null;
+      },
+      // Party Search (HeavenMS extra surfaced in Tory's menu)
+      isRecvPartySearchInviteEnabled() { return false; },
+      toggleRecvPartySearchInvite() { return false; },
       getSkillLevel(skillId: any) {
         const id = typeof skillId === 'number' ? skillId : skillId?.getId?.() ?? 0;
         return character?.skillManager?.getSkillLevel?.(id) ?? 0;
@@ -627,14 +641,47 @@ export default class NpcScriptEngine {
       changeJob(job: any) { character?.changeJob(typeof job === 'number' ? job : job?.getId?.() ?? 0); },
       changeJobById(jobId: number) { character?.changeJob(jobId); },
 
-      // Party/events (stubs). Event MANAGERS always exist in Cosmic (it's
-      // the running INSTANCE that can be null), so scripts chain manager
-      // calls unconditionally — give them a safe manager with no instance.
-      getParty() { return null; },
-      isLeader() { return true; },
-      isEventLeader() { return false; },
-      getEventInstance() { return null; },
+      // Party/events. HenesysPQ is a real client-side event instance; other
+      // event managers keep the safe stub (it's the running INSTANCE that can
+      // be null in Cosmic, so scripts chain manager calls unconditionally).
+      // No party system exists yet — NPCs of an implemented event see a
+      // solo party of one so their scripts can start the instance; everyone
+      // else keeps the authentic "you have no party" branches.
+      getParty() {
+        // A real party always shows through; without one, NPCs of an
+        // implemented event still see a solo party of one so their scripts
+        // can start the instance
+        if (PartyManager.isInParty()) {
+          const members = PartyManager.getMembers();
+          return makeSafeScriptApi({
+            size() { return members.length; },
+            getLeader() { return playerObj; },
+            toArray() { return members; },
+            getMembers() { return members; },
+          }, 'Party');
+        }
+        if (!HenesysPQ.NPC_IDS.includes(engine.npcId)) return null;
+        return makeSafeScriptApi({
+          size() { return 1; },
+          getLeader() { return playerObj; },
+          toArray() { return [playerObj]; },
+          getMembers() { return [playerObj]; },
+        }, 'Party');
+      },
+      isLeader() {
+        return PartyManager.isInParty() ? PartyManager.isLeader() : true;
+      },
+      isEventLeader() { return HenesysPQ.isEventLeader(); },
+      getEventInstance() {
+        return HenesysPQ.isRegistered()
+          ? makeSafeScriptApi(HenesysPQ.getInstanceApi(), 'EventInstance:HenesysPQ')
+          : null;
+      },
+      isUsingOldPqNpcStyle() { return false; },
       getEventManager(name: string) {
+        if (name === 'HenesysPQ') {
+          return makeSafeScriptApi(HenesysPQ.getManagerApi(), 'EventManager:HenesysPQ');
+        }
         // Transportation events (Boats/Trains/.../KerningTrain/Hak) are real —
         // backed by the wall-clock scheduler; everything else keeps the safe stub
         const transport = TransportationManager.getEventManagerApi(name);
@@ -653,11 +700,17 @@ export default class NpcScriptEngine {
       getJob() { return playerObj.getJob(); },
       getPlayerCount(mapId?: number) {
         const socket = (window as any).__mySocket;
-        if (!socket?.otherPlayers) return 1;
-        const targetMap = mapId ?? character?.map?.mapId ?? 0;
-        let count = 1;
+        const targetMap = Number(mapId ?? character?.map?.mapId ?? 0);
+        // Count only players actually on that map — the asker included only
+        // when it IS their map (the old version counted yourself everywhere,
+        // so every empty Training Center room read 1/5)
+        let count = Number(character?.map?.mapId) === targetMap ? 1 : 0;
+        if (!socket?.otherPlayers) return count;
         for (const p of socket.otherPlayers.values()) {
-          if (Number((p as any).mapId ?? targetMap) === Number(targetMap)) count++;
+          // Remote instances only exist for the map we're on — an entry
+          // without its own mapId means "here"
+          const pMap = Number((p as any).mapId ?? character?.map?.mapId);
+          if (pMap === targetMap) count++;
         }
         return count;
       },

@@ -24,7 +24,15 @@ export type BindableAction =
   | "skills"
   | "questLog"
   | "miniMap"
-  | "keyConfig";
+  | "party"
+  | "keyConfig"
+  | "face1"
+  | "face2"
+  | "face3"
+  | "face4"
+  | "face5"
+  | "face6"
+  | "face7";
 
 export interface ActionInfo {
   action: BindableAction;
@@ -48,8 +56,29 @@ export const ACTIONS: ActionInfo[] = [
   { action: "skills", icon: 3, label: "Skill" },
   { action: "questLog", icon: 8, label: "Quest" },
   { action: "miniMap", icon: 7, label: "Mini Map" },
+  { action: "party", icon: 19, label: "Party" },
   { action: "keyConfig", icon: 9, label: "Set Key" },
+  // Face emotes — the v83 client maps keymap face actions to the Face.wz
+  // expression at (action - 98): F1 is the famous "ouch" hit face
+  { action: "face1", icon: 100, label: "Ouch! (Face)" },
+  { action: "face2", icon: 101, label: "Smile (Face)" },
+  { action: "face3", icon: 102, label: "Annoyed (Face)" },
+  { action: "face4", icon: 103, label: "Cry (Face)" },
+  { action: "face5", icon: 104, label: "Angry (Face)" },
+  { action: "face6", icon: 105, label: "Surprised (Face)" },
+  { action: "face7", icon: 106, label: "Stunned (Face)" },
 ];
+
+/** face action -> Face.wz expression node (v83: expression index = action - 98) */
+export const FACE_EXPRESSIONS: Record<string, string> = {
+  face1: "hit",
+  face2: "smile",
+  face3: "troubled",
+  face4: "cry",
+  face5: "angry",
+  face6: "bewildered",
+  face7: "stunned",
+};
 
 export const ACTION_BY_NAME = new Map(ACTIONS.map((a) => [a.action, a]));
 
@@ -95,6 +124,15 @@ export const DEFAULT_BINDINGS: Record<number, BindableAction> = {
   37: "skills",     // K
   16: "questLog",   // Q
   50: "miniMap",    // M
+  25: "party",      // P
+  // v83 default emote row
+  59: "face1",      // F1
+  60: "face2",      // F2
+  61: "face3",      // F3
+  62: "face4",      // F4
+  63: "face5",      // F5
+  64: "face6",      // F6
+  65: "face7",      // F7
   // keyConfig ships unbound, so it starts in the palette.
 };
 
@@ -103,6 +141,11 @@ type ItemBindings = Record<number, number>;
 
 const ITEM_STORAGE_KEY = "maple_keybindings_items";
 const SKILL_STORAGE_KEY = "maple_keybindings_skills";
+
+// Shift/Ins/Home/PgUp/Ctrl/Del/End/PgDn are the quickslot bar's keys — their
+// item/skill assignments live in UIHotkeyBar (per-character), never here.
+// Kept out of these maps so a key can't fire twice per press.
+export const QUICKSLOT_KEY_SCANCODES = new Set([42, 82, 71, 73, 29, 83, 79, 81]);
 
 function loadItems(storageKey: string = ITEM_STORAGE_KEY): ItemBindings {
   try {
@@ -113,7 +156,10 @@ function loadItems(storageKey: string = ITEM_STORAGE_KEY): ItemBindings {
     for (const k of Object.keys(parsed)) {
       const code = Number(k);
       const itemId = Number(parsed[k]);
-      if (Number.isFinite(code) && SCANCODE_TO_KEY[code] && Number.isFinite(itemId)) {
+      if (
+        Number.isFinite(code) && SCANCODE_TO_KEY[code] &&
+        Number.isFinite(itemId) && !QUICKSLOT_KEY_SCANCODES.has(code)
+      ) {
         out[code] = itemId;
       }
     }
@@ -178,6 +224,17 @@ function load(): Bindings {
     }
     // A deliberately empty map is a legitimate state (the Delete button), so
     // only a completely unreadable blob falls back to the defaults.
+
+    // Saves that predate the emote row get it seeded onto any F-keys still
+    // free — otherwise the faces sit invisible in the palette forever
+    const hasFace = Object.values(out).some((a) => String(a).startsWith('face'));
+    if (!hasFace) {
+      for (let code = 59; code <= 65; code++) {
+        if (out[code] === undefined && DEFAULT_BINDINGS[code]) {
+          out[code] = DEFAULT_BINDINGS[code];
+        }
+      }
+    }
     return out;
   } catch {
     return { ...DEFAULT_BINDINGS };
@@ -221,6 +278,7 @@ const KeyBindings: KeyBindingsShape = {
     } catch (e) {
       console.warn("[KeyBindings] could not save skill bindings", e);
     }
+    (window as any).__mySocket?.requestSave?.();
   },
 
   itemFor(scancode) {
@@ -263,6 +321,7 @@ const KeyBindings: KeyBindingsShape = {
     } catch (e) {
       console.warn("[KeyBindings] could not save item bindings", e);
     }
+    (window as any).__mySocket?.requestSave?.();
   },
 
   keyFor(action) {
@@ -318,7 +377,84 @@ const KeyBindings: KeyBindingsShape = {
     } catch (e) {
       console.warn("[KeyBindings] could not save", e);
     }
+    // The keymap belongs to the character, like the original game — push it
+    // into the next server save so it follows them across browsers/resets
+    (window as any).__mySocket?.requestSave?.();
   },
 };
+
+// ---------------------------------------------------------------------------
+// Character-scoped persistence. The DB keymap table is shared with the
+// quickslot bar: bindType 1/2 are its skill/item slots (keyCode = slot key
+// name); 3/4/5 are keyboard bindings (keyCode = scancode as string) for
+// actions, items and skills respectively. Actions travel as their KeyConfig
+// icon id — the one stable numeric id every action already has.
+
+interface KeymapEntry {
+  keyCode: string;
+  bindType: number;
+  actionId: number;
+}
+
+const ACTION_BY_ICON = new Map(ACTIONS.map((a) => [a.icon, a.action]));
+
+export function serializeKeyboardBindings(): KeymapEntry[] {
+  const out: KeymapEntry[] = [];
+  for (const [code, action] of Object.entries(KeyBindings.bindings)) {
+    const icon = ACTION_BY_NAME.get(action as BindableAction)?.icon;
+    if (icon !== undefined) out.push({ keyCode: code, bindType: 3, actionId: icon });
+  }
+  for (const [code, itemId] of Object.entries(KeyBindings.itemBindings)) {
+    out.push({ keyCode: code, bindType: 4, actionId: itemId });
+  }
+  for (const [code, skillId] of Object.entries(KeyBindings.skillBindings)) {
+    out.push({ keyCode: code, bindType: 5, actionId: skillId });
+  }
+  return out;
+}
+
+/** Everything the keymap table holds: quickslot slots + keyboard bindings */
+export function serializeFullKeymap(): KeymapEntry[] {
+  const bar = (window as any).__uiHotkeyBar?.serialize?.() || [];
+  return [...bar, ...serializeKeyboardBindings()];
+}
+
+/**
+ * Apply the character's saved keyboard bindings (bindType >= 3). A save that
+ * carries any keyboard rows replaces the local set wholesale — the DB is the
+ * per-character truth; a legacy save without them keeps the localStorage
+ * bindings (they'll upload on the next save).
+ */
+export function applyKeyboardBindings(entries: KeymapEntry[]): void {
+  const keyboard = (entries || []).filter((e) => e.bindType >= 3 && e.bindType <= 5);
+  if (keyboard.length === 0) return;
+
+  const bindings: Bindings = {};
+  const items: ItemBindings = {};
+  const skills: ItemBindings = {};
+  for (const e of keyboard) {
+    const code = Number(e.keyCode);
+    if (!Number.isFinite(code) || SCANCODE_TO_KEY[code] === undefined) continue;
+    if (e.bindType === 3) {
+      const action = ACTION_BY_ICON.get(Number(e.actionId));
+      if (action) bindings[code] = action;
+    } else if (QUICKSLOT_KEY_SCANCODES.has(code)) {
+      // quickslot keys' items/skills belong to the hotkey bar
+    } else if (e.bindType === 4) {
+      items[code] = Number(e.actionId);
+    } else {
+      skills[code] = Number(e.actionId);
+    }
+  }
+  KeyBindings.bindings = bindings;
+  KeyBindings.itemBindings = items;
+  KeyBindings.skillBindings = skills;
+  // Sync localStorage without echoing another server save
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(bindings));
+    localStorage.setItem(ITEM_STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem(SKILL_STORAGE_KEY, JSON.stringify(skills));
+  } catch { /* cosmetic */ }
+}
 
 export default KeyBindings;

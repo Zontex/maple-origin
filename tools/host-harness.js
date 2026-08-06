@@ -1,7 +1,8 @@
 // Mob-host election harness — drives fake WebSocket clients against the
 // live server on :3001 and verifies every host-assignment scenario,
 // including the "mobs frozen" failure modes. Run: node tools/host-harness.js
-// Uses map 999999901 so it never touches a real session.const WebSocket = require('ws');
+// Uses map 999999901 so it never touches a real session.
+const WebSocket = require('ws');
 
 const URL = 'ws://localhost:3001';
 const MAP = 999999901;

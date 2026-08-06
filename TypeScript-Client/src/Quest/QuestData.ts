@@ -173,6 +173,18 @@ export function resolveItemCodes(text: string, questManager?: any, contextQuestI
       return '0';
     })
     .replace(/#m(\d+)#?/g, (_, id) => getMapNameSync(parseInt(id)))
+    // Quest reference codes (umbrella quests like Chief's Introduction list
+    // their subquests): #y = quest name, #u = its live completion state
+    .replace(/#y(\d+)#/g, (_, id) => QuestData.quests.get(parseInt(id))?.name || `Quest ${id}`)
+    .replace(/#u(\d+)#/g, (_, id) => {
+      const s = questManager?.getQuestState?.(parseInt(id)) ?? 0;
+      return s === 2 ? 'Complete' : s === 1 ? 'In Progress' : 'Incomplete';
+    })
+    // Later-era GMS quests write NPC references as #@<npcId>:# instead of #p
+    .replace(/#@(\d+):?#?/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
+    // Item-name variant used by the dragon-guardian line; some ids are
+    // KMS-only items with no v83 name — 'item' beats a bare apostrophe
+    .replace(/#q(\d+)#/g, (_, id) => getItemNameSync(parseInt(id)).trim() || 'item')
     // Quest progress counter: #a{questId}{reqIndex}# (531 of these across
     // QuestInfo — every hunt/collection quest description ends with one).
     // GMS renders the live count; we show "cur / req". A bare one-digit code
@@ -220,19 +232,46 @@ function stripFormatCodes(text: any): string {
     // name isn't known at quest-data load time; resolved at display time
     // by resolveItemCodes like #t/#c/#m
     .replace(/#h\s*0?\s*#/g, '#h0#')
-    .replace(/#p(\d+)#/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
-    .replace(/#o(\d+)#/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
+    // Id codes tolerate stray whitespace and sloppy closings — Nexon's own
+    // texts contain "#o 1210100#", "#p2091001:#" and "Rina#p1010100" with
+    // no closing hash at all (all in playable GMS quests)
+    .replace(/#p\s*(\d+)\s*:?#?/g, (_, id) => npcNames.get(parseInt(id)) || 'NPC')
+    .replace(/#o\s*(\d+)#?/g, (_, id) => mobNames.get(parseInt(id)) || 'monster')
     .replace(/#a(\d+)#/g, '#a$1#')  // Keep progress counters — resolved live at display time
+    // Party-quest record sheets (Moon Bunny, Ludibrium) are full of
+    // #jcmp#/#jtry#/#jmin#... placeholders for per-character PQ statistics
+    // the server tracked — stats we don't have. Zeros render as a blank
+    // record instead of raw codes.
+    .replace(/#jdate#?/g, '-')
+    .replace(/#jrank#?/g, '-')
+    .replace(/#j[A-Za-z]+#?/g, '0')
+    // Medal-quest time limits (#Qdaylimit#Days ...) — untracked
+    .replace(/#Q[A-Za-z]+#?/g, '0')
+    // Stray typo'd codes in Nexon's texts: an uppercase #K after a selection
+    // (Say 2224), and dangling #I / #L with no id — strip only when followed
+    // by whitespace, a literal \n escape, or end of text, so legitimate
+    // text like "Hall #4" survives. Runs before the \n-escape conversion,
+    // hence the backslash in the lookahead.
+    .replace(/#[KIL](?=[\s\\]|$)/g, '')
+    // Event/infoEx progress records (#R2314# in Mushroom Castle) — untracked
+    .replace(/#R\s*(\d+)#/g, '0')
+    // KMS event remnants (#M/#x bonus-EXP placeholders) — server-substituted
+    // values we can't reproduce; the quests are event-filtered anyway
+    .replace(/#M\s*(\d+)#/g, '')
+    .replace(/#x\s*(\d+)#/g, '')
+    // Say-text emphasis marker
+    .replace(/#E(?![a-z])/g, '')
+    .replace(/#q\s*(\d+)#/g, '#q$1#')  // Item-name variant — resolved at display time
     // Requirement lists are written as one run-on line — "Slime #a10431#
     // #i4000004# #t4000004# ..." — but GMS puts each requirement on its own
     // row. Break the line whenever a progress counter is directly followed
     // by the next requirement's item icon.
     .replace(/(#a\d+#(?:#k)?)[ \t]+(?=#[iv]\d+[:#])/g, '$1\n')
-    .replace(/#t(\d+):?#/g, '#t$1#')  // Keep item name codes — resolved at display time after item names load
+    .replace(/#t\s*(\d+):?#/g, '#t$1#')  // Keep item name codes — resolved at display time after item names load
     .replace(/#m(\d+)#/g, '#m$1#')  // Keep map name codes — resolved at display time after map names load
-    .replace(/#i(\d+):?#/g, '\x01ITEM:$1\x02')  // item icon placeholder — rendered at display time
-    .replace(/#v(\d+):?#/g, '\x01ITEM:$1\x02')  // item icon placeholder (same as #i; some GMS texts use #v<id>:#)
-    .replace(/#c(\d+):?#/g, '#c$1#')  // Keep item count codes — resolved at display time
+    .replace(/#i\s*(\d+):?#/g, '\x01ITEM:$1\x02')  // item icon placeholder — rendered at display time
+    .replace(/#v\s*(\d+):?#/g, '\x01ITEM:$1\x02')  // item icon placeholder (same as #i; some GMS texts use #v<id>:#)
+    .replace(/#c\s*(\d+):?#/g, '#c$1#')  // Keep item count codes — resolved at display time
     .replace(/\\r\\n/g, '\n')
     .replace(/\\n/g, '\n')
     .replace(/\\r/g, '\n');

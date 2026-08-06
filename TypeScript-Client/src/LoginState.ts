@@ -8,6 +8,7 @@ import UIState from './UIState';
 import GameCanvas from "./GameCanvas";
 import MySocket from "./mysocket";
 import config from "./Config";
+import { applyLoginResolution } from "./Resolution";
 
 export enum LoginSubState {
   LOGIN_SCREEN = 'LOGIN_SCREEN',
@@ -49,7 +50,11 @@ const LoginState: LoginState = {
 
   async initialize(canvas?: GameCanvas): Promise<void> {
     this._canvas = canvas ?? null;
-    canvas?.setInternalSize(LOGIN_NATIVE_WIDTH, LOGIN_NATIVE_HEIGHT);
+    // Classic size for the whole login flow — config included, since the
+    // background parallax and camera math read config live. Coming back
+    // from a widescreen game session must shrink all of it, not just the
+    // canvas.
+    applyLoginResolution(canvas ?? null);
     MyCharacter.deactivate();
 
     // Coming back from the game (QUIT GAME), not just booting. MapleMap.load
@@ -175,8 +180,10 @@ const LoginState: LoginState = {
   async enterGame(): Promise<void> {
     UILogin.removeInputs();
 
-    // In-game rendering uses the full 1024x768 resolution
-    this._canvas?.setInternalSize(config.width, config.height);
+    // The switch to the configured in-game resolution happens inside
+    // MapState.initialize — not here. Widening the canvas before the map
+    // state was up meant a failed map load left the LOGIN screens rendering
+    // on the game-sized canvas.
 
     // Set starting map from saved character data (MapState.initialize reads this)
     const startMapId = (MyCharacter as any)._startMapId;

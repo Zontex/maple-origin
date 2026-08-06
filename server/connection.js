@@ -6,6 +6,7 @@ const { sendToPlayer, broadcastToMap } = require('./network');
 const { handleMessage } = require('./router');
 const { assignMapHost } = require('./hostManager');
 const { autoSaveCharacter } = require('./handlers/auth');
+const { handlePartyDisconnect } = require('./handlers/party');
 
 function onConnection(ws) {
   ws.maxPayload = 65536;
@@ -62,6 +63,7 @@ function onConnection(ws) {
     if (player && player.info) {
       broadcastToMap(player.info.mapId, { type: 'player_left', id: playerId }, playerId);
     }
+    handlePartyDisconnect(playerId);
     players.delete(playerId);
   });
 
@@ -72,6 +74,10 @@ function onConnection(ws) {
     if (player) {
       autoSaveCharacter(player);
     }
+
+    // Before the player record is dropped — leaving needs the partyId and
+    // the remaining members still expect notices
+    handlePartyDisconnect(playerId);
 
     players.delete(playerId);
 

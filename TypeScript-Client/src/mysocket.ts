@@ -8,6 +8,8 @@ import Inventory from "./Inventory/Inventory";
 import Stats from "./Stats/Stats";
 import DropItemSprite from "./DropItem/DropItemSprite";
 import config from "./Config";
+import PartyManager from "./Party/PartyManager";
+import { serializeFullKeymap } from "./KeyBindings";
 
 let nextDropId = 1;
 
@@ -457,7 +459,7 @@ class MySocket {
         },
         quests,
         skills: MyCharacter.skillManager?.serialize() || [],
-        keymap: (window as any).__uiHotkeyBar?.serialize() || [],
+        keymap: serializeFullKeymap(),
       },
     });
   }
@@ -624,6 +626,21 @@ class MySocket {
           break;
         case "chat_message":
           this.handleChatMessage(data);
+          break;
+        case "party_update":
+          PartyManager.onPartyUpdate(data.party ?? null);
+          break;
+        case "party_invite":
+          PartyManager.onInvite(data.partyId, data.from?.name ?? '???');
+          break;
+        case "party_notice":
+          PartyManager.onNotice(String(data.text ?? ''));
+          break;
+        case "party_exp":
+          PartyManager.onPartyExp(data.exp);
+          break;
+        case "party_warp":
+          PartyManager.onPartyWarp(data.mapId);
           break;
         case "item_drop":
           this.handleItemDrop(data.data);
@@ -902,7 +919,12 @@ class MySocket {
       vy: MyCharacter.pos.vy,
       equipped: equippedItems,
     };
-    
+
+    // Active face emote rides along so other players see the expression
+    if (MyCharacter.emoteUntil > Date.now()) {
+      (update as any).emote = MyCharacter.faceExpr;
+    }
+
     this.sendMessage({
       type: "player_update",
       data: update
@@ -1130,6 +1152,10 @@ class MySocket {
         character.stance = '';  // Clear so setStance actually runs
         character.setStance(playerData.stance || 'stand1', 0);
 
+        // Joining a map where a player already lies dead — raise their
+        // tombstone rather than composing the 'dead' stance
+        if (playerData.stance === 'dead') character.die();
+
         // Attach actual equipped items from player data
         try {
           const equipped = (playerData as any).equipped;
@@ -1179,6 +1205,24 @@ class MySocket {
 
         // Handle stance changes
         if (playerData.stance) {
+          // Death syncs as the 'dead' stance: raise the tombstone instead of
+          // composing the stance — dead characters aren't drawn at all. Clear
+          // it if they revive without leaving the map (a death in town warps
+          // back to the same map).
+          if (playerData.stance === 'dead') {
+            if (!character.isDead) {
+              character.die();
+              character.setStance('dead', 0);
+            }
+            return;
+          }
+          if (character.isDead) {
+            character.isDead = false;
+            character.tombstoneActive = false;
+            character.tombstoneDone = false;
+            character.pos.isMoveEnalbed = true;
+          }
+
           const isAttackStance = playerData.stance.startsWith('swing') ||
             playerData.stance.startsWith('stab') ||
             playerData.stance.startsWith('shoot');
@@ -1218,6 +1262,9 @@ class MySocket {
     
     if (this.otherPlayers.has(playerId)) {
       const character = this.otherPlayers.get(playerId)!;
+
+      // Face emote carried by the update
+      character.applyRemoteEmote?.(playerData.emote);
 
       // Set lerp target position
       if (playerData.x !== undefined && playerData.y !== undefined) {
@@ -1427,6 +1474,14 @@ class MySocket {
     if (Number(data.mapId) !== Number(MapleMap.id)) return;
     const reactor = MapleMap.reactors?.find((r: any) => r.oId === data.oId);
     if (reactor && !reactor.destroyed) {
+      // Item-triggered reactors (HPQ moonflowers) refuse weapon hits — a
+      // relayed "hit" on one means another player planted its seed
+      if (reactor.getItemEvent?.()) {
+        import('./Events/HenesysPQ')
+          .then(({ default: HenesysPQ }) => HenesysPQ.onRemoteMoonflowerBloom(reactor))
+          .catch(() => {});
+        return;
+      }
       reactor.hit(true); // Remote hit — plays animation, skips drops
     }
   }

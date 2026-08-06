@@ -467,6 +467,10 @@ export default class QuestManager {
       // Skip medal/title quests (29xxx) and event quests (19xxx) — need server-side validation
       if (questId >= 19000 && questId < 20000) continue;
       if (questId >= 29000 && questId < 30000) continue;
+      // Skip PQ/competition record sheets (1200 Moon Bunny, 1201-1206 other
+      // PQs, 1300-1302 events) — internal records the PQ itself manages, never
+      // clickable on the NPC in GMS
+      if (questId >= 1200 && questId < 1400) continue;
 
       const state = this.getQuestState(questId);
 

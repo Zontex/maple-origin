@@ -207,12 +207,21 @@ class Background {
     const percent = this.delay / this.nextDelay;
     const alpha = percent * a1 + (1 - percent) * a0;
 
+    // Wider-than-authored viewports: a type-0 panorama sheet sized to blanket
+    // the 800x600 view (dryRock's 900x882 cloud sheet over Perion) runs out
+    // at the edges and bares the flat sky tile behind it. Screen-filling
+    // sheets are therefore tiled once the viewport outgrows the authored
+    // frame; small type-0 props (totems, distant rocks) stay single — tiling
+    // those would march copies across the sky.
+    const effTileX = this.tileX || (config.width > 800 && width >= 800);
+    const effTileY = this.tileY || (config.height > 600 && height >= 600);
+
     let xBegin = dx;
     let xEnd = dx;
     let yBegin = dy;
     let yEnd = dy;
 
-    if (!!this.tileX) {
+    if (effTileX) {
       xBegin += width;
       xBegin %= cx;
       if (xBegin <= 0) {
@@ -228,7 +237,7 @@ class Background {
       xEnd += config.width;
     }
 
-    if (!!this.tileY) {
+    if (effTileY) {
       yBegin += height;
       yBegin %= cy;
       if (yBegin <= 0) {

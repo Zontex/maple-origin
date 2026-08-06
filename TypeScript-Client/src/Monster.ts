@@ -14,6 +14,7 @@ import { CameraInterface } from "./Camera";
 import MySocket from "./mysocket";
 import MobProjectile from "./Projectile/MobProjectile";
 import UIMobGage from "./UI/UIMobGage";
+import PartyManager from "./Party/PartyManager";
 
 // Aggro tuning (v83-style: firstAttack mobs charge on sight, others when hit)
 const AGGRO_RANGE_X = 250;
@@ -85,6 +86,9 @@ class Monster {
   moveType: MobMoveType = "walk";
   firstAttack: boolean = false;
   bodyAttack: number = 1;
+  isFriendly: boolean = false;
+  /** Scripted kills (PQ clear) suppress loot */
+  _noDrops: boolean = false;
   flySpeed: number = 0;
   mad: number = 0;
   spawnCy: number = 0;
@@ -167,6 +171,10 @@ class Monster {
     }
     this.firstAttack = (mobFile.info.firstAttack?.nValue ?? 0) > 0;
     this.bodyAttack = mobFile.info.bodyAttack?.nValue ?? 1;
+    // Friendly mobs (WZ damagedByMob=1, e.g. the HPQ Moon Bunny) are on the
+    // players' side: no touch damage, and being hit never aggros them
+    this.isFriendly = (mobFile.info.damagedByMob?.nValue ?? 0) === 1;
+    if (this.isFriendly) this.bodyAttack = 0;
     this.flySpeed = mobFile.info.flySpeed?.nValue ?? 0;
     this.mad = mobFile.info.MADamage?.nValue ?? 0;
     this.spawnCy = opts.y;
@@ -480,17 +488,24 @@ async addDrops() {
 
     // Only host spawns drops, awards EXP, and broadcasts death
     if (!this.isRemote) {
-      setTimeout(() => {
-        this.addDrops();
-      }, 100);
+      if (!this._noDrops) {
+        setTimeout(() => {
+          this.addDrops();
+        }, 100);
+      }
 
       // Broadcast death to other clients
       try { MySocket.sendMobDeath(this.oId); } catch {}
     }
 
-    // Award experience to the player who killed the monster
+    // Award experience to the player who killed the monster; local kills
+    // run the v83 party split (same-map members get their share relayed)
     if (responsibleMapleCharacter) {
-      responsibleMapleCharacter.addExp(this.mobFile.info.exp.nValue);
+      let exp = this.mobFile.info.exp.nValue;
+      if (exp > 0 && responsibleMapleCharacter === (window as any).charecter) {
+        exp = PartyManager.shareKillExp(exp);
+      }
+      responsibleMapleCharacter.addExp(exp);
       responsibleMapleCharacter.questManager?.onMobKill(this.id);
     }
   }
@@ -588,8 +603,16 @@ async addDrops() {
     }
 
     // Being hit aggros passive mobs onto the attacker
-    if (responsibleMapleCharacter && !this.dying) {
+    if (responsibleMapleCharacter && !this.dying && !this.isFriendly) {
       this.aggroTarget = responsibleMapleCharacter;
+    }
+
+    // Players hitting a friendly mob (Moon Bunny) makes it "feel sick" —
+    // the PQ tracks it and warns the party (Cosmic friendlyDamaged)
+    if (this.isFriendly && responsibleMapleCharacter && !this.dying) {
+      import('./Events/HenesysPQ')
+        .then(({ default: HenesysPQ }) => HenesysPQ.onFriendlyHitByPlayer(this))
+        .catch(() => {});
     }
 
     // Host: apply damage authoritatively
@@ -706,6 +729,16 @@ async addDrops() {
 
     if (this.aggroTarget) {
       const t = this.aggroTarget;
+      // Scripted mob target (the HPQ Moon Bunny): valid for as long as it
+      // lives — patrol bounds and player checks don't apply, the whole map
+      // converges on it
+      if ((t as any).isFriendly) {
+        if (t.dying || t.destroyed) {
+          this.aggroTarget = null;
+          this.outOfRangeSince = 0;
+        }
+        return;
+      }
       const stillPresent = candidates.includes(t);
       const dx = Math.abs((t.pos?.x ?? Infinity) - this.pos.x);
       if (!stillPresent || t.isDead || dx > DEAGGRO_RANGE_X) {
@@ -745,13 +778,43 @@ async addDrops() {
     }
   }
 
+  _chaseDir: number = 0;
+  _chaseDecideAt: number = 0;
+  _lastChaseHop: number = 0;
+
   /** Walk/jump mobs chase the aggro target at their WZ walk speed. */
   updateChase() {
+    const now = Date.now();
     const dx = this.aggroTarget.pos.x - this.pos.x;
-    if (Math.abs(dx) > 10) {
-      dx > 0 ? this.right() : this.left();
-    } else {
-      this.stand();
+    const absDx = Math.abs(dx);
+
+    // A chasing mob never stands still — GMS aggro'd mobs overshoot the
+    // target, turn, and overshoot again, restlessly shuffling across the
+    // player. The 300ms decision hold is what creates that overshoot (and
+    // keeps a target overhead from churning the stance into a shake): the
+    // mob walks past you, notices ~a third of a second later, comes back.
+    if (this._chaseDir === 0) this._chaseDir = dx >= 0 ? 1 : -1;
+    if (now - this._chaseDecideAt >= 300 && absDx > 2) {
+      const want = dx > 0 ? 1 : -1;
+      if (want !== this._chaseDir) {
+        this._chaseDir = want;
+        this._chaseDecideAt = now;
+      }
+    }
+    if (this._chaseDir > 0) this.right();
+    else this.left();
+
+    // Jump-stance mobs (Orange Mushroom, slimes) hop as pursuit locomotion —
+    // the arc is what carries them up ledges, exactly as in GMS. jump() is
+    // stance-gated, so walk-only mobs (pigs, snails) can never do this.
+    if (
+      this.moveType === "jump" &&
+      this._chaseDir !== 0 &&
+      this.pos.fh &&
+      now - this._lastChaseHop > 700
+    ) {
+      this._lastChaseHop = now;
+      this.jump();
     }
   }
 
@@ -777,7 +840,12 @@ async addDrops() {
       targetY = this.flyTargetY;
     }
 
-    targetY = Math.max(this.spawnCy - 80, Math.min(this.spawnCy + 40, targetY));
+    // The altitude band keeps wandering/player-chasing flyers near their
+    // spawn height; a scripted mob target (HPQ bunny) pulls them anywhere
+    // on the map — Flyeyes dive off their platforms to reach it
+    if (!(this.aggroTarget as any)?.isFriendly) {
+      targetY = Math.max(this.spawnCy - 80, Math.min(this.spawnCy + 40, targetY));
+    }
     const dx = targetX - this.pos.x;
     const dy = targetY - this.pos.y;
     const dist = Math.hypot(dx, dy);
@@ -1011,19 +1079,23 @@ async addDrops() {
     ) {
       const fh = this.pos.fh;
       const margin = 2;
+      // Chasing mobs keep the direction pressed while pinned — GMS mobs pace
+      // against the wall/ledge rather than freezing, and calling stand()
+      // here every frame while updateChase re-pressed the direction churned
+      // the stance into a visible shake (and cancelled jump-mob hop takeoffs)
       if (this.pos.x >= fh.x2 - margin && this.pos.vx > 0) {
         // At right edge of foothold — only stop if no connected next foothold
         if (!fh.next || fh.next.x1 >= fh.next.x2) {
           this.pos.x = fh.x2 - margin;
           this.pos.vx = 0;
-          this.aggroTarget ? this.stand() : this.left();
+          if (!this.aggroTarget) this.left();
         }
       } else if (this.pos.x <= fh.x1 + margin && this.pos.vx < 0) {
         // At left edge of foothold — only stop if no connected prev foothold
         if (!fh.prev || fh.prev.x1 >= fh.prev.x2) {
           this.pos.x = fh.x1 + margin;
           this.pos.vx = 0;
-          this.aggroTarget ? this.stand() : this.right();
+          if (!this.aggroTarget) this.right();
         }
       }
     }

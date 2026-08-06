@@ -4,7 +4,7 @@ import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import ClickManager from './ClickManager';
 import { MapleStanceButton } from './MapleStanceButton';
-import { getShopInfo, getItemSellPrice, getItemUnitPrice, getItemSlotMax, ShopItem } from '../Shop/ShopData';
+import { getShopInfo, getItemSellPrice, getItemUnitPrice, getItemSlotMax, getItemNotSale, ShopItem } from '../Shop/ShopData';
 import { ensureItemNames, getItemNameSync, getItemDescSync } from '../Quest/QuestData';
 import UIEquipTooltip from './UIEquipTooltip';
 import Item from '../Inventory/Item';
@@ -24,6 +24,7 @@ interface LoadedPlayerItem {
   name: string;
   quantity: number;
   sellPrice: number;
+  notSale: boolean;
   icon: HTMLImageElement | null;
 }
 
@@ -57,6 +58,8 @@ const ShopUI: any = {
   buySelectedIndex: -1,
   buyScrollOffset: 0,
   sellSelectedIndex: -1,
+  // Sell panel tab: 0=Equip, 1=Use, 2=Set-up, 3=Etc (TabSell sprite order)
+  sellTab: 0,
   // Which list the arrow keys drive. Set by whichever panel was last
   // clicked so up/down follow the player's attention, as in GMS.
   focusPanel: 'buy' as 'buy' | 'sell',
@@ -99,6 +102,7 @@ const ShopUI: any = {
     this.buyScrollOffset = 0;
     this.sellSelectedIndex = -1;
     this.sellScrollOffset = 0;
+    this.sellTab = 0;
     this.shopItems = [];
     this.playerItems = [];
     this.npcSprite = null;
@@ -148,8 +152,29 @@ const ShopUI: any = {
       this.selectImg = this.shopNode?.select?.nGetImage?.() || null;
       this.mesoImg = this.shopNode?.meso?.nGetImage?.() || null;
 
+      // Tab labels are the Shop's own (TabBuy/TabSell ship text only); the
+      // pink/grey plates come from the inventory's shared set, like the skill
+      // window — always variant 0, the other variants are per-tab tints.
+      const newNode: any = await WZManager.get('UI.wz/UIWindow.img/Item/New');
+      this._tabPlateOn = newNode?.nGet('Tab1')?.nGet('0')?.nGetImage?.() || null;
+      this._tabPlateOff = newNode?.nGet('Tab0')?.nGet('0')?.nGetImage?.() || null;
+      this._tabBuyLabel = this.shopNode?.TabBuy?.enabled?.[0]?.nGetImage?.() || null;
+      this._tabSellOn = [];
+      this._tabSellOff = [];
+      for (let i = 0; i < 4; i++) {
+        this._tabSellOn[i] = this.shopNode?.TabSell?.enabled?.[i]?.nGetImage?.() || null;
+        this._tabSellOff[i] = this.shopNode?.TabSell?.disabled?.[i]?.nGetImage?.() || null;
+      }
+
       // Scrollbar pieces (Basic.img/VScr4) for the per-panel list scrollbars
       const basic: any = await WZManager.get('UI.wz/Basic.img');
+      // Stack-count sprite digits, same set the inventory grid uses
+      this._itemNoDigits = [];
+      const itemNo = basic?.nGet?.('ItemNo');
+      for (let i = 0; i <= 9; i++) {
+        const d = itemNo?.nGet?.(`${i}`);
+        if (d?.nGetImage) this._itemNoDigits[i] = d.nGetImage();
+      }
       const vscr = basic?.nGet?.('VScr4');
       const en = vscr?.nGet?.('enabled');
       const dis = vscr?.nGet?.('disabled');
@@ -210,14 +235,17 @@ const ShopUI: any = {
     if (!character?.inventory) return;
 
     this.playerItems = [];
+    // GMS sells one inventory tab at a time — Equip/Use/Set-up/Etc, chosen
+    // by the sell panel's tab strip
     const tabs = [
       character.inventory.equip,
       character.inventory.use,
       character.inventory.setup,
       character.inventory.etc,
     ];
+    const tab = tabs[this.sellTab] || [];
 
-    for (const tab of tabs) {
+    {
       for (const item of tab) {
         if (!item) continue;
         const name = getItemNameSync(item.itemId) || `Item #${item.itemId}`;
@@ -227,8 +255,9 @@ const ShopUI: any = {
           if (iconNode?.nGetImage) icon = iconNode.nGetImage();
         }
         const sellPrice = await getItemSellPrice(item.itemId);
+        const notSale = await getItemNotSale(item.itemId);
         this.playerItems.push({
-          itemId: item.itemId, name, quantity: item.quantity, sellPrice, icon,
+          itemId: item.itemId, name, quantity: item.quantity, sellPrice, notSale, icon,
         });
       }
     }
@@ -339,6 +368,14 @@ const ShopUI: any = {
     const character = (window as any).charecter;
     if (!character?.inventory) return;
 
+    // info/notSale items — GMS lists them like anything else and refuses the
+    // sale attempt with a message box, no greying or hiding
+    if (item.notSale) {
+      const dialog = await this.getQuantityDialog();
+      dialog.showMessage(['You cannot sell this item.']);
+      return;
+    }
+
     // Rechargeables always sell the whole stack: price + ceil(qty * unitPrice)
     if (ItemConstants.isRechargeable(item.itemId)) {
       const unitPrice = await getItemUnitPrice(item.itemId);
@@ -427,6 +464,8 @@ const ShopUI: any = {
       canvas.drawImage({ img: this.backgrndImg, dx: this.x, dy: this.y });
     }
 
+    this.drawTabs(canvas);
+
     // Positions from WZ bg pixel analysis (463x339)
     // Shadow ellipses (sprite feet anchors): left center (57,73), right center (290,73)
     const npcX = this.x + 57;
@@ -455,7 +494,10 @@ const ShopUI: any = {
     // relative to the character's ground position)
     const character = (window as any).charecter;
     if (character) {
-      const frames = character.getDrawableFrames?.('stand1', 0, false);
+      // Two-handed weapons only have stand2 frames — composing stand1 would
+      // draw the character bare-handed (the weapon part comes up empty)
+      const standStance = character.weaponStandType === 2 ? 'stand2' : 'stand1';
+      const frames = character.getDrawableFrames?.(standStance, 0, false);
       if (frames) {
         for (const frame of frames) {
           if (frame.img && frame.img.complete && frame.img.naturalWidth > 0) {
@@ -474,7 +516,7 @@ const ShopUI: any = {
     if (character?.inventory) {
       canvas.drawText({
         text: character.inventory.mesos.toLocaleString(),
-        color: '#000000', x: this.x + 452, y: this.y + 66, fontSize: 11,
+        color: '#000000', x: this.x + 447, y: this.y + 66, fontSize: 11,
         align: 'right',
       });
     }
@@ -637,6 +679,49 @@ const ShopUI: any = {
     else { this.sellSelectedIndex = idx; this.sellScrollOffset = off; }
   },
 
+  // Tab strip: the buy panel carries a lone always-lit "All", the sell panel
+  // Equip/Use/Set-up/Etc switching which inventory tab is offered. Plates
+  // hang from the strip's red underline (top row measured at y=116 in the
+  // bg): the selected plate is a pixel taller, so both are bottom-aligned to
+  // keep that edge where the background draws it — same rule as the skill
+  // window's tabs.
+  drawTabs(canvas: GameCanvas) {
+    const TAB_STRIP_BOTTOM = 116;
+    const TAB_X = 9;
+    const TAB_GAP = 2;
+
+    const drawTab = (tabX: number, label: HTMLImageElement | null, active: boolean) => {
+      const plate = active ? this._tabPlateOn : this._tabPlateOff;
+      const plateW = plate?.width || 34;
+      const plateH = plate?.height || 18;
+      const plateY = this.y + TAB_STRIP_BOTTOM - plateH;
+      if (plate?.complete) canvas.drawImage({ img: plate, dx: tabX, dy: plateY });
+      if (label?.complete && label.naturalWidth > 0) {
+        canvas.drawImage({
+          img: label,
+          dx: tabX + Math.round((plateW - label.width) / 2),
+          dy: plateY + Math.round((plateH - label.height) / 2),
+        });
+      }
+      return plateW;
+    };
+
+    drawTab(this.x + TAB_X, this._tabBuyLabel, true);
+    let sx = this.x + PANEL_RIGHT_OFF + TAB_X;
+    for (let i = 0; i < 4; i++) {
+      const active = i === this.sellTab;
+      const w = drawTab(sx, active ? this._tabSellOn[i] : this._tabSellOff[i], active);
+      sx += w + TAB_GAP;
+    }
+  },
+
+  _tabPlateOn: null as HTMLImageElement | null,
+  _tabPlateOff: null as HTMLImageElement | null,
+  _tabBuyLabel: null as HTMLImageElement | null,
+  _tabSellOn: [] as (HTMLImageElement | null)[],
+  _tabSellOff: [] as (HTMLImageElement | null)[],
+  _itemNoDigits: [] as HTMLImageElement[],
+
   drawItemPanel(canvas: GameCanvas, items: any[], selectedIdx: number,
     scrollOffset: number, panelX: number, showBuyPrice: boolean) {
     const listY = this.y + LIST_Y;
@@ -679,11 +764,24 @@ const ShopUI: any = {
         canvas.context.drawImage(item.icon, ix, iy, iw, ih);
       }
 
+      // Stack count — sprite digits over the icon's bottom-left, exactly as
+      // the inventory grid shows counts. Equips never stack and get none.
+      if (!showBuyPrice && item.quantity >= 1 &&
+          Math.floor(item.itemId / 1000000) !== 1 && this._itemNoDigits.length) {
+        const digitH = this._itemNoDigits[0]?.height || 11;
+        let dx = panelX + 8;
+        const dy = rowY + ICON_BOTTOM_Y - digitH + 3;
+        for (const d of `${item.quantity}`) {
+          const digitImg = this._itemNoDigits[parseInt(d)];
+          if (digitImg) {
+            canvas.drawImage({ img: digitImg, dx, dy });
+            dx += digitImg.width;
+          }
+        }
+      }
+
       // Item name
       let displayName = item.name;
-      if (!showBuyPrice && item.quantity > 1) {
-        displayName = `${item.name} (x${item.quantity})`;
-      }
       if (displayName.length > 18) displayName = displayName.substring(0, 16) + '..';
       canvas.drawText({
         text: displayName,
@@ -697,7 +795,7 @@ const ShopUI: any = {
         canvas.drawImage({ img: this.mesoImg, dx: panelX + STRIP_X + 8, dy: rowY + 23 });
       }
       canvas.drawText({
-        text: `${price.toLocaleString()}meso`,
+        text: `${price.toLocaleString()} Mesos`,
         color: '#000000',
         x: panelX + STRIP_X + 24, y: rowY + 23, fontSize: 10,
       });
@@ -747,6 +845,31 @@ const ShopUI: any = {
 
   handleClick(mx: number, my: number) {
     if (!this.isVisible) return;
+
+    // Sell panel tabs — same geometry drawTabs uses
+    {
+      const TAB_STRIP_BOTTOM = 116;
+      const TAB_X = 9;
+      const TAB_GAP = 2;
+      const plateW = this._tabPlateOn?.width || 34;
+      const plateH = this._tabPlateOn?.height || 19;
+      const tabTop = this.y + TAB_STRIP_BOTTOM - plateH;
+      if (my >= tabTop && my < this.y + TAB_STRIP_BOTTOM) {
+        const sx = this.x + PANEL_RIGHT_OFF + TAB_X;
+        for (let i = 0; i < 4; i++) {
+          const tx = sx + i * (plateW + TAB_GAP);
+          if (mx >= tx && mx < tx + plateW) {
+            if (this.sellTab !== i) {
+              this.sellTab = i;
+              this.sellSelectedIndex = -1;
+              this.sellScrollOffset = 0;
+              this.populateSellItems();
+            }
+            return;
+          }
+        }
+      }
+    }
 
     const listY = this.y + LIST_Y;
     const listH = VISIBLE_ROWS * ROW_H;

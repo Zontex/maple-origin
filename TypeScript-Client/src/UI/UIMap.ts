@@ -40,6 +40,7 @@ export interface UIMapInterface {
   hudHidden: boolean;
   initialize: () => Promise<void>;
   addButtons: (canvas: GameCanvas) => void;
+  reanchorButtons: (canvas: GameCanvas) => void;
   doUpdate: (msPerTick: number, camera: any, canvas: GameCanvas) => void;
   drawLevel: (canvas: GameCanvas, level: number) => void;
   drawNumbers: (
@@ -94,9 +95,13 @@ UIMap.initialize = async function () {
   );
 };
 
+// Live getters, not a snapshot: the resolution can change at runtime via
+// SYSTEM OPTION, and these offsets must follow the real screen edges.
+// On wider screens the 800-wide status bar is CENTERED as one island —
+// MapleStory Classic's treatment — not left-anchored with a tiled filler.
 const startUIPosition = {
-  x: config.width - 800,   // Offset for wider-than-800 resolutions
-  y: config.height - 600,  // Offset for taller-than-600 resolutions
+  get x() { return Math.floor((config.width - 800) / 2); },
+  get y() { return config.height - 600; },  // Offset for taller-than-600 resolutions
 };
 
 UIMap.addButtons = function (canvas) {
@@ -207,6 +212,22 @@ UIMap.addButtons = function (canvas) {
   };
 };
 
+// Rebuild the status-bar buttons against the current screen edges — the
+// resolution can change at runtime (SYSTEM OPTION), and every button baked
+// its position from startUIPosition at creation. The chat input keeps its
+// element (it holds focus listeners and typed text); only its anchor moves.
+UIMap.reanchorButtons = function (canvas) {
+  if (!this.buttons || this.buttons.size === 0) return;
+  this.buttons.forEach((btn: any) => ClickManager.removeButton(btn));
+  this.buttons.clear();
+  this.addButtons(canvas);
+  if (this.chat) {
+    (this.chat as any).opts.x = 90 + startUIPosition.x;
+    (this.chat as any).opts.y = 540 + startUIPosition.y;
+    (this.chat as any).reposition?.();
+  }
+};
+
 // QUIT GAME. The v83 client exits to the desktop; the browser equivalent is
 // dropping the session and going back to the login screen. Saving before the
 // socket closes matters — the server's disconnect handler also auto-saves, but
@@ -288,7 +309,7 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
   if (this.firstUpdate) {
     console.log("First update");
     this.chat = new MapleInput(canvas, {
-      x: 90,
+      x: 90 + startUIPosition.x,
       y: 540 + startUIPosition.y,
       width: 445,
       color: "#000000",
@@ -513,27 +534,21 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   // Top-center mob HP gauge (drawn under the rest of the HUD)
   UIMobGage.draw(canvas);
   const barY = 529 + startUIPosition.y;
-  const bgW = this.statusBg.width || 800;
 
-  UIDevTools.track('statusBar', 0, barY, config.width, config.height - barY, 'screen', 'UI.wz/StatusBar.img');
-  UIDevTools.track('statusBar.bars', 215, 567 + startUIPosition.y, 340, 20, 'screen', 'UI.wz/StatusBar.img/gauge', 'statusBar');
-  UIDevTools.track('statusBar.level', 36, 576 + startUIPosition.y, 40, 14, 'screen', undefined, 'statusBar');
+  UIDevTools.track('statusBar', startUIPosition.x, barY, 800, config.height - barY, 'screen', 'UI.wz/StatusBar.img');
+  UIDevTools.track('statusBar.bars', 215 + startUIPosition.x, 567 + startUIPosition.y, 340, 20, 'screen', 'UI.wz/StatusBar.img/gauge', 'statusBar');
+  UIDevTools.track('statusBar.level', 36 + startUIPosition.x, 576 + startUIPosition.y, 40, 14, 'screen', undefined, 'statusBar');
 
-  // Draw the left copy normally
+  // The bar interior (background, gauges, digits) is authored against an
+  // 800-wide layout — translate the whole segment to the centered island
+  // instead of threading the offset through every hardcoded x. Buttons are
+  // NOT in this block; they carry their own startUIPosition.x from addBtn.
+  const barCtx = canvas.context;
+  barCtx.save();
+  barCtx.translate(startUIPosition.x, 0);
+
   canvas.drawImage({ img: this.statusBg, dx: 0, dy: barY });
   canvas.drawImage({ img: this.statusBg2, dx: 0, dy: barY });
-
-  // Draw a right-aligned copy clipped so only the extra area beyond 800px shows
-  if (startUIPosition.x > 0) {
-    const ctx = canvas.context;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(bgW, barY, config.width - bgW, config.height - barY);
-    ctx.clip();
-    canvas.drawImage({ img: this.statusBg, dx: config.width - bgW, dy: barY });
-    canvas.drawImage({ img: this.statusBg2, dx: config.width - bgW, dy: barY });
-    ctx.restore();
-  }
 
   this.drawLevel(canvas, MyCharacter.stats.level);
 
@@ -602,6 +617,8 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   });
 
   this.drawNumbers(canvas, hp, maxHp, mp, maxMp, exp, maxExp);
+
+  barCtx.restore();
 
   this.buttons.forEach((obj) => {
     obj.draw(canvas, camera, lag, msPerTick, tdelta);

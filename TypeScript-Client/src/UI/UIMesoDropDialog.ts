@@ -20,7 +20,7 @@ const BTN_OK_W = 41;
 const BTN_CANCEL_W = 47;
 const BTN_GAP = 6;
 
-export type DropDialogMode = 'meso' | 'item';
+export type DropDialogMode = 'meso' | 'item' | 'message';
 
 export default class UIMesoDropDialog {
   private basicImg: any = null;
@@ -37,6 +37,7 @@ export default class UIMesoDropDialog {
   private inputValue: string = '0';
   private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
   private mode: DropDialogMode = 'meso';
+  private messageLines: string[] = [];
   private itemName: string = '';
   private showInput: boolean = true;
   private verb: string = 'drop';
@@ -97,6 +98,14 @@ export default class UIMesoDropDialog {
         this.confirm();
       },
     });
+
+    // A plain message carries only its OK button, centered
+    if (this.mode === 'message') {
+      okButton.x = this.x + Math.floor((NOTICE_WIDTH - BTN_OK_W) / 2);
+      this.buttons = [okButton];
+      this.buttons.forEach(btn => ClickManager.addButton(btn));
+      return;
+    }
 
     const cancelButton = new MapleStanceButton(null, {
       x: btnStartX + BTN_OK_W + BTN_GAP,
@@ -166,6 +175,29 @@ export default class UIMesoDropDialog {
     window.addEventListener('keydown', this.keydownHandler, true);
   }
 
+  /** Plain notice with an OK button — e.g. "You cannot sell this item." */
+  showMessage(lines: string[]) {
+    this.isHidden = false;
+    this.mode = 'message';
+    this.messageLines = lines;
+    this.onConfirm = null;
+    this.showInput = false;
+    this.errorMessage = '';
+    this.errorTimer = 0;
+
+    this.createButtons();
+
+    this.keydownHandler = (e: KeyboardEvent) => {
+      if (this.isHidden) return;
+      if (e.key === 'Enter' || e.key === 'Escape') {
+        this.hide();
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener('keydown', this.keydownHandler, true);
+  }
+
   hide() {
     this.buttons.forEach(btn => ClickManager.removeButton(btn));
     this.buttons = [];
@@ -179,6 +211,10 @@ export default class UIMesoDropDialog {
   }
 
   private confirm() {
+    if (this.mode === 'message') {
+      this.hide();
+      return;
+    }
     const amount = parseInt(this.inputValue) || 0;
     if (amount <= 0) {
       this.errorMessage = 'Please enter a valid amount.';
@@ -232,7 +268,18 @@ export default class UIMesoDropDialog {
     const textX = x + Math.floor(NOTICE_WIDTH / 2);
     const textAreaTop = this.y + NOTICE_TOP_H + 2;
 
-    if (this.mode === 'meso') {
+    if (this.mode === 'message') {
+      this.messageLines.forEach((line, i) => {
+        canvas.drawText({
+          text: line,
+          x: textX,
+          y: textAreaTop + i * 16,
+          color: '#000000',
+          fontSize: 12,
+          align: 'center',
+        });
+      });
+    } else if (this.mode === 'meso') {
       canvas.drawText({
         text: 'How many mesos would you',
         x: textX,

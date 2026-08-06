@@ -1021,7 +1021,7 @@ class InventoryMenuSprite extends DragableMenu {
     // (like GMS, the double-click simply does nothing when unmet — the
     // tooltip shows the requirements)
     const infoNode = item.node?.info || item.node?.nGet?.("info");
-    if (!this.charecter.canEquip(infoNode)) {
+    if (!this.charecter.canEquip(infoNode, itemId)) {
       console.log(`[Inventory] Cannot equip ${itemId} — requirements not met`);
       return;
     }

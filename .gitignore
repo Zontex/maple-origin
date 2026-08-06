@@ -15,6 +15,7 @@ TypeScript-Client/wz_client_backup/
 *.db
 *.db-wal
 *.db-shm
+*.db.bak-*
 
 # WZ parser (clone separately)
 tools/wz-parser/

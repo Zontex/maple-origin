@@ -5,6 +5,7 @@ import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
 import config from "../Config";
 import Settings from "../Settings";
+import { RESOLUTIONS, currentResolutionIndex, applyResolution } from "../Resolution";
 
 // SYSTEM OPTION, opened from the game menu.
 // Assets: UI.wz/UIWindow.img/SysOpt/backgrnd (299x366) — every label and the
@@ -22,6 +23,10 @@ const rowMid = (i: number) => ROW_TOP + i * ROW_PITCH + Math.floor(ROW_H / 2);
 
 const ROW_BGM = 1;
 const ROW_SOUND = 2;
+// Bottom row, "VIEWING MODE" — v83's own display row ("WINDOW / FULL
+// SCREEN"). The resolution selector lives here: clicking the row cycles
+// through the presets, MapleStory-Classic style.
+const ROW_VIEWING = 9;
 
 // Also measured: "SOFT" ends at x=87 and "LOUD" begins at x=213 on both rows,
 // so the track lives between them. "MUTE" occupies x=259..277.
@@ -49,6 +54,8 @@ interface UISystemOptionInterface {
   dragging: number;
   _restore: { bgm: number; sfx: number } | null;
   _canvas: GameCanvas | null;
+  /** One-shot latch so a held click cycles the resolution only once */
+  _viewLatch: boolean;
   initialize: (canvas: GameCanvas) => Promise<void>;
   show: () => void;
   hide: () => void;
@@ -68,6 +75,7 @@ UISystemOption.buttons = [];
 UISystemOption.dragging = -1;
 UISystemOption._restore = null;
 UISystemOption._canvas = null;
+UISystemOption._viewLatch = false;
 
 const ROWS: Row[] = [
   { row: ROW_BGM, get: () => Settings.bgmVolume, set: (v) => Settings.setBgmVolume(v) },
@@ -90,9 +98,12 @@ function valueAt(canvasX: number): number {
 UISystemOption.initialize = async function (canvas: GameCanvas) {
   // Rebuilt every time, like the other windows — entering a state clears
   // ClickManager, so retained buttons would draw but never take a click.
+  // Visibility is preserved: a resolution change re-runs this while the
+  // window is open, and it should stay open at the new screen's centre.
+  const wasVisible = this.isVisible;
   this._canvas = canvas;
   this.buttons = [];
-  this.isVisible = false;
+  this.isVisible = wasVisible;
   this.dragging = -1;
 
   const uiWindow: any = await WZManager.get("UI.wz/UIWindow.img");
@@ -117,7 +128,7 @@ UISystemOption.initialize = async function (canvas: GameCanvas) {
     img: basic.nGet("BtOK").nChildren,
     isRelativeToCamera: true,
     isPartOfUI: true,
-    isHidden: true,
+    isHidden: !wasVisible,
     // Settings already applied live while dragging, so OK just confirms.
     onClick: () => this.hide(),
   });
@@ -127,7 +138,7 @@ UISystemOption.initialize = async function (canvas: GameCanvas) {
     img: basic.nGet("BtCancel").nChildren,
     isRelativeToCamera: true,
     isPartOfUI: true,
-    isHidden: true,
+    isHidden: !wasVisible,
     onClick: () => {
       if (this._restore) {
         Settings.setBgmVolume(this._restore.bgm);
@@ -165,6 +176,7 @@ UISystemOption.doUpdate = function (canvas: GameCanvas) {
 
   if (!canvas.clicked) {
     this.dragging = -1;
+    this._viewLatch = false;
     return;
   }
 
@@ -172,6 +184,23 @@ UISystemOption.doUpdate = function (canvas: GameCanvas) {
   if (this.dragging >= 0) {
     ROWS[this.dragging].set(valueAt(mx));
     return;
+  }
+
+  // VIEWING MODE row: cycle through the resolution presets. Latched so a
+  // held button advances once, not once per frame.
+  {
+    const rowTop = this.y + ROW_TOP + ROW_VIEWING * ROW_PITCH;
+    const inRow =
+      my >= rowTop && my <= rowTop + ROW_H &&
+      mx >= this.x + 58 && mx <= this.x + WIN_W - 10;
+    if (inRow) {
+      if (!this._viewLatch) {
+        this._viewLatch = true;
+        const next = RESOLUTIONS[(currentResolutionIndex() + 1) % RESOLUTIONS.length];
+        applyResolution(this._canvas, next.width, next.height);
+      }
+      return;
+    }
   }
 
   for (let i = 0; i < ROWS.length; i++) {
@@ -210,6 +239,16 @@ UISystemOption.draw = function (canvas, camera, lag, msPerTick, tdelta) {
     canvas.drawImage({ img: this.track.right!, dx: tx + TRACK_W - 3, dy: ty });
     canvas.drawImage({ img: this.thumb!, dx: thumbX(i), dy: thumbY(i) });
   }
+
+  // Current resolution beside the baked "WINDOW" label on the VIEWING MODE
+  // row — the row itself is the control, each click steps to the next preset
+  canvas.drawText({
+    text: `${config.width} x ${config.height}`,
+    x: this.x + 118,
+    y: this.y + ROW_TOP + ROW_VIEWING * ROW_PITCH + 4,
+    color: '#000000',
+    fontSize: 11,
+  });
 
   this.buttons.forEach((b) => b.draw(canvas, camera, lag, msPerTick, tdelta));
 };

@@ -187,6 +187,12 @@ class MapStateCache {
   clear() {
     this.snapshots.clear();
   }
+
+  // A single map's memory dropped — a fresh PQ instance must not inherit
+  // smashed reactors or dead mobs from a previous run.
+  forget(mapId: number) {
+    this.snapshots.delete(mapId);
+  }
 }
 
 export default new MapStateCache();

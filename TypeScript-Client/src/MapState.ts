@@ -12,7 +12,8 @@ Object.defineProperty(window, '__MapleMap', {
 import MyCharacter from "./MyCharacter";
 import UIState from './UIState';
 import Camera, { CameraInterface } from "./Camera";
-import { enterBrowserFullscreen } from "./Config";
+import config, { enterBrowserFullscreen } from "./Config";
+import { applyConfiguredResolution } from "./Resolution";
 import GameCanvas from "./GameCanvas";
 import UIMap from "./UI/UIMap";
 import StatsMenuSprite from "./UI/Menu/StatsMenuSprite";
@@ -29,13 +30,16 @@ import UIMiniMap from "./UI/UIMiniMap";
 import UIQuestAlarm from "./UI/UIQuestAlarm";
 import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
 import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
+import CharInfoMenuSprite from "./UI/Menu/CharInfoMenuSprite";
+import PartyMenuSprite from "./UI/Menu/PartyMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
 import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
 import UIGameOption from "./UI/UIGameOption";
 import UIKeyConfig from "./UI/UIKeyConfig";
-import KeyBindings, { ACTIONS, BindableAction } from "./KeyBindings";
+import KeyBindings, { ACTIONS, BindableAction, FACE_EXPRESSIONS } from "./KeyBindings";
+import HenesysPQ from "./Events/HenesysPQ";
 
 // Bound-key helpers. Everything below asks for an ACTION, never a letter, so
 // rebinding takes effect immediately and the edge-triggered checks keep
@@ -116,7 +120,10 @@ export interface MapState extends UIState {
   equipMenu: EquipMenuSprite;
   questLog: QuestLogMenuSprite;
   skillMenu: SkillMenuSprite;
+  charInfoMenu: CharInfoMenuSprite;
+  partyMenu: PartyMenuSprite;
   UIMenus: any[];
+  closeAllMenus: () => void;
   PlayerCharacter: any; // Reference to MyCharacter
   getMapName: (mapId: number) => Promise<{ streetName: string, mapName: string }>;
   previousKeyboardState: {
@@ -331,6 +338,12 @@ MapStateInstance.changeMap = async function (map = defaultMap, portalName?: stri
   await initializeMapState(map, false, portalName);
 };
 
+// Event warps (HPQ start/clear/exile) go through the same map-change path;
+// registered here because a static import back into MapState would cycle
+HenesysPQ.changeMapFn = (mapId: number, portal?: number | string) => {
+  void MapStateInstance.changeMap(mapId, portal);
+};
+
 function isTouchDevice() {
   return "ontouchstart" in window || navigator.maxTouchPoints > 0;
 }
@@ -363,7 +376,7 @@ MapStateInstance.getMapName = async function(mapId: number) {
       area = "victoria";
     }
     
-    const nameNode = strMap[area]?.[mapId];
+    const nameNode = (strMap as any)?.[area]?.[mapId];
     const streetName = nameNode?.streetName?.nValue || "";
     const mapName = nameNode?.mapName?.nValue || `Map ${mapId}`;
     
@@ -374,7 +387,17 @@ MapStateInstance.getMapName = async function(mapId: number) {
   }
 };
 
-MapStateInstance.initialize = async function (map: number = defaultMap) {
+// StateManager passes its (optional) canvas like it does to every state; the
+// starting map always arrives via _startMapOverride, set by the login flow
+// and dev auto-login before setState.
+MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
+  let map: number = defaultMap;
+
+  // Every path into the game must land on the configured resolution —
+  // manual login, dev auto-login, quit-and-reenter. The login flow itself
+  // runs at the classic 800x600; the saved resolution exists only in-game.
+  applyConfiguredResolution(ClickManager.GameCanvas ?? null);
+
   // Use saved map override from character select if available
   if ((this as any)._startMapOverride) {
     map = (this as any)._startMapOverride;
@@ -426,7 +449,21 @@ MapStateInstance.initialize = async function (map: number = defaultMap) {
     isHidden: true,
   });
 
-  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu];
+  this.charInfoMenu = await CharInfoMenuSprite.fromOpts({
+    x: 260,
+    y: 70,
+    isHidden: true,
+    canvas: ClickManager.GameCanvas,
+  });
+
+  this.partyMenu = await PartyMenuSprite.fromOpts({
+    x: 244,
+    y: 90,
+    isHidden: true,
+    canvas: ClickManager.GameCanvas,
+  });
+
+  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu, this.charInfoMenu, this.partyMenu];
   // Same array, same order as the draw pass — so "later in the list" means
   // "drawn on top", which is what click ownership is decided on.
   DragableMenu.setStack(this.UIMenus);
@@ -537,6 +574,7 @@ MapStateInstance.doUpdate = function (
     // Transportation schedules (boats/trains/elevator/timed rides) — wall-clock
     // driven, so it belongs here rather than in any map-local timer
     TransportationManager.update(MapleMap, (m, p) => MapStateInstance.changeMap(m, p));
+    HenesysPQ.update(msPerTick);
 
     // Update ShopUI
     if (ShopUI.isVisible) {
@@ -664,6 +702,15 @@ MapStateInstance.doUpdate = function (
       }
       if (actionPressed(canvas, "skills") && !DirectionScene.isActive) {
         this.skillMenu.setIsHidden(!this.skillMenu.isHidden);
+      }
+      if (actionPressed(canvas, "party") && !DirectionScene.isActive) {
+        this.partyMenu.setIsHidden(!this.partyMenu.isHidden);
+      }
+      // Face emotes (F1-F7 by default) — held 5s, synced to other players
+      for (const faceAction of Object.keys(FACE_EXPRESSIONS) as BindableAction[]) {
+        if (actionPressed(canvas, faceAction)) {
+          MyCharacter.playEmote(FACE_EXPRESSIONS[faceAction]);
+        }
       }
       if (actionPressed(canvas, "keyConfig") && !DirectionScene.isActive) {
         UIKeyConfig.toggle();
@@ -919,6 +966,9 @@ MapStateInstance.doRender = function (
 
     // UIMap draws HUD + cursor (HUD suppressed while hudHidden)
     UIMap.doRender(canvas, camera, lag, msPerTick, tdelta);
+
+    // Party quest overlays: event timer clock, map-effect banner, clear effect
+    HenesysPQ.render(canvas);
   }
 
   // Drag ghost icon — on top of all UI

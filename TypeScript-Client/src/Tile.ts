@@ -8,6 +8,7 @@ class Tile {
   img: any;
   originX: number = 0;
   originY: number = 0;
+  height: number = 0;
   x: number = 0;
   y: number = 0;
   z: number = 0;
@@ -34,6 +35,9 @@ class Tile {
 
     this.originX = spriteNode.origin.nX;
     this.originY = spriteNode.origin.nY;
+    // Sprite height from the WZ node, not the (possibly undecoded) image —
+    // MapleMap uses it to measure the map's true drawn extent for the camera
+    this.height = spriteNode.nHeight || 0;
 
     this.x = wzNode.x.nValue;
     this.y = wzNode.y.nValue;

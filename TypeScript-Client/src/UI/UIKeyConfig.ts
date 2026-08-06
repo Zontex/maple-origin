@@ -85,6 +85,14 @@ function buildLayout(): KeySlot[] {
 }
 const KEY_SLOTS = buildLayout();
 
+// The eight quickslot keys are owned by the hotkey bar (UIHotkeyBar slots,
+// saved per character) — the keyboard window mirrors them and routes drops
+// there, so the same key never has two competing bindings.
+const QUICKSLOT_SCANCODES: Record<number, string> = {
+  42: "shift", 82: "insert", 71: "home", 73: "pageup",
+  29: "ctrl", 83: "delete", 79: "end", 81: "pagedown",
+};
+
 // The palette below the keyboard: 18 columns on a 34px pitch, three rows,
 // measured the same way as the keys.
 const PAL_X = 10;
@@ -195,6 +203,20 @@ UIKeyConfig.handleDrop = function (drop: any) {
   // than going back to WZ — that also covers skills, whose icons never came
   // from the item tree in the first place.
   if (drop.icon) this.itemIcons[drop.id] = drop.icon;
+
+  // Quickslot keys belong to the hotkey bar — assign there so the bar and
+  // the keyboard window always show the same thing
+  const barKey = QUICKSLOT_SCANCODES[slot.code];
+  if (barKey) {
+    const bar: any = (window as any).__uiHotkeyBar;
+    const idx = bar?.slots?.findIndex((b: any) => b.key === barKey) ?? -1;
+    if (idx >= 0) {
+      if (drop.type === "skill") void bar.assignSkill(idx, drop.id);
+      else bar.assignItem(idx, drop.id, drop.icon ?? this.itemIcons[drop.id] ?? null);
+      return true;
+    }
+  }
+
   if (drop.type === "skill") {
     KeyBindings.bindSkill(slot.code, drop.id);
   } else {
@@ -378,6 +400,22 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
   // Pick up off a key…
   const slot = KEY_SLOTS.find((s) => inside(slotRect(s), mx, my));
   if (slot) {
+    // A quickslot key carries whatever the hotkey bar holds there — pick it
+    // up (clearing the bar slot) and let the drop decide where it lands
+    const barKey = QUICKSLOT_SCANCODES[slot.code];
+    if (barKey) {
+      const bar: any = (window as any).__uiHotkeyBar;
+      const idx = bar?.slots?.findIndex((b: any) => b.key === barKey) ?? -1;
+      const barSlot = idx >= 0 ? bar.slots[idx] : null;
+      if (barSlot && barSlot.type !== "none") {
+        DragManager.beginPending(
+          barSlot.type === "skill" ? "skill" : "item",
+          barSlot.actionId, barSlot.icon ?? null, mx, my
+        );
+        bar.clearSlot(idx);
+        return;
+      }
+    }
     // An item on a key is cleared by clicking it — there is no palette for
     // items to go back to, they came from the inventory and still live there.
     // An item or skill on a key is picked up and carried, the same as an
@@ -420,6 +458,22 @@ UIKeyConfig.doUpdate = function (canvas: GameCanvas) {
 UIKeyConfig.draw = function (canvas, camera, lag, msPerTick, tdelta) {
   if (!this.isVisible || !this.background) return;
   canvas.drawImage({ img: this.background, dx: this.x, dy: this.y });
+
+  // Quickslot-bar assignments mirrored on their keys (Shift/Ins/Home/PgUp/
+  // Ctrl/Del/End/PgDn live on the bar, not in KeyBindings)
+  const bar: any = (window as any).__uiHotkeyBar;
+  for (const s of KEY_SLOTS) {
+    const barKey = QUICKSLOT_SCANCODES[s.code];
+    if (!barKey || !bar?.slots) continue;
+    const barSlot = bar.slots.find((b: any) => b.key === barKey && b.type !== "none");
+    if (!barSlot?.icon?.width) continue;
+    const r = slotRect(s);
+    canvas.drawImage({
+      img: barSlot.icon,
+      dx: Math.round(r.x + (r.w - Math.min(barSlot.icon.width || ICON, ICON)) / 2),
+      dy: Math.round(r.y + (r.h - Math.min(barSlot.icon.height || ICON, ICON)) / 2),
+    });
+  }
 
   // Items and skills bound straight to a key draw their own icon.
   for (const s of KEY_SLOTS) {
