@@ -27,6 +27,13 @@ export interface SkillLevelEffect {
   hp: number;
   mp: number;
   damagepc: number;
+  /**
+   * The `lt`/`rb` attack rectangle, in pixels relative to the character.
+   * v83 authors one on area skills only (Thunder Bolt is 300x100 with
+   * mobCount 6); single-target skills like Energy Bolt and Power Strike ship
+   * no geometry at all and take the character's own reach instead.
+   */
+  hitBox: { left: number; top: number; right: number; bottom: number } | null;
   // WZ nodes for skill projectile and hit effect (stored per-level for skills like Three Snails)
   ballNode: any;
   hitNode: any;
@@ -73,6 +80,7 @@ function emptyEffect(): SkillLevelEffect {
     speed: 0, jump: 0, range: 0, cooltime: 0, fixdamage: 0,
     mobCount: 1, attackCount: 1, bulletCount: 0, bulletConsume: 0,
     hp: 0, mp: 0, damagepc: 0,
+    hitBox: null,
     ballNode: null, hitNode: null,
   };
 }
@@ -135,6 +143,15 @@ function parseLevelEffect(levelNode: any): SkillLevelEffect {
       effect.ballNode = child;
     } else if (name === 'hit') {
       effect.hitNode = child;
+    } else if (name === 'lt' || name === 'rb') {
+      // Vector pair, so it can only be read once both halves are in
+      const x = Number(child.nX ?? child.nGet?.('x')?.nValue ?? NaN);
+      const y = Number(child.nY ?? child.nGet?.('y')?.nValue ?? NaN);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        const box = effect.hitBox || { left: 0, top: 0, right: 0, bottom: 0 };
+        if (name === 'lt') { box.left = x; box.top = y; } else { box.right = x; box.bottom = y; }
+        effect.hitBox = box;
+      }
     } else {
       const key = name as keyof SkillLevelEffect;
       if (LEVEL_EFFECT_FIELDS.includes(key)) {
@@ -419,5 +436,40 @@ const SkillData = {
     }
   },
 };
+
+/**
+ * How far a skill reaches, in pixels from the character.
+ *
+ * v83 states this three different ways, and which one a skill uses is itself
+ * meaningful — a survey of every attacking skill in the client's data:
+ *
+ *   `range`   — 25 skills, explicit. 100 to 600, with 130 the most common
+ *               (Slash Blast, Coma, Charged Blow).
+ *   `lt`/`rb` — 90 skills, an authored rectangle centred on the character.
+ *               Only ever on AREA skills: Thunder Bolt is 300x100 alongside
+ *               mobCount 6, Heal is 500x300.
+ *   neither   — 121 skills, every single-target attack in the game. Energy
+ *               Bolt, Magic Claw and Power Strike are all in this group, so
+ *               the absence is deliberate: the original client falls back to
+ *               the character's own attack reach rather than reading data.
+ *
+ * SINGLE_TARGET_REACH is therefore the one number here that v83 does not
+ * supply — it is our choice, and the only tunable in this function. It sits
+ * inside the 100-200 band Nexon uses for close-range skills, and well above
+ * a wand's 70px melee swing.
+ */
+export const SINGLE_TARGET_REACH = 200;
+
+export function skillReach(effect: SkillLevelEffect | null | undefined): number {
+  if (!effect) return SINGLE_TARGET_REACH;
+  if (effect.range > 0) return effect.range;
+  if (effect.hitBox) {
+    // The box is centred on the character, so its reach is the half-width —
+    // whichever side extends further, since lt/rb are authored facing right
+    const reach = Math.max(Math.abs(effect.hitBox.left), Math.abs(effect.hitBox.right));
+    if (reach > 0) return reach;
+  }
+  return SINGLE_TARGET_REACH;
+}
 
 export default SkillData;

@@ -1,5 +1,9 @@
 import WZManager from "./wz-utils/WZManager";
 import { preloadFrames } from "./wz-utils/WZNode";
+// Static, not the dynamic import the rest of SkillData uses here: skillReach
+// is needed inside a synchronous stance callback. Safe — SkillData imports
+// only WZManager, so this closes no cycle.
+import { skillReach } from "./Skills/SkillData";
 import config from "./Config";
 import GUIUtil from "./GuiUtils";
 import PLAY_AUDIO from "./Audio/PlayAudio";
@@ -1528,7 +1532,7 @@ fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverr
       ? { spellAttack: effect.mad, mastery: (effect.mastery || 10) / 100, element }
       : null,
     targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying) || [],
-    maxDistance: effect.range > 0 ? effect.range : 400,
+    maxDistance: skillReach(effect),
   });
   this.projectiles.push(projectile);
 }
