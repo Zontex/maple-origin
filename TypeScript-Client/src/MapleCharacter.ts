@@ -3,7 +3,7 @@ import { preloadFrames } from "./wz-utils/WZNode";
 // Static, not the dynamic import the rest of SkillData uses here: skillReach
 // is needed inside a synchronous stance callback. Safe — SkillData imports
 // only WZManager, so this closes no cycle.
-import { skillReach } from "./Skills/SkillData";
+import { skillReach, SINGLE_TARGET_REACH } from "./Skills/SkillData";
 import config from "./Config";
 import GUIUtil from "./GuiUtils";
 import PLAY_AUDIO from "./Audio/PlayAudio";
@@ -1688,7 +1688,10 @@ async fireProjectile(weaponType: number) {
       left: !this.flipped,
       targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying) || [],
       weaponAttackRange: weaponAttackRange,
-      maxDistance: 600,
+      // A basic ranged attack is a single-target attack with no skill
+      // geometry — the same category Energy Bolt and Power Strike are in, so
+      // it takes the same reach rather than a constant of its own
+      maxDistance: SINGLE_TARGET_REACH,
     });
     this.projectiles.push(projectile);
   } catch (error) {

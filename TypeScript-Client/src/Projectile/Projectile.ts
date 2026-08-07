@@ -12,6 +12,7 @@ import { Position } from "../Effects/DamageIndicator";
 import Monster from "../Monster";
 import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
+import { SINGLE_TARGET_REACH } from "../Skills/SkillData";
 
 // bullets locations
 // Item.wz/Consume/206.img/ID/bullet - arrow
@@ -93,7 +94,7 @@ class Projectile {
     });
     p.originX = opts.x;
     p.originY = opts.y;
-    p.maxDistance = opts.maxDistance || 400;
+    p.maxDistance = opts.maxDistance || SINGLE_TARGET_REACH;
     p.isMovementEnabled = true;
     p.destroyed = false;
     p.targetMonsters = opts.targetMonsters;
@@ -140,7 +141,7 @@ class Projectile {
     });
     this.originX = opts.x;
     this.originY = opts.y;
-    this.maxDistance = opts.maxDistance || 1000;
+    this.maxDistance = opts.maxDistance || SINGLE_TARGET_REACH;
     this.isMovementEnabled = true;
     this.destroyed = false;
     this.targetMonsters = opts.targetMonsters || [];
