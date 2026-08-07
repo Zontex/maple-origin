@@ -165,26 +165,42 @@ class Projectile {
   }
 
   // Target finding for skill projectiles — uses fixed damage instead of weapon calc
-  findTargetForSkill() {
-    const targetsInRange = this.targetMonsters.filter((monster: Monster) => {
-      return this.pos!.isWithinRange(
-        monster.centerPosition,
-        default_target_angle,
-        this.maxDistance
-      );
-    });
-
-    if (targetsInRange.length === 0) return;
-
-    let closestDistance = this.maxDistance + 1;
-    let closestMonster = null;
-    for (const monster of targetsInRange) {
+  /**
+   * Nearest live monster in front of the projectile, or null.
+   *
+   * `centerPosition` starts null and is only filled in by Monster.load(), so
+   * a mob still loading — or one whose position has gone non-finite — has to
+   * be dropped before any geometry touches it. Both the range test and the
+   * distance test compare with `>` and `<`, and every comparison against NaN
+   * is false, so such a monster would slip through the range filter and then
+   * never win the closest-distance loop. That left the loop returning null
+   * for a non-empty candidate list, which is how casting at a slime could
+   * throw "Cannot read properties of null (reading 'centerPosition')".
+   */
+  private pickNearestTarget(): Monster | null {
+    const usable = (m: Monster) => {
+      const c = (m as any)?.centerPosition;
+      return !!c && Number.isFinite(c.x) && Number.isFinite(c.y);
+    };
+    let closest: Monster | null = null;
+    let closestDistance = Infinity;
+    for (const monster of this.targetMonsters) {
+      if (!usable(monster)) continue;
+      if (!this.pos!.isWithinRange(monster.centerPosition, default_target_angle, this.maxDistance)) {
+        continue;
+      }
       const distance = this.pos!.distanceTo(monster.centerPosition);
       if (distance < closestDistance) {
         closestDistance = distance;
-        closestMonster = monster;
+        closest = monster;
       }
     }
+    return closest;
+  }
+
+  findTargetForSkill() {
+    const closestMonster = this.pickNearestTarget();
+    if (!closestMonster) return;
 
     this.target = closestMonster;
     this.pos!.setTarget(
@@ -225,28 +241,9 @@ class Projectile {
   }
 
   checkIfFindTarget() {
-    const targetsInRange = this.targetMonsters.filter((monster: Monster) => {
-      return this.pos!.isWithinRange(
-        monster.centerPosition,
-        default_target_angle,
-        this.maxDistance
-      );
-    });
+    const closestMonster = this.pickNearestTarget();
 
-    if (targetsInRange.length > 0) {
-      // Find the closest target among those in range
-      let closestDistance = this.maxDistance + 1;
-      let closestMonster = null;
-
-      for (const monster of targetsInRange) {
-        const distance = this.pos!.distanceTo(monster.centerPosition);
-
-        if (distance < closestDistance) {
-          closestDistance = distance;
-          closestMonster = monster;
-        }
-      }
-
+    if (closestMonster) {
       this.target = closestMonster;
       this.pos!.setTarget(
         closestMonster.centerPosition.x,
