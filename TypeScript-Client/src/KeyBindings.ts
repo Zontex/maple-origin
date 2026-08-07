@@ -24,6 +24,7 @@ export type BindableAction =
   | "skills"
   | "questLog"
   | "miniMap"
+  | "worldMap"
   | "party"
   | "keyConfig"
   | "face1"
@@ -56,6 +57,7 @@ export const ACTIONS: ActionInfo[] = [
   { action: "skills", icon: 3, label: "Skill" },
   { action: "questLog", icon: 8, label: "Quest" },
   { action: "miniMap", icon: 7, label: "Mini Map" },
+  { action: "worldMap", icon: 5, label: "World Map" },
   { action: "party", icon: 19, label: "Party" },
   { action: "keyConfig", icon: 9, label: "Set Key" },
   // Face emotes — the v83 client maps keymap face actions to the Face.wz
@@ -124,6 +126,7 @@ export const DEFAULT_BINDINGS: Record<number, BindableAction> = {
   37: "skills",     // K
   16: "questLog",   // Q
   50: "miniMap",    // M
+  17: "worldMap",   // W
   25: "party",      // P
   // v83 default emote row
   59: "face1",      // F1
@@ -234,6 +237,12 @@ function load(): Bindings {
           out[code] = DEFAULT_BINDINGS[code];
         }
       }
+    }
+    // Same for the world map: saves made before it existed get it on W,
+    // but only if that key is still free — never displace a rebind
+    const hasWorldMap = Object.values(out).some((a) => a === 'worldMap');
+    if (!hasWorldMap && out[17] === undefined) {
+      out[17] = 'worldMap';
     }
     return out;
   } catch {
@@ -446,6 +455,13 @@ export function applyKeyboardBindings(entries: KeymapEntry[]): void {
       skills[code] = Number(e.actionId);
     }
   }
+  // Characters saved before the world map existed get it on W, provided that
+  // key is still free — the same courtesy the emote row gets in load(). Never
+  // displaces an existing bind; if W is taken, World Map waits in the palette.
+  if (!Object.values(bindings).includes('worldMap') && bindings[17] === undefined) {
+    bindings[17] = 'worldMap';
+  }
+
   KeyBindings.bindings = bindings;
   KeyBindings.itemBindings = items;
   KeyBindings.skillBindings = skills;

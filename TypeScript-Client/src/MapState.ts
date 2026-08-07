@@ -717,6 +717,9 @@ MapStateInstance.doUpdate = function (
         // title strip — it can never be removed completely
         UIMiniMap.viewMode = UIMiniMap.viewMode === 'max' ? 'min' : 'max';
       }
+      if (actionPressed(canvas, "worldMap") && !DirectionScene.isActive) {
+        UIWorldMap.toggle(Number(MapleMap.mapId ?? 0));
+      }
       if (actionPressed(canvas, "equipment") && !DirectionScene.isActive) {
         this.equipMenu.setIsHidden(!this.equipMenu.isHidden);
       }
