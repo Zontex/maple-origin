@@ -1,0 +1,521 @@
+// Lazy reference to break circular dependency:
+// MyCharacter → MapleCharacter → Physics → MapleMap → Monster → mysocket → MyCharacter
+import type MapleMapType from "./MapleMap";
+let _MapleMap: typeof MapleMapType | null = null;
+export function _setMapleMap(m: typeof MapleMapType) { _MapleMap = m; }
+function getMapleMap() { return _MapleMap!; }
+
+/// https://github.com/NoLifeDev/NoLifeStory/blob/master/src/client/physics.cpp
+const down_jump_multiplier = 0.35355339;
+const epsilon = 2e-3;
+const fall_speed = 670;
+const float_coefficient = 0.01;
+const float_drag_1 = 100000;
+const float_drag_2 = 10000;
+const float_multiplier = 0.0008928571428571428;
+const fly_force = 120000;
+const fly_jump_dec = 0.35;
+const fly_speed = 200;
+const gravity_acc = 2000;
+const jump_speed = 570;
+// const jump_speed = 555;
+const max_friction = 2;
+const max_land_speed = 162.5;
+const min_friction = 0.05;
+const shoe_fly_acc = 0;
+const shoe_fly_speed = 0;
+const shoe_mass = 100;
+const shoe_swim_acc = 1;
+const shoe_swim_speed_h = 1;
+const shoe_swim_speed_v = 1;
+const shoe_walk_acc = 1;
+const shoe_walk_drag = 1;
+const shoe_walk_jump = 1.0;
+const shoe_walk_slant = 0.9;
+const shoe_walk_speed = 1.0;
+const slip_force = 60000;
+const slip_speed = 120;
+const swim_force = 120000;
+const swim_jump = 700;
+const swim_speed = 140;
+const swim_speed_dec = 0.9;
+const walk_drag = 80000;
+const walk_force = 140000;
+const default_walk_speed = 125;
+// Sliding down used to be twice the climbing speed, which made descents feel
+// like dropping rather than climbing. Both directions move at one rate now.
+const slide_up_speed = 150;
+const slide_down_speed = slide_up_speed;
+
+// Pushing off a rope with jump + left/right. The vertical kick is a fraction
+// of a standing jump (a rope push-off should not out-jump solid ground) and
+// the horizontal one is a multiple of walk speed, so the character clears the
+// ladder instead of dribbling back onto it.
+const rope_jump_v = 0.85;
+const rope_jump_h = 1.4;
+
+const speedFactor = 90;
+
+class Physics {
+  left: boolean = false;
+  right: boolean = false;
+  up: boolean = false;
+  down: boolean = false;
+  isMoveEnalbed: boolean = true;
+  x: number = 0;
+  y: number = 0;
+  r: number = 0;
+  vx: number = 0;
+  vy: number = 0;
+  vr: number = 0;
+  layer: number = 0;
+  group: number = 0;
+  fh: any = null;
+  lf: any = null;
+  djump: any = null;
+  isClimbing: boolean = false;
+  flying: boolean = false;
+  swimming: boolean = false; // in a swim map — airborne physics become water physics
+  walk_speed: number = default_walk_speed;
+  landingImpactVy: number = 0; // Records vy at moment of landing for fall damage
+  fallStartY: number = 0; // Y position when player left a foothold
+  fallDistance: number = 0; // Total Y distance fallen on landing
+
+  constructor(x = 0, y = 0, walkSpeed = default_walk_speed, exactSpeed = false) {
+    this.x = x;
+    this.y = y;
+    this.walk_speed = exactSpeed
+      ? walkSpeed
+      : walkSpeed === default_walk_speed
+        ? default_walk_speed
+        : walkSpeed + speedFactor;
+  }
+  /**
+   * Whether down + jump has anywhere to drop to: standing on a foothold that
+   * allows it, with another foothold somewhere below the character.
+   *
+   * Shared with the jump-gating in MapleCharacter so the two cannot disagree
+   * about what counts as a ledge — if this is false, down+jump must do
+   * nothing at all rather than falling through to a normal jump upward.
+   */
+  canDropThrough(): boolean {
+    const fh = this.fh;
+    if (!fh || fh.cantThrough || fh.forbid) return false;
+    const x = this.x;
+    const y = this.y;
+    return (getMapleMap().footholdList || []).some((f: any) => {
+      return f.id != fh.id && f.x1 < x && f.x2 > x && f.y1 > y && f.y2 > y;
+    });
+  }
+
+  /**
+   * Whether upward motion is a real take-off rather than the slope-following
+   * that ordinary walking produces.
+   *
+   * Grounded movement assigns `vy = (mvr * fy) / len` every frame, so walking
+   * *uphill* is negative vy — the character is genuinely rising, just not
+   * jumping. A plain `vy < 0` test therefore reads "mid-jump" on every upward
+   * slope and refuses to let you jump while walking up one. The two are far
+   * apart in magnitude: slope-following is capped at walking speed (125),
+   * a jump starts at jump_speed (570), so anything faster than walking can
+   * only have come from a take-off.
+   */
+  isRisingFromJump(): boolean {
+    return this.vy < -(this.walk_speed * shoe_walk_speed);
+  }
+
+  jump() {
+    let fh = this.fh;
+    let djump = this.djump;
+    let vx = this.vx;
+    let vy = this.vy;
+    let flying = false;
+    let x = this.x;
+    let y = this.y;
+    if (this.isClimbing) {
+      flying = true;
+      vy = shoe_walk_jump * jump_speed * -rope_jump_v;
+      // Set outright rather than clamped against the current vx: climbing
+      // leaves vx at 0, so clamping could only ever reach the low end of the
+      // range and the push-off barely left the rope.
+      const fmax = this.walk_speed * shoe_walk_speed * rope_jump_h;
+      vx = this.left ? -fmax : this.right ? fmax : vx;
+      // Pushing off leaves the character airborne, so drop the foothold the
+      // way the grounded branch does. It was kept, and since climbing never
+      // refreshes it the value was stale — a held jump key then saw "on the
+      // ground" for the whole rise and fired a second, full-strength jump the
+      // moment vy crossed zero at the apex.
+      fh = null;
+    } else if (fh) {
+      if (this.down && this.canDropThrough()) {
+        djump = fh;
+        vx = 0;
+        vy = -jump_speed * down_jump_multiplier;
+      } else {
+        vy = shoe_walk_jump * jump_speed * (flying ? -0.7 : -1);
+        let fx = fh.x2 - fh.x1,
+          fy = fh.y2 - fh.y1,
+          fmax = this.walk_speed * shoe_walk_speed;
+        (this.left && fy < 0) || (this.right && fy > 0)
+          ? (fmax *= 1 + (fy * fy) / (fx * fx + fy * fy))
+          : 0;
+        vx = this.left
+          ? Math.max(Math.min(vx, -fmax * 0.8), -fmax)
+          : this.right
+          ? Math.min(Math.max(vx, fmax * 0.8), fmax)
+          : vx;
+      }
+      fh = null;
+    } else {
+      // In water: jump key gives a small upward swim kick (flappy-bird feel —
+      // each kick hops up, gravity pulls back down). The vy gate paces
+      // re-kicks while the key is held instead of stacking every frame.
+      if (this.swimming && vy > -80) {
+        vy = -shoe_swim_speed_v * swim_jump * 0.5;
+      }
+    }
+    this.fh = fh;
+    this.djump = djump;
+    this.vx = vx;
+    this.vy = vy;
+
+    this.isClimbing = false;
+  }
+  attack() {
+    // TODO
+    // this need to use the job data like
+    // archer can not attack while jumping
+    // assasin can attack while jumping
+  }
+  climbUp() {
+    this.isClimbing = true;
+    this.djump = null;
+    this.vx = 0;
+    this.vy = -1 * slide_up_speed;
+  }
+  climbDown() {
+    this.isClimbing = true;
+    this.djump = null;
+    this.vx = 0;
+    this.vy = slide_down_speed;
+  }
+  stopClimbMovement() {
+    this.vx = 0;
+    this.vy = 0;
+    this.down = false;
+    this.up = false;
+    this.isClimbing = true;
+  }
+
+  stopClimb() {
+    if (this.isClimbing) {
+      this.vx = 0;
+      this.vy = 0;
+    }
+    this.isClimbing = false;
+  }
+
+  applyKnockback(directionX = 1, directionY = 1, force = 250) {
+    // Ensure the player is not climbing
+    if (this.isClimbing) {
+      this.stopClimb();
+    }
+
+    // check if direction is in gravity direction, if so make force less strong
+    if (directionY > 0) {
+      force = force / 2;
+    }
+
+    // Apply knockback force in the specified direction
+    this.vx = directionX * force;
+    this.vy = directionY * force;
+  }
+
+  applyKnockbackX(directionX = 1, force = 150) {
+    // Ensure the player is not climbing
+    if (this.isClimbing) {
+      this.stopClimb();
+    }
+    // Apply knockback force in the specified direction
+    this.vx = directionX * force;
+    this.vy = 0;
+  }
+
+  update(msPerTick: number) {
+    if (!this.isMoveEnalbed) {
+      return;
+    }
+
+    // Track when player becomes airborne for fall damage calculation
+    const wasOnGround = !!this.fh;
+
+    // Swim maps switch airborne physics to water physics for everything
+    // that isn't a flying mob (fly mobs steer themselves)
+    this.swimming = !this.flying && !!getMapleMap()?.isSwimMap;
+
+    let mleft = this.left && !this.right;
+    let mright = !this.left && this.right;
+    let delta = msPerTick / 1000;
+    let vx = this.vx;
+    let vy = this.vy;
+    let fh = this.fh;
+
+    // Holding down on the ground = prone — you can't walk while crouched
+    if (fh && this.down && !this.isClimbing) {
+      mleft = false;
+      mright = false;
+    }
+
+    // Flying entities (mobs with a fly stance) ignore gravity and footholds;
+    // their AI steers vx/vy directly
+    if (this.flying) {
+      this.x = this.x + vx * delta;
+      this.y = this.y + vy * delta;
+      return;
+    }
+
+    if (this.isClimbing) {
+      this.x = this.x + vx * delta;
+      this.y = this.y + vy * delta;
+      return;
+    } else {
+      if (fh) {
+        const fx = fh.x2 - fh.x1,
+          fy = fh.y2 - fh.y1,
+          fx2 = fx * fx,
+          fy2 = fy * fy,
+          len = Math.sqrt(fx2 + fy2);
+        let mvr = (vx * len) / fx;
+        mvr -= fh.force;
+        let fs = (1 / shoe_mass) * delta;
+        let maxf = 1 * this.walk_speed * shoe_walk_speed;
+        let drag =
+          Math.max(Math.min(shoe_walk_drag, max_friction), min_friction) *
+          walk_drag;
+        let slip = fy / len;
+        if (shoe_walk_slant < Math.abs(slip)) {
+          let slipf = slip_force * slip;
+          let slips = slip_speed * slip;
+          mvr += mleft ? -drag * fs : mright ? drag * fs : 0;
+          mvr =
+            slips > 0
+              ? Math.min(slips, mvr + slipf * delta)
+              : Math.max(slips, mvr + slipf * delta);
+        } else {
+          mvr = mleft
+            ? mvr < -maxf
+              ? Math.min(-maxf, mvr + drag * fs)
+              : Math.max(-maxf, mvr - shoe_walk_acc * walk_force * fs)
+            : mright
+            ? mvr > maxf
+              ? Math.max(maxf, mvr - drag * fs)
+              : Math.min(maxf, mvr + shoe_walk_acc * walk_force * fs)
+            : mvr < 0
+            ? Math.min(0, mvr + drag * fs)
+            : mvr > 0
+            ? Math.max(0, mvr - drag * fs)
+            : mvr;
+        }
+        mvr += fh.force;
+        this.vx = (mvr * fx) / len;
+        this.vy = (mvr * fy) / len;
+      } else if (this.swimming) {
+        // Water physics, flappy-bird style: constant water gravity always
+        // pulls down toward a slow terminal sink speed — the jump kick (in
+        // jump()) is the only way up, so staying afloat takes repeated kicks.
+        // Horizontal keeps v83 swim feel: accelerate toward the swim speed
+        // cap, decay overspeed (kick/knockback) through drag.
+        const acc = (swim_force / shoe_mass) * delta;
+        const drag = (float_drag_1 / shoe_mass) * delta;
+        const maxH = swim_speed * shoe_swim_speed_h;
+        const waterGravity = 700;
+        const sinkTerminal = 300;
+
+        this.vx = mleft
+          ? vx < -maxH ? Math.min(-maxH, vx + drag) : Math.max(-maxH, vx - acc)
+          : mright
+          ? vx > maxH ? Math.max(maxH, vx - drag) : Math.min(maxH, vx + acc)
+          : vx > 0
+          ? Math.max(0, vx - drag)
+          : Math.min(0, vx + drag);
+
+        this.vy = Math.min(vy + waterGravity * delta, sinkTerminal);
+      } else {
+        let shoefloat = (float_drag_2 / shoe_mass) * delta;
+        vy > 0
+          ? (vy = Math.max(0, vy - shoefloat))
+          : (vy = Math.min(0, vy + shoefloat));
+        this.vy = Math.min(vy + gravity_acc * delta, fall_speed);
+        this.vx = mleft
+          ? vx > -float_drag_2 * float_multiplier
+            ? Math.max(-float_drag_2 * float_multiplier, vx - 2 * shoefloat)
+            : vx
+          : mright
+          ? vx < float_drag_2 * float_multiplier
+            ? Math.min(float_drag_2 * float_multiplier, vx + 2 * shoefloat)
+            : vx
+          : vy < fall_speed
+          ? vx > 0
+            ? Math.max(0, vx - float_coefficient * shoefloat)
+            : Math.min(0, vx + float_coefficient * shoefloat)
+          : vx > 0
+          ? Math.max(0, vx - shoefloat)
+          : Math.min(0, vx + shoefloat);
+      }
+      while (delta > epsilon) {
+        let x = this.x;
+        let y = this.y;
+        vx = this.vx;
+        vy = this.vy;
+        fh = this.fh;
+
+        if (fh) {
+          let nx = x + vx * delta,
+            ny = y + vy * delta;
+          if (nx > fh.x2) {
+            if (!fh.next) {
+              // Check if this is a map edge — stop the player instead of falling
+              const mapBounds = getMapleMap()?.boundaries;
+              if (mapBounds && fh.x2 >= mapBounds.right - 50) {
+                (nx = fh.x2 - epsilon), (ny = fh.y2);
+                (vx = 0), (vy = 0);
+                delta = 0;
+              } else {
+                (nx = fh.x2 + epsilon), (ny = fh.y2);
+                fh = null;
+                delta *= 1 - (nx - x) / (vx * delta);
+              }
+            } else if (fh.next.x1 < fh.next.x2) {
+              fh = fh.next;
+              let fx = fh.x2 - fh.x1,
+                fy = fh.y2 - fh.y1;
+              let dot = (vx * fx + vy * fy) / (fx * fx + fy * fy);
+              (nx = fh.x1), (ny = fh.y1);
+              delta *= 1 - (nx - x) / (vx * delta);
+              (vx = dot * fx), (vy = dot * fy);
+            } else if (fh.next.y1 > fh.next.y2) {
+              (nx = fh.x2 - epsilon), (ny = fh.y2);
+              (vx = 0), (vy = 0);
+              delta = 0;
+            } else {
+              (nx = fh.x2 + epsilon), (ny = fh.y2);
+              fh = null;
+              delta *= 1 - (nx - x) / (vx * delta);
+            }
+          } else if (nx < fh.x1) {
+            if (!fh.prev) {
+              // Check if this is a map edge — stop the player instead of falling
+              const mapBounds2 = getMapleMap()?.boundaries;
+              if (mapBounds2 && fh.x1 <= mapBounds2.left + 50) {
+                (nx = fh.x1 + epsilon), (ny = fh.y1);
+                (vx = 0), (vy = 0);
+                delta = 0;
+              } else {
+                (nx = fh.x1 - epsilon), (ny = fh.y1);
+                fh = null;
+                delta *= 1 - (nx - x) / (vx * delta);
+              }
+            } else if (fh.prev.x1 < fh.prev.x2) {
+              fh = fh.prev;
+              let fx = fh.x2 - fh.x1,
+                fy = fh.y2 - fh.y1;
+              let dot = (vx * fx + vy * fy) / (fx * fx + fy * fy);
+              (nx = fh.x2), (ny = fh.y2);
+              delta *= 1 - (nx - x) / (vx * delta);
+              (vx = dot * fx), (vy = dot * fy);
+            } else if (fh.prev.y1 < fh.prev.y2) {
+              (nx = fh.x1 + epsilon), (ny = fh.y1);
+              (vx = 0), (vy = 0);
+              delta = 0;
+            } else {
+              (nx = fh.x1 - epsilon), (ny = fh.y1);
+              fh = null;
+              delta *= 1 - (nx - x) / (vx * delta);
+            }
+          } else {
+            delta = 0;
+          }
+          (x = nx), (y = ny);
+        } else {
+          let dx1 = vx * delta;
+          let dy1 = vy * delta;
+          let distance = 1;
+          let nnx = x + dx1;
+          let nny = y + dy1;
+
+          for (let f of (getMapleMap().footholdList || []) as any[]) {
+            let dx2 = f.x2 - f.x1,
+              dy2 = f.y2 - f.y1;
+            let dx3 = x - f.x1,
+              dy3 = y - f.y1;
+            let denom = dx1 * dy2 - dy1 * dx2;
+            let n1 = (dx1 * dy3 - dy1 * dx3) / denom;
+            let n2 = (dx2 * dy3 - dy2 * dx3) / denom;
+            if (
+              n1 >= 0 &&
+              n1 <= 1 &&
+              n2 >= 0 &&
+              denom < 0 &&
+              f != this.djump &&
+              n2 <= distance
+            )
+              if (
+                this.group == f.group ||
+                dx2 > 0 ||
+                f.group == 0 ||
+                f.cantThrough
+              ) {
+                nnx = x + n2 * dx1;
+                nny = y + n2 * dy1;
+                distance = n2;
+                fh = f;
+              }
+          }
+
+          x = nnx;
+          y = nny;
+          if (fh) {
+            this.djump = null;
+            let fx = fh.x2 - fh.x1,
+              fy = fh.y2 - fh.y1;
+            if (fh.x1 > fh.x2) {
+              y += epsilon;
+              fh = null;
+            } else if (fh.x1 == fh.x2) {
+              if (fy > 0) x += epsilon;
+              else x -= epsilon;
+              fh = null;
+            } else {
+              this.group = fh.group;
+              this.layer = fh.layer;
+              this.landingImpactVy = vy; // Record impact velocity before capping
+              if (vy > max_land_speed) vy = max_land_speed;
+            }
+            let dot = (vx * fx + vy * fy) / (fx * fx + fy * fy);
+            this.vx = dot * fx;
+            this.vy = dot * fy;
+            delta *= 1 - distance;
+          } else {
+            delta = 0;
+          }
+        }
+        this.x = x;
+        this.y = y;
+        this.vx = vx;
+        this.vy = vy;
+        this.fh = fh;
+      }
+    }
+
+    // Fall damage tracking: record when leaving ground, compute distance on landing
+    if (wasOnGround && !this.fh) {
+      // Just became airborne — record starting Y
+      this.fallStartY = this.y;
+    } else if (!wasOnGround && this.fh) {
+      // Just landed — compute fall distance (positive = fell downward).
+      // Sinking through water never hurts.
+      this.fallDistance = this.swimming ? 0 : this.y - this.fallStartY;
+    }
+  }
+}
+export { Physics };

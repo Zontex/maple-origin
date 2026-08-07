@@ -1,0 +1,32 @@
+.DS_STORE
+.idea
+.vscode
+node_modules
+dist
+
+# Converted WZ game data — user-supplied from their own legally obtained
+# game files (see README), never committed or distributed with this repo.
+TypeScript-Client/public/wz_client/
+# Local safety copy of the above (the .wz source binaries no longer exist,
+# so wz_client is the sole copy of this data). Deliberately outside
+# public/ so it is never copied into a production build.
+TypeScript-Client/wz_client_backup/
+
+# SQLite database
+*.db
+*.db-wal
+*.db-shm
+*.db.bak-*
+
+# WZ parser (clone separately)
+tools/wz-parser/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Cosmic v83 reference repo
+backend/
+
+# Local debug screenshots (contain copyrighted game art — never commit)
+debug/

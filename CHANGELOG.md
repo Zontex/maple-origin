@@ -1,0 +1,382 @@
+# Changelog
+
+All notable changes to MapleOrigin are documented here.  
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [Unreleased] - 2026-08-05
+
+### Added
+- **Face emotes on F1-F7 + the keymap follows the character** — the Set Key window's face icons (`KeyConfig/icon/100-106`) are now real controls: F1-F7 play the v83 expressions (ouch!, smile, annoyed, cry, angry, surprised, stunned — the authentic mapping is the client's `expression = action - 98`, which is why F1 is the famous ouch face). An emote holds for 5 seconds with its frames animating, then the face returns to normal, and it rides the position updates so other players see it on your character. They're rebindable like any action, ship bound on F1-F7, and get seeded onto free F-keys for saves that predate them. Keyboard bindings — actions, and items/skills placed on keys through Set Key — are now saved **per character on the server** (bindType 3/4/5 rows in the same keymap table the quickslot bar uses) and restored on every login path, so a rebound key survives refreshes, new tabs, other browsers, and character switches instead of living only in one browser's localStorage. Note the Set Key window's own v83 semantics: bindings apply as you drop them and OK closes; **Cancel reverts everything from that session** — closing with Cancel is the one way changes are meant to be lost
+- **Party system** — real v83 parties, end to end. The server owns membership (max 6, leader-only invite/expel/leader-transfer, the leader leaving disbands, disconnect cleans up) and answers every mutation with a full roster broadcast, so clients never drift; the flows are exercised by a two-client harness (create/invite/accept/exp-relay/team-warp/expel/disband all green). The party window is v83's own `UIWindow.img/UserList` on the P key: Buddy/Party/Guild/Alliance/Blacklist tab strip (Party live, the rest disabled), PARTY MEMBER ONLINE header, NAME/JOB/LV columns with the leader's star, and the WZ's CREATE / INVITE / EXPEL / LEAVE / PARTY LEADER buttons lighting up per role. INVITE arms click-to-invite — click a nearby player to send it — and the Character Info window's REQ PARTY button invites by target (auto-creating your party first, like GMS). Invites pop the Basic.img YesNo dialog wherever you are. Kill EXP now runs the authentic v83 split for same-map members (Cosmic's 80% level-weighted share, 20% MVP cut for the killer, +5% per member bonus) relayed through the server; party notices print in the chat log. HPQ rides on top: Tory checks the real party (leader + members on the recruit map in level range; solo still allowed), event warps move the whole team, the stage-clear 1600 EXP pays every member present, and members ride the leader's instance as passengers — blooms and the filling moon relay over the reactor-hit channel, their client wakes the hill and raises the bunny at six blooms, whoever hosts the map's mobs runs the assault on the bunny, and the reward NPCs pay passengers their own feather. Guild/alliance/whisper/party-search stay stubbed until those systems exist
+- **Henesys Party Quest (Moon Bunny's Rice Cake) is fully playable** — Tory at Henesys Park starts the instance (level 10+; the client has no party system yet, so a solo player stands in as a party of one and Cosmic's authentic 3-6 requirement text is shown as-is), warping to Primrose Hill with a 10-minute timer drawn in the field clock's red LCD digits (`Map.wz/Obj/etc.img/clock/fontTime`). The whole loop runs on the real v83 data: the six primrose leaves are the map's own nut reactors (4 hits, 1-in-3 seed drop, 10-20s respawn — already live), and the six platform moonflowers now honor their WZ **type-100 item events** — drop the matching colored seed inside the flower's lt/rb box and it blooms, consuming the seed and filling the moon (reactor 9101000) one state per bloom; weapon hits pass straight through item-triggered and script-only reactors so the flowers can't be smashed. At six blooms the hill wakes: the map's Flyeyes/Stirges/Goblin Fires — suppressed until then, exactly Cosmic's `allowSummonState(false)` — all appear, and the Moon Bunny (9300061, `damagedByMob:1` → friendly: no touch damage, hitting it never aggros it) spawns on the ground below (-183,-433), pounding out one rice cake every 20 seconds (WZ `dropItemPeriod` 6 × 10000ms with Cosmic's Moon-Bunny-specific ÷3) with the authentic "The Moon Bunny made rice cake number N." notices. Monsters that get close gnaw on it using the v83 mob-vs-mob physical damage formula from the original client's MobDamageMob packet handler (Flyeye bites ~38 max, Goblin Fire ~63 — the bunny's 5000 HP dies only to sustained neglect), players whacking it trigger the "feeling sick" warning, and if it dies the party is exiled to the exit map 5 seconds later. Ten rice cakes to Growlie clear stage 1: +1600 exp, the `Map.wz/Effect.img/quest/party/clear` jingle-and-banner, a no-loot map sweep, and the warp to the clear map where Tory pays the event reward and Tommy offers the 5-minute Pig Town bonus round before the ride home. The original Cosmic NPC scripts (1012112/1012113/1012114) run **unmodified** — `NpcScriptEngine` now routes their `em`/`eim` calls into a client-side event-instance manager (`Events/HenesysPQ.ts`) that ports Cosmic's `HenesysPQ.js` event: instance properties, timers, stage records, exclusive-item cleanup (seeds and cakes are stripped when leaving the event, the reward feather is not), one-per-instance rewards, and Cosmic's changed-map semantics — leaving the map range unregisters you, and entering an instance map with no running instance (a reload mid-PQ) auto-ejects to the exit map, where Tommy warps you home. PQ record-sheet quests (1200-1206, 1300-1302) no longer appear as clickable "available quests" on their NPCs — in GMS those are internal records the PQ itself manages, and quest 1200 was shadowing Tory's start dialog
+- **Character Info window** — double-clicking a character (your own or another player's) opens v83's CHARACTER INFO window, drawn from `UIWindow.img/UserInfo`'s own backgrnd7: live avatar on the portrait shadow with the name in the blue plate, LEVEL / JOB / FAME / GUILD / ALLIANCE rows, and the FAMILY, REQ PARTY, REQ TRADE, ITEM and WISHLIST buttons in the top band (disabled — those systems don't exist yet). The Monster Book section shows a fresh book (no card system yet) and the COLLECTION section reads real data: the equipped medal, total medal count and the OBTAINED MEDALS list from the character's actual 114-prefix equips. The bottom band's BOOK INFO / COLLECTION toggles collapse the window to the short backgrnd, TAMING MOB and PET INFO render disabled. Draggable like every window, closes with its X or when any NPC dialog opens; NPCs keep click priority over characters
+- **Selectable resolution, MapleStory-Classic style** — the SYSTEM OPTION window's own VIEWING MODE row (v83's display row) now cycles through 800×600 / 1024×768 / 1280×720 / 1366×768 / 1920×1080 on click, with the current value drawn beside the baked "WINDOW" label. A larger internal resolution renders more world (sprites stay 1:1) and the canvas CSS follows the internal aspect, so a widescreen preset fills a widescreen monitor edge to edge instead of being pillarboxed to 4:3. The HUD re-anchors live: the 800-wide status bar (gauges, chat row, buttons, game-menu popup) is **centered as one island** on wider screens — MapleStory Classic's treatment, drawn via one canvas translate rather than a tiled edge-extension — while the quickslot stays on the true bottom-right corner and dialogs keep their config-based centers. The status-bar buttons, which bake positions at creation, are rebuilt against the new geometry (`UIMap.reanchorButtons`). Camera viewport, background tiling and small-map centering all key off the same config so they follow for free. The choice persists in Settings and applies from boot; the login screen keeps its native 800×600 either way
+
+### Fixed
+- **A portal could be shadowed by the one below it — Henesys' An Empty House had no way out** — a portal's entry box is sized from the tall `pv` doorway sprite, so it reaches 173px *above* its own y and portals on stacked platforms overlap: the player can stand inside two at once. `checkForPortal` took the first match in WZ order, which is not the one you're standing on. In the hidden street An Empty House (100000002) you arrive on the upper ledge at `out00`, the way back to Henesys, 158px above the invisible `up00` whose only job is to lift you onto that ledge — and up00 is authored first, so every press of up warped you to where you already stood and the room was a dead end. The nearest portal wins now, which also unshadows the second exit in 61 other maps (Ellinia's hidden street, Nautilus, the Orbis ferry cabins, Masquerade, and the 925020xxx set among them)
+- **The keyboard window and the quickslot bar didn't know about each other** — items and skills placed on the quickslot bar (Shift/Ins/Home/PgUp/Ctrl/Del/End/PgDn) never appeared on those keys in KEYBOARD SETTING, and dropping something onto one of those keys in the window created a second, invisible binding competing with the bar's — the same key could consume two potions per press. Those eight keys are now owned by the hotkey bar outright: the keyboard window mirrors the bar's icons on their key faces, drops onto them route to the bar (so both views always match), picking up off them carries the bar's item, and stray keyboard-side bindings on quickslot keys are purged on load. Note quickslot keys are intentionally inert while the keyboard window is open — every dialog suspends hotkey activation, so "testing" Del with the window up does nothing by design
+- **Link maps loaded as inescapable voids — ~2,200 maps affected** — a WZ map whose `info/link` names a donor (Training Center rooms 1-4 link room 0; the duplicated hunting grounds, PQ room copies and channel-split fields all work this way) carries ONLY an info node: no footholds, no portals, no tiles, no life. `MapleMap.load` never followed the link, so picking Training Center 1-4 dropped you into an empty world with no exit door — "once you enter you can't get out". The loader now resolves the donor map for its content while keeping the entered map's own id, the same donor pattern mobs and reactors use. Room 0 always worked because it's the real map; the way out of a training room is authentic v83 — the door portal at the far left, not the NPC (he only moves you between rooms)
+- **Every Training Center room claimed one occupant** — `cm.getPlayerCount` counted *you* toward whatever map it was asked about, so all five empty rooms read (1/5) and four strangers would have made a room read "full" with you never in it. It now counts only players actually on the queried map
+- **Linked reactors were invisible everywhere** — reactors that borrow their sprites via WZ `info/link` (the same donor pattern mobs use) were never followed by `Reactor.load()`, so they came up with zero states: no sprite, no hit response. On Primrose Hill that meant five of the six primrose-leaf types (9102003-9102007, all linked to 9102002) didn't exist and the only obtainable seed was green; Florina's second ancient-book box (9102001 → 9102000) was equally missing. Links are now resolved for states, hit chain and hit sounds while the reactor keeps its own id — which is what selects the drop table, so each leaf still yields its own seed color
+- **Every HMR reload landed in a half-dead session** — mobs frozen, attacks doing nothing, no saves; a refresh never helped and only closing the tab did. Root cause: `MySocket.initialize()` — the call that sends `player_info` (which is what gets a mob host assigned), starts the update/registration-retry/mob-batch loops, arms the 30s autosave and the beforeunload save — was only called from `LoginState.enterGame()`. The dev auto-login used on reload jumps straight to MapState and never made the call, so the server had a connection with no `player.info`: no host for the map (mobs stayed in remote mode), `mob_damage_request` relayed to nobody, and not one save sent for the whole session. A fresh tab "fixed" it only because sessionStorage dies with the tab, forcing the manual login path. DevAutoLogin now calls `MySocket.initialize()` after entering the map, mirroring enterGame; the full sequence (login → select → player_info → mob_host_assign) is verified against the live server. The host-harness itself had stopped running — a mangled line had swallowed its `require('ws')` into a comment — and is repaired; all 9 election scenarios pass
+- **Death rebuilt on what the WZ actually ships** — dying used to leave the character mid-air in whatever pose the killing blow caught them, with their shirt, pants and shoes strewn across the ground: parts without `dead` frames fell back to stand1 parts anchored to a navel the lying body never registers, so the outfit rendered at raw offsets. Only the body carries a `dead` frame (a 28×28 curled figure whose frame is marked `face:1`), so the dead compose is now body + head + face, hair kept via its front-facing `default` part, and equips/weapon/hat simply not drawn — the same rule climbing already used. The tombstone (`Effect.wz/Tomb.img/fall`) is one strip with three acts — frames 0-11 tumble, 12-18 are the ground impact with dust, 19 the settled stone (`land` is just a UOL to 19) — and it now tumbles while airborne and plays the impact on touchdown, instead of running straight through and kicking dust up in mid-air. Death also snaps to the foothold below (`getFootholdBelow`) **and adopts its layer**: the renderer draws the player after their own layer's tiles and mobs, so a death mid-knockback kept a stale lower layer and buried the tomb behind the platform face and the mobs standing on it. Remote deaths sync as the `dead` stance and raise the same tombstone on other clients — guarded so a remote tomb can never pop the local revive dialog or warp the local player through its failure fallback
+- **Shop tabs and stack counts match GMS** — the tab strip was empty: the buy panel now wears its always-lit "All" and the sell panel Equip/Use/Set-up/Etc, switching which inventory tab is offered for sale. The labels are the Shop node's own `TabBuy`/`TabSell` sprites (text only — v83 ships no plates there), seated on the inventory's shared pink/grey plates and hung from the strip's red underline (y=116 in the 463×339 backgrnd), the same construction as the skill window's tabs. Sell rows show their stack count as `Basic.img/ItemNo` sprite digits over the icon's bottom-left like the inventory grid, instead of an "(x12)" bolted onto the name, and prices read "3,000 Mesos" as GMS prints them
+
+## [Unreleased] - 2026-08-01
+
+### Changed
+- **Equip tooltip rebuilt on v83's own assets** — it was reading `UI.wz/UIToolTip.img`, which **does not exist in v83**; that copy had been fetched from a far later client, which is why the panel wore that version's black rounded frame. The real node is `UIWindow.img/ToolTip/Equip`, and it has everything: `Can`/`Cannot` requirement labels and digits, a per-class job bar (one lit or greyed sprite per class, not a strip with overlays, so the bar needed rewriting), `ItemCategory` and `WeaponCategory` class labels, `Property` stat labels and the `Dot` bullet. The panel itself is drawn rather than blitted — the absence of any frame sprite under `ToolTip/Equip` is the tell — as a translucent navy field with a thin light rule, the map visible through it
+- **Tooltip text comes from the WZ, not from us** — `CATEGORY :`, `WEAPON ATTACK :`, `NUMBER OF UPGRADES AVAILABLE :` and the rest are Nexon's `Property/0-18` label images, and the class name is the `ItemCategory`/`WeaponCategory` sprite. Values render with the `Can/0-9` bitmap digits, the same font the REQ block uses — they had been Arial sitting next to bitmap labels. Weapon keys are the item prefix minus 100; the armour keys are MapleStory's own enum and are *not* arithmetic (LONGCOAT is 21, not 6), so that one needs a table. STR/DEX/INT/LUK and the HP/MP lines have no sprite in v83 and stay as text, which is what the original does too
+- **Shop items behave like the inventory** — hovering a row shows the item's tooltip (equips reuse `UIEquipTooltip`, so a weapon reads identically in both places), and the whole row is hoverable rather than just the text strip, which left the icon column dead. The tooltip anchors beside the shop window instead of over the hovered row, where it had been hiding the very items being browsed. Up/down arrows move the selection in whichever panel was last clicked, scrolling to keep it in view
+- **Skill cooldowns** — the sweep (`UIWindow.img/Skill/CoolTime/0-15`) now also appears in the skill window, not just the hotkey bar, and runs the right way round: frame 0 covers the icon completely and frame 15 is nearly clear (measured: 1000 opaque px against 112), so it is driven by time *elapsed* — fully greyed at the moment of casting, uncovering as it recharges. It had been keyed off time *remaining*, which ran the animation backwards. No countdown digits; the original shows the sweep alone. Cooldowns are also armed in `MapleCharacter.useSkill` rather than in the hotkey bar, so a cast from any path is gated and timed the same way. Most v83 skills carry no `cooltime` at all, and those correctly show nothing
+- **Skill window rebuilt against the WZ data** — several parts of it were invented rather than read. The header showed the *job* name; GMS names the skill **book**, and Nexon's own string is right there (`String.wz/Skill.img/100/bookName` = "Warrior Basics", 200 = "Intro. to Magic", 400 = "Thief Skills"). The generic "SKILL BOOK" placeholder baked into the background is now covered by the tier's real book icon (`Skill.wz/<tier>.img/info/icon`, 26x30 — green for Warrior, blue for Magician), centred in the plate the background reserves for it (measured off the decoded PNG: plate x=6..41, y=54..86). Skill names were drawn full-length into a 141px row with only 88px between icon and SP button, so they ran out of the window and across the scrollbar; they are clipped now, as GMS does it
+- **Skill tabs use the real plates** — the Skill node ships only numerals, so the plates come from the inventory's shared set (`Item/New/Tab1` pink selected 34x19, `Tab0` grey 34x18). They hang from the strip's red underline (measured at y=42-44) rather than being positioned from an assumed top, which is what makes the taller selected plate read as sitting in front, and each numeral is centred in its own plate since the two plates and five glyphs all differ in size. Pinned to variant 0 of each: those five are the *inventory's* per-tab tinting, not shapes — Tab1/0 is (238,102,136) against Tab1/1's (255,170,187) — so indexing them by tab number gave every tab a different shade
+- **Skill tooltip matches the original** — it previously showed `[Lv.N]` / `[Next Lv.N]` blocks that GMS never had. The body is now `desc` and `h<level>` straight from `String.wz`, including Nexon's own typo (2000001's desc is missing its opening bracket), with `#c..#` rendered orange instead of stripped. Layout follows the client: bullet + name header, skill icon beside the wrapped description, divider, `[Current Level N]` with that level's effect line, then `[Required]` listing each prerequisite with its own icon, name and level — which needed `req` added to `SkillInfo`, absent until now, so the section was impossible to draw. Panel colour sampled off reference captures rather than guessed: the body is (68,74,125) and the header band (85,85,130), and those hold across two completely different scenes, a ~17 spread that puts the alpha near 0.9 rather than the see-through panel it first looked like
+
+### Fixed
+- **Most shop NPCs faced away from the counter** — `life/f` is a plain "mirror me" flag (f=1 mirrors), and it had been inverted here on the belief that Natasha was authored facing right. She is authored facing **left**, like the Perion weapon clerks (also f=1); both need mirroring to face their customers. The inversion also disagreed with the one case provable by arithmetic rather than by eye — Ellinia's MapleTV is f=0 and its ad offsets only line up unflipped
+- **Attacking while on a rope** — the swing played over the climb stance, turning the body to face left or right off the rope with hit frames and all, while still hanging from it. `attack()` guarded `isRiding` but never climbing, and `useSkill()` had the same hole. Both refuse now, which is v83: pressing attack while climbing does nothing and does not let go. Deliberately gated on `isInClimbingRope` alone and not `pos.isClimbing` — `releaseRope()` clears the first but leaves the second set until the character next lands, so including it would have blocked attacking mid-fall after letting go
+- **Jumping while walking uphill did nothing** — grounded movement assigns `vy = (mvr * fy) / len` every frame, so walking up any incline is negative vy, and `canJump` ended with `vy >= 0`. That check exists to stop a held jump key re-launching mid-rise, but it could not tell *rising because I jumped* from *rising because the ground goes up*, so the jump was silently refused on every upward slope — which is most of Perion and Maple Road, hence "sometimes". "Rising" now means rising from a take-off: slope-following is capped at walking speed (125) and a jump starts at 570, so `Physics.isRisingFromJump()` separates them by magnitude, next to the constants it depends on
+- **Leaving the Free Market dropped you into an unloadable map** — the exit is a scripted portal (`out00`, type 7, script `market00`) that reads a saved location and warps there. Three pieces were missing from `PortalScriptEngine` and every one failed silently: the town-side scripts' `saveLocation("FREE_MARKET")` was not implemented and degraded to a no-op through the safe shim, `getSavedLocation` was a hardcoded `return -1`, and `getMarketPortalId` did not exist. Nothing threw, so the script's own catch — which exists to send you to Henesys — never ran, and it warped to map `-1`: no backgrounds, no tiles, **no portals**, while the minimap kept the last map it loaded. Same shape as Pison's Florina return, a `-1` sentinel treated as a map id. Portal scripts now share the character's real saved-location store with `NpcScriptEngine`, `saveLocation` also records *which door* was used so the exit puts you back at it rather than at the town's spawn point, and `warp()` refuses any non-positive map id — a bad script can no longer strand you
+- **Arriving at a portal dropped you through the floor** — portal `y` marks the doorway, not the floor, and the two differ by a pixel in either direction (Perion's Free Market door is y=581 above a platform at y=580.2). Every spawn branch copied the raw `y`, so you started fractionally *under* the platform, and since a map change clears `pos.fh` you fell straight past it — in Perion, all the way to the first floor. Spawns now snap onto the foothold beneath, but only when one genuinely spans the portal's x and is within 40px, so a portal meant to be entered mid-air is left alone. Landing is 3px *above* the floor rather than exactly on it: physics acquires ground by intersecting the movement segment against the foothold, and standing precisely on the line gives an intersection at ~0 that rounding can push under, detecting no crossing at all. The portals that always worked sit a couple of pixels above their floor and fall onto it, so this makes every snapped spawn look like the case that was never broken
+- **A failed map load killed the game loop** — `MapState.doUpdate` dereferenced `MapleMap.npcDialog` at four sites with no null check while `questDialog` was guarded at every one. Both are created partway through `MapleMap.load`, so neither exists if a load throws before that point, and every frame then rethrew `Cannot read properties of undefined (reading 'isHidden')` out of the loop — the tab stayed dead rather than recovering
+- **The MapleTV screen sat beside its own frame** — the TV's ad and banner are placed by explicit offsets in `info` (`MapleTVadX/adY`, `MapleTVmsgX/msgY`) authored against the *unflipped* sprite, and the `life/f` inversion was mirroring it. Ellinia's TV shows it arithmetically: the sprite's two screen cut-outs begin at local x=117 with origin x=129, so unflipped they land at npc.x-12 and the WZ asks for the ad at npc.x-11. Mirroring shifts the sprite by `width - 2*originX` = 259px while the ad stays put — exactly the gap between the black screens and the picture beside them. A screen has no facing, so a MapleTV is never mirrored
+- **Quest 1040 "Chief's Introduction" could be completed out of order**, permanently locking Mai's training chain — it is an umbrella quest whose own completion requires 1041-1044, while 1041 requires 1040 to still be *in progress*. A character with 1040 marked complete and none of 1041-1044 done is in a state GMS cannot produce, and every later quest in the chain checked for `1040 = state 1` and found `state 2`. Repaired in the DB for the affected character after auditing every character for the same class of corruption (a completed quest whose own requirements were never met); the client-side hole was closed the same evening — `canCompleteQuest`/`canRunEndScript` now enforce completion-side prerequisite quests (`meetsCompleteQuestReqs`), so an umbrella quest no longer lists as completable until its subquests are done
+
+---
+
+## [Unreleased] - 2026-07-31
+
+### Added
+- **Game menu and option windows** (Daniel) — GAME MENU panel with keyboard navigation and a working QUIT GAME, plus CHANGE CHANNEL (client-side selection only), SYSTEM OPTION with functioning BGM/sound sliders, and GAME OPTION with allow/refuse toggles. Volume settings persist and are applied behind the audio path (`Settings.ts`), so `PLAY_AUDIO` scales every effect by the player's SOUND level
+- **Login screen polish** (Daniel) — press Enter to log in, double-click a character to enter the game, ID/password text lined up with their labels, and Chrome's password-manager breach popup suppressed
+- **`VITE_WEBSOCKET_URL`** (Daniel) — an explicit endpoint in `TypeScript-Client/.env` now wins when resolving the server URL, the only way to point the client at a backend on a different host than the one serving the page
+- **GMS quest-complete balloon** (`UIWindow.img/FadeYesNo/backgrnd4` + the `icon6` trophy) — anchored by its tail tip onto the status bar's alert button, announcing "requirements met, this can be claimed". It fires when the last kill or pickup lands, not on turn-in, and plays `Sound.wz/UI.img/Invite`; clearing the quest at the NPC keeps its own separate QuestClear sound and over-the-character effect
+- **`GameIn` cue on entering the world** — plays once the server accepts the selected character, so it runs while the map loads rather than after the screen has already changed
+- **Chairs** — double-clicking a chair in the Setup tab seats the character; double-clicking the same one stands up, as does walking, jumping, crouching, attacking, grabbing a rope or dying. The body reuses the `sit` stance mounts already drive, and the chair graphic is the item's `effect/0` canvas drawn behind the character (its `effect/z` is `-1`). `info/recoveryHP` is applied every 10s while seated — 50 HP on the Relaxer — which is what chairs are for in v83. The weapon is now hidden for the whole `sit` stance rather than only while riding: weapons have no sit frames, so it fell back to a standing pose and hung across the body
+- **Blue recovery numbers** — v83 ships `NoBlue0`/`NoBlue1` in `Effect.wz/BasicEff.img` alongside the red, critical and violet damage digits, and nothing used them. HP gained from a chair now raises one, showing the amount actually gained so nothing appears at full HP
+- **Ship horn at the docks** — `Sound.wz/Object.img/Whistle` is the only vessel cue anywhere in v83's sound data (`Game.img` and `UI.img` have nothing ship-related), and it is the vessel's horn rather than an arrival-specific jingle: it sounds both as the ship pulls away — what you hear from the platform when you missed it — and as it glides back in. `ShipObject` already distinguished those windows in order to animate the slide, so the phase it was computing per frame is now named (`docked`/`departing`/`away`/`arriving`) and the horn is edge-triggered on entering `departing` or `arriving`, once per voyage instead of once per frame. Boarding warps you to the deck map, so the departure horn only ever reaches the platform you were left standing on. `prevPhase` starts null and `MapleMap.load` builds a fresh `ShipObject` per map, so walking onto a dock mid-slide adopts the current phase silently rather than blasting the horn on arrival at the station. Applies to Ellinia and Orbis and to the train, cabin and genie stations, which share the same `shipObj` machinery
+
+### Changed
+- **Quest Helper rebuilt on real WZ assets** — the panel was drawing its own translucent background with `fillRect`, against the project's own rule. It now uses the `UIWindow.img/QuestAlarm` 9-slice (223 wide; ~73%-opaque title bar over a ~33% body, which is what lets the map show through), gained the `BtAuto` button wired to `QuestManager.autoTrack`, drags by its header, and renders requirements GMS-style as `10 / 10 Blue Snail Shell` in one flat colour instead of a red/struck-through mix. Quests with nothing to count no longer occupy a tracker slot
+- **NPC dialog portrait and name tag** are treated as one group and centred vertically in the dialog body, instead of the portrait being pinned to the top while the tag floated at half the dialog height
+- **Status bar gauges animate** — HP/MP/EXP were drawn straight from the raw values, so any change repainted between one frame and the next with nothing to see. They now ease toward the real value, so healing, damage, potions and EXP gain all slide through one mechanism. The step scales by `msPerTick`, settling in ~900ms at 30, 60 and 144fps alike; EXP eases upward only, since a level-up reset would otherwise drain the whole bar backwards. The numeric readout stays exact
+- **Saves are event-driven** — saving used to be a 30s timer plus map changes, so up to 30s of pickups, exp and purchases lived only in RAM. Every gameplay change now schedules a save through `MySocket.requestSave()`, coalescing bursts into one full write ~2s after the first change (a full save serializes the whole inventory — per-event writes would be 30/s in combat). Coverage comes from choke points, not call sites: inventory add/remove, `mesos` as an accessor (all meso mutations anywhere), `hp`/`mp` as accessors on the local player only, `addExp`, equip/unequip, and the four quest state-change methods. The 30s timer stays as a backstop
+- **Station clocks show the time of day** — the board clock displayed a departure countdown floating off the sign. The map `clock` node is a rect whose x/y is the TOP-LEFT corner (verified against the Ludibrium board sprite), so treating it as the centre put the digits ~100px off the board; and the content is the current time, not a countdown. The server stamps its clock into the connect message, the client keeps the offset, and every player's board reads the same server time centred on the display area. Any map with a `clock` node now shows it; timed rides keep their remaining-time countdown
+
+### Fixed
+- **Maps rewound every time you left and came back** (`MapStateCache.ts`) — `MapleMap.load()` rebuilds a map from WZ, which is right for the geometry and wrong for everything living on it: walking through a door and back healed every mob to full at its spawn point and stood every smashed reactor back up. Not only a fidelity gap but an exploit — the box in the Ellinia boat cabin carries `reactorTime = 3600`, so an hour-long respawn became instant by stepping outside and back in. The original client never has this problem because the map lives on the channel server; with no such server the client now keeps the snapshot itself. Leaving a map records what was dead, what was hurt and when each is due back; re-entering restores it. Deadlines are stored as absolute wall-clock times rather than remaining durations — a duration would silently pause while you were away, so a long detour would still return to a full hour left. A restored reactor is neither drawn nor hittable until it is due. Only state a player can *change* is kept (HP, position, death, deadline); aggro, animation frames and pathing are AI scratch and still reset. Bounded to 32 maps and an hour, since nothing in v83 respawns on a longer timer
+- **…except on the boat, where nothing should carry over at all** — persisting map state made the Ellinia cabin's box stay broken between sailings, which is wrong for a reason the `reactorTime = 3600` hides: **the deck and cabin are instanced in the original client**. Every voyage builds a fresh copy and docking destroys it, so an hour-long respawn never mattered — the map the box was broken on stops existing. We keep one persistent map object per id, so the cache faithfully remembered a box broken on a previous trip and it was already gone when you boarded. Ride maps now carry an instance token (`Boats:<cycleIndex>`), and a snapshot whose token no longer matches is dropped: state carries across the deck/cabin door within a voyage and is gone once the cycle rolls over. Timed rides are tokenized per boarding instead. The provider is registered from `MapState` so the cache stays ignorant of transport and `TransportationManager` can keep reading it for the Balrog without an import cycle
+- **Reactors could never respawn for anyone but the mob host** — the respawn was a `setTimeout` armed only for the host, with a non-host setting `respawnScheduled = true` and then waiting forever for a broadcast; every timer was also cleared on map change, so walking out re-armed nothing. Both were masked while re-entering a map rebuilt its reactors from scratch, and turned into "broken forever" on **any** map the moment state persisted. Respawn is now driven by a wall-clock deadline stamped at the break and compared each tick — no timer to lose, no host to depend on, and every client reaches the same conclusion independently. The host still announces it so a client that missed the break gets synced. Retires the timer array and the `respawnScheduled` flag
+- **The Crimson Balrog vanished for the rest of the voyage** — two causes stacked. The map rewind above lost it on any trip into the cabin, but what made it permanent was a race: `balrogSeen[oId]` was set *before* the `await`, and `spawnMonster` is async — loading `Mob.wz/8150000` takes several ticks. On the next tick the mob was not in the array yet, so the death detector read `seen && !present` and **recorded a death for a Balrog still on its way in**. It then appeared and fought normally while already flagged dead for that cycle, so `invasionDeaths` refused every later spawn and stepping into the cabin lost it for good. "Seen" now means the spawn actually landed, with a pending flag so an in-flight spawn cannot be mistaken for a kill; the invasion mob is also snapshotted despite having no WZ spawn def (it is placed by the transport system, not the map's `life` node), so returning to the deck resumes the same wounded Balrog rather than handing over a fresh one
+- **Dying on the boat respawned you on the boat** — the WZ already had the answer (`returnMap`/`forcedReturn` = 101000300, the Ellinia dock), but `respawnAtTown` gated the warp on `isTown` and **the boat maps are marked `town=1`**, so `getNearbyTownMapId()` returned the ship itself and the warp was skipped entirely. Death now goes to the map's own `returnMap`, which is what Cosmic does and generalizes cleanly: a town's returnMap points at itself, a field's points at its town
+- **Invisible portals needed a jump to enter** — a drawn portal takes its collision rect from the `pv` sprite (87x182, origin 43,173), so it reaches 9px *below* the portal's y. Undrawn ones fell back to a hand-written 40x40 box that stopped dead at y with no slack underneath. Portal y is authored at the doorway while the player stands on the foothold under it, which sits a few px lower (Ellinia boat: `in00` y=164 over ground y=166, `under00` y=477 over ground y=481) — so standing in the doorway missed by 2px and only a jump lifted your feet into the box. Ships are where this bit hardest because every portal on them is invisible, but it applied to every type-1/3 portal in the game. They now use the same box a drawn portal gets; a type-1 portal is a type-2 portal without the graphic, and being invisible should not shrink where it can be entered. No auto-warp risk from the larger box — `checkForPortal` only runs from `upClick()`
+- **Ladders and ropes let go properly at both ends** (Daniel) — a rope's `y1` sits 2px *below* the foothold it hangs from, so the symmetric grab box (`y1 - 4`) overlapped the platform at the top and the floor at the bottom. Standing on the platform was inside the box, so pressing up yanked the character back onto the ladder and left them in the climb stance above the terrain; the top of a climb pinned them at `y1` rather than stepping them off. The box is lopsided now and which way depends on the direction asked for — reaching **up** has slack at the foot (so you can catch a rope you are standing under, which previously did not work at all) and none at the head; reaching **down** is the mirror. Reaching the head of a rope now lets go and drops onto the platform instead of pinning. Separately, and the more damaging half: nothing gave the foothold back when a climb ended, so the character kept whatever platform they were standing on when they grabbed hold — walking away from the top of a ladder resolved against the floor far below and dropped them, and walking away from the bottom snapped them back up to the platform they had just left. Every exit from a rope now clears the foothold and re-acquires the one actually underfoot
+- **Mobs froze until the backend was restarted** — the long-running one, finally root-caused by reproduction rather than reasoning: a scripted harness (`tools/host-harness.js`) drives fake clients through every host-assignment scenario against the live server, and all server-side election passed — the wedge was client registration. `player_info` sent while the map is still loading is deferred, and the retry lived inside `sendPlayerUpdate`, **which only runs when the player moves**. An unregistered client's watchdog pleas (`request_host_check`) were then silently dropped by the server (`if (!player.info) return`), so its mobs stayed in remote mode forever — walking and questing worked, and the "jump" in the user's fix ritual was the actual cure, since it triggered the movement-gated retry. Registration now retries every update tick regardless of movement, and the server answers an unregistered host-check with `reregister` instead of dropping it, which the client honours by re-sending `player_info`. Verified 9/9 scenarios in the harness, including the previously-frozen one end to end. Earlier hardening from the same hunt, each a real bug in its own right:
+  - a host whose game loop stalled kept its socket open and its broadcasts running, so nothing revoked hostship — hosts are revalidated every 5s and reassigned to a live player
+  - the server never re-sent an assignment when the joiner already *was* the host, or when re-election picked the same winner, so a client that missed its assignment was never told again — it now always answers a joiner, and a starved non-host asks it to restate the answer
+  - `player.lastUpdate` was only refreshed by `player_update`, which the client sends solely when position or stance changes, so standing still looked identical to a crashed tab and hosting was taken away from healthy idle clients. Liveness now comes from a once-a-second heartbeat driven by `requestAnimationFrame`, which still catches a genuinely backgrounded tab (rAF pauses while `setInterval` keeps running) without punishing an idle player. The same signal stops the 10-minute inactivity sweep kicking stationary players
+  - the recovery watchdog refreshed its timer on *any* batch that arrived, so it only detected a host that had gone silent. A stalled host does not go silent — mob broadcasts run on `setInterval` — so it streamed byte-identical frozen state forever and the victim concluded all was well. The timer now only advances when the batch contents actually change
+- **A dropped connection left you in a dead world** — the client stayed in the map with `isMobHost` still false, so every mob sat pinned in remote mode waiting for broadcasts that could never arrive, and the recovery watchdog bails while offline. Restarting the backend was the only way out. GMS drops you to the login screen with a notice instead, which is both authentic and free of half-alive states: after the reconnect attempts are exhausted the client reloads to login and shows `UNABLE_TO_CONNECT_GAME_SERVER`. Dev auto-login is skipped on that path so it cannot silently drop you back into the session you were just kicked from
+- **Hours of progress silently lost after a reconnect** — the server keeps userId/characterId in RAM keyed to the connection, and `handleSaveCharacter` returned without a word when they were missing. Any server restart or socket drop therefore turned every subsequent 30s auto-save into a silent no-op: the player kept levelling with zero persistence and found out on the next refresh. Same root pattern as the frozen mobs — the client treated reconnect as trivial while the server treated every connection as brand-new; mobs were the visible half, lost saves the invisible one. On reconnect the client now resumes the whole session (re-login with kept credentials, re-select the character while deliberately ignoring the stale DB data it returns, re-register, then immediately save so the DB catches up to RAM), and the server rejects an unauthenticated save with an explicit `not_authenticated` result the client answers by resuming
+- **"Map 1010000" in NPC dialogs instead of the map name** — two independent causes. First, the name-table loaders were flag-cached with the flag set *before* the fetch finished, so a concurrent caller resolved `#m` codes against an empty table and the fallback got baked into the page (one failed fetch was worse: nothing loaded for the whole session). Both loaders now cache the in-flight promise and retry on failure. Second, NPC default d-lines (`String.wz/Npc.img`, Maria's case) go through the script engine's stripper, whose map resolver only knows ids scanned out of script *source* — d-lines have no script, and `showDefaultNpcTalk` passed no resolver at all. The `#m` replacement now falls back to QuestData's full `String.wz/Map.img` table, which also covers map codes scripts build at runtime by concatenation
+- **Quest boxes hidden behind bushes** — `Reactor.layer` defaulted to 0 and nothing set it, so a reactor standing among higher-layer scenery was painted a whole layer too early; Amherst's boxes for Pio's chair quest sat invisible behind layer-1 bushes. Reactors now take the layer of the nearest foothold under them, the same convention mobs and NPCs use
+- **NPC chat balloons hidden behind shop signs** — balloons and quest notices were drawn inline with the NPC sprite inside its own layer, so any higher-layer object covered them; nearly every shop hangs its WELCOME sign above the clerk. They now draw in a dedicated pass above all layers and front backgrounds, matching the original client
+- **Shop clerks faced away from their wares** — WZ NPC sprites are natively drawn facing left and the shop window drew `stand[0]` as-is; the portrait is now mirrored to face the item list like the original client, with the origin reflected so the feet stay on the shadow
+- **Melee attacks reached mobs a platform below** — the hit test allowed any target within a flat `Math.abs(dy) <= 100`, which is wider than the gap between most platforms. Vertical reach is now the attacker's own body: `pos.y` is the foothold contact point and sprites extend upward from it, so an attack connects when the two body spans overlap. Sloped ground and tall mobs standing lower still work; a full platform of separation does not. Reactors shared the same check
+- **Black screen on boot** — `MapState` assigned `window.__MapleMap` at module scope, but there is an import cycle (`mysocket → MapleMap → NpcScriptEngine → MapState → MapleMap`), so when MapleMap entered the cycle its own `const MapleMap` had not initialised yet and reading the binding threw, aborting module evaluation. It is exposed through a getter now. `startGame()` also gained a catch that reports boot failures in the document title instead of leaving a silent black canvas
+- **NPC dialogs covered the NPC** — both selection parsers replaced `#L..#l` markup with an empty string but left the surrounding line break, so Robin's 17 travel questions left 17 blank lines that were drawn and counted into the layout. The option list was pushed ~270px down and the dialog grew to 706px, taller than the screen
+- **Quest dialogs reserved space for invisible options** — `recalcLayout` tested only `selections.length` while drawing additionally required a `simple` script dialog, so after picking from a 17-option menu every following page kept 280px of blank space
+- **WZ cache leak** — `WZManager.get()` gated on whether an exact path existed rather than whether the `.img` was loaded, so any probe of an optional path re-fetched and re-parsed the whole file, stranding a full duplicate tree in `nChildren`. This fired on every monster spawn missing a `String.wz/Mob.img` entry and on portals, which re-parsed 4.3MB of `MapHelper.img` each time. `WZNode` manufactured those misses: `isNaN("")` is false, so every empty WZ string became `NaN` and was interpolated straight into lookup paths. Measured after: 5 map changes grow the tree 2.0% with zero duplicates, against ~12% and climbing
+- **Tab froze on any console output after a disconnect** — `installRemoteLogging` routes `console.warn` through `remoteLog`, and `sendMessage` warns when the socket is down, so logging anything offline recursed until the stack blew, ~30x a second. The game logs per-frame during animation, so this pinned the main thread and threw mid-draw, which is why the player sprite vanished while still moving
+- **Zero-dimension UI hangs** — several 9-patch tiling loops stepped by a source image's own width or height, which is 0 until it decodes; stepping by 0 never terminates and killed the tab rather than the frame. Layout and hit rectangles baked once from `nGetImage().width` had the same problem silently and permanently (the "only happens on vite refresh" bug in the stats window). Both now read the WZ node's own dimensions
+- **Frame catch-up after a backgrounded tab** — `requestAnimationFrame` pauses in a background tab, so an uncapped lag accumulator ran thousands of update ticks in one frame and hung the page; catch-up is capped at 250ms
+- **Per-frame allocations** — physics rebuilt an array of every foothold on the map per entity per substep, and the render loop filtered four entity collections once per layer across 8 layers (32 throwaway arrays a frame). Both are now built once
+- **Dev server melted the CPU** — without `fsevents` the Vite watcher stat-polls everything it watches, and 22k+ converted WZ JSON files pushed static asset responses past 30s. The WZ trees are excluded from the watcher. The `immutable` cache header was also never applied: `server.headers` is set from inside Vite's static middleware, which runs after plugin middleware, so its `no-cache` overwrote it and every WZ file revalidated on every load
+- **Pison's Florina Beach return warp** — the Cosmic saved-location API (`saveLocation` / `peekSavedLocation` / `getSavedLocation` / `clearSavedLocation`) was missing entirely, so the `-1` fallback never fired: the dialog rendered "Map 0" and the warp went nowhere. Also fixes the Mirror, Event, Happyville and Cygnus intro scripts, which share it
+- **Camera easing stalled a few pixels short of its target**, and quitting to login left game state behind (Daniel)
+
+---
+
+## [Unreleased] - 2026-07-30
+
+### Added
+- **GMS Quest Helper** (`UI/UIQuestAlarm.ts`) — top-right tracker panel ("Quest Helper (n/5)") listing tracked quests with per-requirement `cur/req` lines: unmet counts in red, completed requirements struck through, round (x) to untrack, minimize/close window buttons from `Basic.img`. The QUEST HELPER button in the quest log toggles tracking; newly accepted quests auto-track. When a quest's requirements become fulfilled (last kill, or item pickup via a 500ms poll) a "Quest Complete!" bubble pops with the QuestAlert light-burst + jingle over the character; turn-in still plays QuestClear
+- **Transportation system** (`Transport/`) — v83 boat/train/genie/subway/elevator/Kerning-train routes ported 1:1 from Cosmic's event scripts with authentic timings; dock `shipObj` vessels render, slide out at takeoff and glide back before arrival (including the Balrog invasion ship); station departure clocks (`UI/UIShipClock.ts`) count down on platform maps and timed rides
+- **Chat log window** (`UI/UIChatLog.ts`) — GMS-style: collapsed mode floats recent lines over the game and fades them; expanded mode is a persistent translucent scrollable log (wheel + VScr4 arrows); yellow notices / white player chat / gray system / pink warnings
+- **Mob HP gauge** (`UI/UIMobGage.ts`) — top-center bar with the last-hit mob's name and remaining HP, built from `UIWindow.img/MobGage` pieces with animated fill
+- **Direction3 job-intro cutscenes** (`Effects/DirectionScene.ts`) — the Maple Island job-experience rooms play their full scripted scene (costume avatar equips, skill stances, effect overlays, title splash, warp-out), with the avatar always facing left as the scene coordinates expect
+- **GMS status bar completed** — key pill row right-aligned like the original (BtClaim siren, Equip/Inventory/Stats/Skills/KeySet pills — Stats was missing entirely), working QuickSlot show/hide toggle with up/down arrow sprites, and the big SHOP / TRADE / MENU / SHORT CUT buttons on the lower band (visual-only until those systems exist)
+- **Quest log window overhaul** — real `VScr4` scrollbars on both panels (tiled track, mouse wheel, draggable thumb, hold-to-repeat arrows, authentic disabled arrows + no thumb when content fits), scrollable description panel (was hard-truncated at 12 lines), active tab rendered bright vs dimmed (v83 ships byte-identical enabled/disabled tab sprites), and quest descriptions no longer covered by a stretched "OBTAIN SELECTIVELY" reward label misused as a row highlight
+- **Inventory meso display** — right-aligned inside the white meso field like GMS (large amounts previously overflowed onto the window frame)
+
+### Changed
+- **GMS listing-first NPC quest dialog** — clicking an NPC never auto-runs a quest script anymore. NPCs with quests always show the combined quest listing first (completable / in progress / available + ETC conversation entry); scripted quests appear in it like static ones and their start/end script runs only when that quest is clicked — exactly how GMS behaves on job instructors that also give theme-dungeon quests
+
+### Fixed
+- **Dances with Balrog warped beginners to Mushroom Castle** — quest startscripts attached to an NPC ran on click after checking only prerequisite quests, ignoring level/job/item requirements. Quest 2300 (Kingdom of Mushroom in Danger, level 30–38 2nd-job warriors) hijacked every click on the Warrior instructor and its script offers a warp to Mushroom Castle, so a level-10 beginner seeking job advancement got shipped to the theme dungeon instead. Startscripts are now gated on the full Check.img start requirements (`canRunStartScript`) — 249 scripted quests with level/job restrictions were hijackable this way on job instructors and quest NPCs everywhere
+- **Quest endscripts ran without completion requirements** — talking to the turn-in NPC ran the end script as soon as the quest was in progress; hunting-quest end scripts hand out rewards without re-checking kills, so 34 mob-gated quests (Hunt Up quests, Mushroom Castle 2333, …) were instantly completable with zero kills. End scripts now require the WZ mob-kill and item counts first (`canRunEndScript`, mirroring Cosmic's server-side `canComplete` gate — count-0 item entries always pass, preserving Roger's Apple's script-side check)
+- **265 quests with a static start but scripted end could never be accepted** — `canStartQuest` rejected any quest that had an endscript, so clicking ACCEPT on those closed the dialog and silently did nothing; only a scripted *start* now bypasses the static accept path
+- **NPC/quest script state loss between dialog pages** — the engines re-ran the whole script source on every click, patching only `status` back in, so every other top-level variable reset (Phil's cab set `selectedMap` on one page and read `-1` on the next, warping passengers to the default map — Amherst — instead of their destination). Both engines now build the script closure once per conversation and call its `start`/`action` (`start`/`end`) functions, so all script variables persist like the original server's per-conversation script instance; `cm.warp`/`qm.warp` also reject invalid map ids outright
+- **Characters teleported to the start map on reload** — the server's disconnect auto-save evaluated `Number(info.mapId || player.mapId || 10000)`; a `NaN` map id (client mid-load) is falsy and fell through to literal 10000 with pos (0,0). Every save path now validates the map id (client refuses to send `player_info`/`player_update`/saves without a real map; server keeps the stored map/pos when a payload lacks one)
+- **All mobs frozen (only blinking)** — a deferred `player_info` (map still loading) was silently dropped forever, so the server never registered the player and never assigned a mob host; registration now retries from the update loop the moment the map id is valid, and the server defers host assignment instead of ignoring the player
+- **Job-intro cutscene mirrored** — the avatar kept the player's walking direction, shooting away from the scene's targets; scenes now force the sprite's natural left-facing orientation
+
+---
+
+## [Unreleased] - 2026-07-29
+
+### Script engine overhaul (NPC / quest / portal)
+Audited all 971 backend scripts by driving them through a recording sandbox; fixed the engine-level crash causes rather than patching scripts:
+- **Chainable no-op stubs** — unimplemented API methods (and any chain hanging off them, e.g. `cm.getX().getY().getZ()`) degrade to warn-once no-ops instead of TypeErrors that close the dialog; predicates (`is*`/`has*`/`can*`) return false and `size`/`count` return 0 so `while (iter.hasNext())` loops terminate
+- **Java/Nashorn shim** — `Java.type()` provides real semantics for `client.inventory.InventoryType` (tab ids), `client.Job` (v83 job ids), `config.YamlConfig` (feature flags off, rates 1), `ShopFactory`, `java.awt.Point`/`Rectangle`; unknown classes get chainable stubs; `java` and `Packages` globals added; shared across NPC, quest, and portal engines
+- **Nested API objects wrapped** — `getPlayer()`, `getClient()`, `getMap()`, `cm.c`, the portal `pi`, and storage/event-manager objects are safety-wrapped; event *managers* exist with a null running instance (Cosmic semantics), party/guild/event-instance return null so scripts take their authentic "you need a party" branches
+- **Result**: quest scripts 261/261 crash-free, NPC scripts 708/710 (remaining: 2 GM info panels using a Nashorn scope quirk), portal scripts shimmed; ~23 PQ/event-map NPCs still close their dialog early because they genuinely require the event-instance system
+- Fixed Nashorn `for each` syntax in the beauty-salon GM NPC (9900000.js)
+
+### Added
+- **Authentic 800×600 resolution** — the whole game (login + in-game) now runs at the original pre-Big Bang client resolution. Login art (natively 800×600) fills the canvas exactly; the HUD lands at its designed v83 positions; CSS scales the canvas to the window in a single resample (4:3)
+- **GMS-style equip tooltips** (`UI/UIEquipTooltip.ts`) — enlarged icon, REQ LEV/STR/DEX/INT/LUK/FAM block, job class bar from the `reqJob` bitmask, CATEGORY, combined base+scroll stats, and NUMBER OF UPGRADES AVAILABLE; shown in both the equipment window and the inventory
+- **Equip ground drops** — dropped equips (from inventory, equipment window, mobs, or other players) now render on the ground and can be picked up; scroll bonuses (`equipData`) survive the drop/pickup round-trip
+- **Drag-and-drop from the equipment window** — drag a worn item onto the inventory to unequip it, or anywhere else to drop it on the ground, with a cursor ghost icon (inventory item drags now show the ghost too)
+- **Three Snails tier shells** — skill level 1/2/3 consumes exactly Snail Shell / Blue Snail Shell / Red Snail Shell with v83 fixed damage 10/25/40 and the matching ball sprite; no shell of the level's tier → no cast (and no MP consumed on failed casts)
+- **Default underwear rendering** — characters with empty top/bottom slots render v83 default underwear instead of appearing naked
+- **Rope vs ladder stances** — climbing uses the correct v83 stance (`rope` = hands on rope, `ladder` = hands on rungs) based on the map's ladderRope `l` flag
+
+### Fixed
+- **Character save wipe ("naked player") bug** — root-caused and fixed in layers: the server's disconnect auto-save fallback no longer persists item data from render-sync state; partial saves can never clear equipment; saves are blocked client-side until login restore completes (`_restoreComplete`); the dev-session snapshot is rejected when it has no equips but the DB does
+- **Level/stat regression corruption** — the server rejects saves carrying a lower level than stored (levels never decrease in v83) and logs the offending payload; client saves are skipped until the game map is loaded (early saves recorded mapId 10000, teleporting characters back to the start map)
+- **Black screen on boot** — `connectForLogin`/`sendLogin`/`selectCharacter` promises could hang forever when the server was briefly unreachable, stalling `tryAutoLogin` before the game loop started; all login network calls now time out and fall back to the login screen
+- **Climbing animation** — key releases were firing every frame instead of on the actual key-up transition, zeroing climb velocity and freezing the climb animation ("sliding" up ropes); animation now plays while moving and freezes when hanging still, including after dropping off and re-grabbing
+- **Weapon drawn across the face while climbing** — equips without ladder/rope stance frames (weapons have none) are now skipped during climb stances instead of falling back to their standing pose
+- **Login screen fidelity** — login flow renders its native 800×600 art 1:1 (was top-left anchored in a larger canvas with black bars, then blurred by double resampling); sign text is crisp again
+- **Ghost login buttons** — Guest Login/Register/Quit etc. were invisible but still clickable on world/character select; ID and password fields are recreated when returning to the login screen via Back
+- **Player name in dialogs** — `#h0#` format code now resolves to the actual character name in quest dialogs, quest scripts, and NPC scripts (was showing the literal "Player")
+- **Login input fields** — track the sign with the camera and scale with the canvas (were misaligned after window resizes)
+
+---
+
+## [Unreleased] - 2026-04-04
+
+### Added
+- **Portal script engine** (`PortalScriptEngine.ts`) — 458 portal scripts from backend now execute client-side via `new Function()`, with `pi` API (warp, quest checks, items, messages). Scripted portals (types 7, 8, 9, 11) now work instead of being silently ignored
+- **Lazy-load optimizations** — parallelized `MapleMap.load()` asset fetches (backgrounds, tiles, objects, portals, names, NPCs, monsters, reactors), deferred character model preload so login screen appears faster
+- **WZ asset eviction** — `WZManager.unloadTransient()` frees map-specific assets (Map.wz, Mob.wz, Npc.wz sprites) on map change, reducing memory growth on mobile
+- **NPC hitbox from sprite** — NPC click detection now uses actual sprite dimensions and origin instead of hardcoded 56×70 rectangle
+- **Resolution upgrade to 1024×768** — matches original v83 windowed resolution; status bar extends to full width via clipped right-aligned copy; buttons repositioned for wider viewport
+- **Minimap size cap** — large maps (e.g., Lith Harbor) now scale down to max 200×200px, matching original v83 compact minimap size
+- **Character name availability check** — new `check_name` server endpoint validates name on the name entry screen before advancing to customization
+- **Quest log item progress** — item requirements now shown in green/red like mob progress (e.g., "Jr. Sentinel Shellpiece: 0/1")
+- **Character select sound effect** — plays `Sound.wz/UI.img/CharSelect` when clicking a character
+- **Map name format code (`#m`)** — resolved from `String.wz/Map.img` instead of showing literal "map" or raw ID
+- **Smart training center portal routing** — `entertraining.js` checks active quests and routes to the correct training center (Red Snails, Stumps, Slimes, Pigs) based on what the player needs
+
+### Fixed
+- **BGM not playing on first load** — browser autoplay policy blocked initial `audio.play()`; permanent global listener retries on any user interaction
+- **Create character OK button unreliable** — fast clicks missed because `canvas.clicked` is a held-state flag; added `wasClicked` flag that persists until the frame processes it
+- **Cursor freezes over text inputs** — `mousemove` only listened on canvas; overlaid `<input>` elements blocked events; changed to `window` listener
+- **Character equipment ignored during creation** — server handler didn't pass `equips` to `Character.create()`, defaulting all characters to starter gear
+- **Sub-pixel rendering artifacts** — camera easing produced fractional positions causing flickering lines between tiles; rounded camera to integers in `Camera.update()`
+- **NPC/effect sprite flickering** — physics produces fractional positions; rounded `dx`/`dy` in all `GameCanvas` draw methods
+- **Player renders on wrong layer** — player now draws within their foothold's layer so foreground map objects correctly appear in front; layer persists during jumps
+- **Quest script phase mismatch** — quests with `startscript` but no `endscript` (e.g., quest 1028 "To Lith Harbor!") no longer silently run an empty `end()` function; completion now uses the standard WZ dialog
+- **NPC click handler swallowing errors** — added try/catch and re-entrancy guard to async `handleClick`
+- **NPC click-through dialogs** — clicking dialog buttons would re-trigger NPC behind them; added guard when dialogs are open
+- **Tutorial mobs dealing damage** — tutorial mobs (9300018, 9300328, 9300383, 9409000, 9409001) now always show "MISS" with no damage or knockback
+- **Quest log showing raw `ITEM:4031802`** — `\x01ITEM:id\x02` markers now replaced with item names via `getItemNameSync()`
+- **Quest dialog duplicate item progress** — removed appended item progress from quest dialog since quest text already includes it via format codes
+- **Enter channel without selection** — button now requires a channel to be selected first
+- **Scripted portals teleporting within same map** — portals with `tm=999999999` and no destination no longer teleport to spawn points
+- **Minimap showing non-functional portals** — invisible portals with no destination or script no longer show portal icons
+- **Quest item removal missing Cash tab** — `removeItems()` now searches all 5 inventory tabs including Cash
+- **Blocked portal script spamming** — added 1-second cooldown after portal script returns false
+- **`save_character_result` unknown message warning** — silenced by adding handler
+- **Random quest reward mismatch** — dialog and quest manager now use the same randomly picked prop item
+
+---
+
+## [0.9.1] - 2026-04-03
+
+### Added
+- Quest mob kill progress persisted across login sessions via `mob_progress` JSON column
+- Skip quest-start sound effect when restoring saved quests on login
+
+### Fixed
+- Job not saving on disconnect (`player_info` sends `job` not `jobId`)
+- NPC click triggering multiple overlapping NPCs (changed `forEach` to `for...of` with break)
+- Quest items dropping from any mob instead of only quest-required mobs
+- Mob respawn using WZ `cy`/`fh` for ground spawn position, per-mob `mobTime`, fade-in effect
+- Mobs walking off foothold edges (reverse direction at platform boundaries)
+- Invisible portals (type 1) having no collision rect (Free Market etc.)
+- EXP/maxExp not restored on login (stuck at level 1 values)
+- Browser caching: aggressive cache for WZ data only, no-cache for code/scripts
+- Filtered out expired time-limited event quests via WZ start/end dates
+- Added Cassandra default dialog script
+
+---
+
+## [0.9.0] - 2026-04-03
+
+### Changed
+- Removed private-server TaxiUI system; all cab NPCs now use their GMS scripts with `sendSimple` destination menus
+- Disabled canvas image smoothing for crisper pixel art rendering
+
+---
+
+## [0.8.1] - 2026-04-02
+
+### Changed
+- Replaced NPC shop data with Cosmic v83 SQL exports (102 shops, 3,569 items with correct prices)
+
+### Fixed
+- **EXP table** — replaced incorrect pre-BB/private server curve with official v83 GMS values from Cosmic (every value from level 9+ was wrong)
+- **Mob stats** — `Monster.ts` now loads `acc`, `eva`, `PADamage`, and `level` from WZ (previously only HP/MP/exp/speed)
+- **HP/MP level-up gains** — characters now gain HP/MP on level-up based on job class (Beginner: +12-16 HP; Warrior: +24-28 HP; Magician: +22-24 MP; etc.). Previously maxHP/maxMP never increased
+- **Hit formula** — removed erroneous `-1` that made hit chance negative for almost every mob
+
+---
+
+## [0.8.0] - 2026-04-02
+
+### Changed
+- Removed 12,210 private server drop entries; kept only official v83 WZ MonsterBook drops (22,309 → 10,099 entries)
+
+### Fixed — Alpha Playtest Session
+- Character equipment not persisting on reconnect (full save on disconnect)
+- Character appearing naked on load (re-attach equips after body reload, fix smap bug)
+- Job not persisting (use `setJobId()` instead of direct assignment)
+- Circular dependency crash (`Physics → MapleMap` lazy loading via registration pattern)
+- EXP overflow not triggering multi-level ups (while loop instead of single check)
+- Player-to-mob hit formula (remove erroneous -1 making hit chance always 0)
+- Mob-to-player miss formula (level-gap scaling: each gap adds 5% miss chance)
+- Quest item count only checking first stack (now sums all matching stacks)
+- Quest completion failing silently when items spread across stacks
+- NPC scripts blocked by in-progress quest scripts (skip re-running startscripts)
+- Dances with Balrog incorrectly flagged as taxi NPC
+- Sell price always 0 (now reads actual WZ prices)
+- Korean/medal/event quests showing in NPC dialogs (filter by Hangul, 19xxx, 29xxx)
+- Map name codes not resolving in NPC scripts (scan all 6-9 digit numbers)
+- `#t` format codes with missing closing hash (make `#` optional in regex)
+- Cards/arrows consumable via double-click (restricted to potions 2000000-2049999)
+- Players falling off map edges (boundary clamping + invisible walls)
+- Remote players always showing beginner equipment (sync equipped items in updates)
+- Character select showing wrong stats/job (load full stats from DB)
+- Channel double-click not entering character select
+- Mob boundary enforcement (clamp after physics, disable random jumping)
+- Character creation not using selected equipment
+- Added shoes to default beginner equipment
+- Reduced auto-save interval from 60s to 30s, added initial save 2s after entering game
+- Disabled fall damage
+
+---
+
+## [0.7.0] - 2026-04-02
+
+### Added
+- SQLite backend with user auth (bcrypt) and character persistence (stats, inventory, equipment, quests, map position)
+- Auto-save on disconnect, map change, 60s timer, and browser close
+- WZ-to-JSON converter (`tools/wz-to-json.js`) for v83 `.wz` binary files
+- 3-stage character creation: race selection, name entry, appearance customization with live preview
+- Login screen wired to server auth with v83 notice popups for wrong credentials
+- Character select with equipped items preview
+- Job advancement NPC scripts for all 5 instructors (Warrior, Magician, Bowman, Thief, Pirate)
+
+### Fixed
+- Background type-to-tiling mapping (type 1=tileX, 2=tileY, 3=both) — was broken by switch fall-through
+
+---
+
+## [0.6.0] - 2026-04-02
+
+### Added
+- **Modular weapon system** — `WeaponConfig` table for all 16 weapon types with correct stances, melee range, and ranged/melee classification
+- **v83 damage formulas** — complete stat formulas for all weapon types with stab/swing multipliers
+- **Projectile integration** — bows, crossbows, claws, and pistols fire projectiles with auto-targeting
+- Randomized attack stance selection from weapon's stance pool
+- Monster defense and miss chance applied to melee attacks
+
+### Fixed
+- Beginner starting stats from STR/DEX 500 to correct v83 values (STR 12, DEX 5)
+- Minimap text clipping — frame width now accounts for street/map name length
+- Minimap image centered when frame is wider than map canvas
+
+---
+
+## [0.5.0] - 2026-04-01
+
+### Added
+- **Minimap** (`UIMiniMap.ts`) — WZ 9-patch frame, map image, player/NPC/portal icons, map mark, street/map name, toggle with M key, offscreen canvas caching
+- **Equipment window** (`EquipMenuSprite.ts`) — paper doll with 16+ slots, WZ background, double-click to unequip, tooltip, toggle with E key
+- Equip from inventory via double-click with slot swap support
+- Equipment items loaded from `Character.wz` with full `equipDirMap`
+- Inventory UI polish: WZ scrollbar, rounded tabs, WZ digit sprites for quantities
+- **Multiplayer system** — mob host model, item drop/pickup sync, reactor sync, chat balloons, level-up effects, contact damage relay, remote logging, host failover
+
+### Fixed
+- Broken `HTMLImageElement` in `DropItemSprite` causing drawImage crash
+
+---
+
+## [0.4.0] - 2026-03-26
+
+### Fixed
+- **Potion consuming 3x** — `onMouseDown` on draggable menus was inside button loop, firing once per registered button; moved outside to fire once per click
+- **NPC dialog button types** — `sendOk`/`sendNext`/`sendPrev` now use "OK" button; `sendAcceptDecline`/`sendYesNo` use "Accept" button
+- Added Pio (NPC 10000) post-quest script with actual GMS dialog
+
+---
+
+## [0.3.0] - 2026-03-25
+
+### Added
+- **Reactor system** — breakable map objects from `Reactor.wz`, multi-state hit animations (4 hits to destroy), item drops, respawn timers
+- `ReactorDropData.ts` with 1,126 drop entries covering 163 reactors
+- **Quest random rewards** (prop system) — items with `prop > 0` randomly selected (one from pool)
+
+### Fixed
+- Quest completion NPC fallback: when no completion NPC specified, fall back to start NPC
+- Reactor hit animation: plays from current state before advancing
+
+---
+
+## [0.2.0] - 2026-03-25
+
+### Added
+- **NPC script engine** — 708 scripts running client-side via `NpcScriptEngine` with full `cm` API (dialog, warp, items, quests, cosmetics, `sendSimple` selections)
+- **Quest listing dialog** — GMS-style combined dialog with category headers (Available/In Progress/Completable/ETC)
+- **Quest reward display** — REWARD!!, EXP, meso, fame icons; item rewards show actual icon sprites
+- **Inline format codes** — `#f` (WZ images), `#v`/`#i` (item icons), `#t` (item names), `#c` (inventory counts) rendered inline in dialog text
+- **Item name deferred resolution** — `#t`/`#c` preserved at parse time, resolved at display time after `ensureItemNames()` loads from `String.wz`
+- **Quest item drops** — mobs drop quest-required items (70% if quest targets mob, 15% otherwise)
+- **Monster respawn** — 7-second timer after death, respawns at original position
+
+### Fixed
+- `IncEXP` effect: `addExp(exp, showEffect)` only plays sound/animation for quest rewards, not mob kills
+- Physics state reset on map change (clear velocity, foothold, climbing)
+- Spawn position fallback chain: named portal → spawn portal → any portal → center foothold
+- Item count type mismatch: `getItemCount`/`addToInventory` handle string/number ID comparison
+
+### Removed
+- Connection status overlay
+- Mobile touch controls
+- Hardcoded ETC inventory items
+
+---
+
+## [0.1.0] - 2026-03-25
+
+### Added
+- Initial release — MapleStory v83 pre-Big Bang web recreation
+- TypeScript client with canvas rendering from WZ assets
+- Core engine: 800x600 resolution, 60 FPS game loop, camera system
+- Physics: gravity, walking, jumping, climbing ropes/ladders
+- Character sprite composition (body, head, hair, face, equipment layers)
+- Map loading from `Map.wz` (backgrounds, tiles, objects, footholds, portals)
+- Monster rendering and basic AI
+- NPC rendering with dialog system
+- Quest system foundation (2,824 quests from `Quest.wz`)
+- 5-tab inventory system
+- Background music from `Sound.wz`
+- WebSocket multiplayer server with player sync
