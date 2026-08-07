@@ -1,4 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
+import { preloadFrames } from '../wz-utils/WZNode';
 import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import MapleMap from '../MapleMap';
@@ -21,6 +22,8 @@ interface MiniMapIcons {
   user: HTMLImageElement;
   another: HTMLImageElement;
   npc: HTMLImageElement;
+  startnpc: HTMLImageElement;
+  endnpc: HTMLImageElement;
   portal: HTMLImageElement;
   party: HTMLImageElement;
 }
@@ -138,9 +141,14 @@ UIMiniMap.initialize = async function () {
       user: mmIcons.user.nGetImage(),
       another: mmIcons.another.nGetImage(),
       npc: mmIcons.npc.nGetImage(),
+      startnpc: mmIcons.startnpc.nGetImage(),
+      endnpc: mmIcons.endnpc.nGetImage(),
       portal: mmIcons.portal.nGetImage(),
       party: mmIcons.party.nGetImage(),
     };
+    // These are drawn live rather than baked into the cached frame, so an
+    // undecoded one is simply missing for that frame
+    void preloadFrames(mmIcons.nChildren);
 
     const markNode = mapHelper.mark;
     for (const child of markNode.nChildren) {
@@ -440,20 +448,6 @@ UIMiniMap._buildCache = function () {
     }
   }
 
-  if (this.icons && MapleMap.npcs) {
-    const npcIcon = this.icons.npc;
-    const cx = md.centerX;
-    const cy = md.centerY;
-    const mw = md.width;
-    const mh = md.height;
-    for (const npc of MapleMap.npcs) {
-      if (!npc.x || npc.hide) continue;
-      const nx = mapDrawX + (npc.x + cx) * mapImgW / mw - (npcIcon.width || 2) / 2;
-      const ny = mapDrawY + ((npc.cy || npc.y || 0) + cy) * mapImgH / mh - (npcIcon.height || 4) / 2;
-      draw(npcIcon, nx, ny);
-    }
-  }
-
   ctx.restore();
 
   // Store cache and layout. A partially-drawn cache is still used this frame
@@ -569,6 +563,28 @@ UIMiniMap.render = function (canvas: GameCanvas, _camera: CameraInterface) {
   ctx.beginPath();
   ctx.rect(bx + L.nwW, by + L.nwH, L.innerW, L.innerH);
   ctx.clip();
+
+  // NPCs. Drawn per frame rather than baked into the static cache because
+  // their marker changes as quests are accepted and turned in: v83 ships
+  // three, `npc` for a plain dot, `startnpc` (dot + yellow !) where a quest
+  // can be picked up and `endnpc` (dot + yellow ?) where one can be handed
+  // in. The taller two are anchored by their base so the glyph rises above
+  // the dot instead of shifting it off the NPC's position.
+  if (this.icons && MapleMap.npcs) {
+    const plain = this.icons.npc;
+    for (const npc of MapleMap.npcs as any[]) {
+      if (!npc.x || npc.hide) continue;
+      const icon =
+        npc.questState === 'completable' ? this.icons.endnpc
+        : npc.questState === 'available' ? this.icons.startnpc
+        : plain;
+      const nx = worldToMiniX(npc.x) - (icon.width || 2) / 2;
+      const ny = worldToMiniY(npc.cy || npc.y || 0)
+        - (plain.height || 7) / 2                       // dot centred like before
+        - ((icon.height || 7) - (plain.height || 7));   // glyph extends upward
+      canvas.drawImage({ img: icon, dx: nx, dy: ny });
+    }
+  }
 
   // Draw other players
   if (this.icons && MapleMap.characters) {

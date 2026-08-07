@@ -7,6 +7,10 @@ import GUIUtil from "./GuiUtils";
 import { CameraInterface } from "./Camera";
 import QuestData from "./Quest/QuestData";
 
+// Quest availability changes only when the player accepts, progresses or turns
+// in a quest, so re-deriving it every frame for every NPC is wasted work
+const QUEST_STATE_SCAN_MS = 250;
+
 class NPC {
   opts: any;
   oId: number = 0;
@@ -35,6 +39,15 @@ class NPC {
   questIconFrame: number = 0;
   questIconDelay: number = 0;
   questIconNextDelay: number = 200;  // ms per frame
+
+  /**
+   * What this NPC currently offers, recomputed on a throttle rather than per
+   * draw. Shared by the overhead notice and the minimap so the two can never
+   * disagree, and evaluated in update() so it stays right for NPCs scrolled
+   * off screen — the minimap shows those too.
+   */
+  questState: 'none' | 'available' | 'inProgress' | 'completable' = 'none';
+  private _questStateDelay: number = QUEST_STATE_SCAN_MS;  // scan on the first tick
 
   // MapleTV
   mapleTv: number = 0;
@@ -450,23 +463,16 @@ class NPC {
   }
 
   drawQuestIndicator(canvas: GameCanvas, camera: CameraInterface) {
-    const questManager = (window as any).charecter?.questManager;
-    if (!questManager) return;
-
-    const questIds = QuestData.npcToQuests.get(this.id);
-    if (!questIds || questIds.length === 0) return;
-
-    const quests = questManager.getQuestsForNpc(this.id);
     let frames: any[] = [];
     let balloon: any = null;
 
-    if (quests.completable.length > 0) {
+    if (this.questState === 'completable') {
       frames = this.questIconCompletable;
       balloon = this.questNotice0;
-    } else if (quests.available.length > 0) {
+    } else if (this.questState === 'available') {
       frames = this.questIconAvailable;
       balloon = this.questNotice0;
-    } else if (quests.inProgress.length > 0) {
+    } else if (this.questState === 'inProgress') {
       frames = this.questIconInProgress;
       balloon = this.questNotice1;
     }
@@ -513,6 +519,25 @@ class NPC {
         dy: headY - icon.height - NOTICE_GAP,
       });
     }
+  }
+
+  /** Re-derive what this NPC offers, at most every QUEST_STATE_SCAN_MS */
+  updateQuestState(msPerTick: number) {
+    this._questStateDelay += msPerTick;
+    if (this._questStateDelay < QUEST_STATE_SCAN_MS) return;
+    this._questStateDelay = 0;
+
+    const questManager = (window as any).charecter?.questManager;
+    if (!questManager || !QuestData.npcToQuests.get(this.id)) {
+      this.questState = 'none';
+      return;
+    }
+    const quests = questManager.getQuestsForNpc(this.id);
+    this.questState =
+      quests.completable.length > 0 ? 'completable'
+      : quests.available.length > 0 ? 'available'
+      : quests.inProgress.length > 0 ? 'inProgress'
+      : 'none';
   }
 
   updateQuestIcon(msPerTick: number) {
@@ -795,6 +820,7 @@ update(msPerTick: number) {
 
   // Animate quest icon
   this.updateQuestIcon(msPerTick);
+  this.updateQuestState(msPerTick);
 
   // CRITICAL: Ensure position consistency for balloons
   this.pos.x = this.x;
