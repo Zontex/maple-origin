@@ -1,6 +1,7 @@
 import WZManager from "./wz-utils/WZManager";
 
-import Background from "./Background";
+import Background, { getBackgroundScale } from "./Background";
+import { getBossSpawns, BOSS_MOBTIME_S } from "./Constants/BossSpawns";
 import Foothold from "./FootHold";
 import Portal from "./Portal";
 import Tile from "./Tile";
@@ -649,22 +650,41 @@ MapleMap.loadMonsters = async function (wzNode) {
   footholds = this.footholds;
   monsterSpawnDefs = [];
 
-  let spawnIndex = 0;
-  for (const mobNode of wzNode.nChildren.filter(
-    (n: any) => n.type.nValue === "m"
-  )) {
-    const mobTime = mobNode.mobTime?.nValue ?? mobNode.nGet('mobTime').nGet('nValue', 0);
-    const cy = mobNode.cy?.nValue ?? mobNode.y.nValue;
-    const spawnDef = {
-      oId: spawnIndex++,
+  const rawSpawns: any[] = wzNode.nChildren
+    .filter((n: any) => n.type.nValue === "m")
+    .map((mobNode: any) => ({
       id: mobNode.id.nValue,
       x: mobNode.x.nValue,
-      y: cy,              // Use cy (foothold Y) so mob spawns on ground, not mid-air
-      stance: "",
+      // Use cy (foothold Y) so the mob spawns on ground, not mid-air
+      y: mobNode.cy?.nValue ?? mobNode.y.nValue,
       fh: mobNode.fh.nValue,
       minX: mobNode.rx0.nValue,
       maxX: mobNode.rx1.nValue,
-      mobTime,            // Respawn time in seconds (-1 = no respawn, 0 = default)
+      // Respawn time in seconds (-1 = no respawn, 0 = default)
+      mobTime: mobNode.mobTime?.nValue ?? mobNode.nGet('mobTime').nGet('nValue', 0),
+    }));
+
+  // Area bosses GMS spawned server-side have no life node to read. Appending
+  // them after the map's own spawns keeps oIds identical on every client, which
+  // is what mob-state sync and respawn broadcasts key off.
+  for (const boss of getBossSpawns(Number(this.id))) {
+    rawSpawns.push({
+      id: boss.id,
+      x: boss.x,
+      y: boss.cy,
+      fh: boss.fh,
+      minX: boss.rx0,
+      maxX: boss.rx1,
+      mobTime: boss.mobTime,
+    });
+  }
+
+  let spawnIndex = 0;
+  for (const raw of rawSpawns) {
+    const spawnDef = {
+      oId: spawnIndex++,
+      ...raw,
+      stance: "",
       map: this,
       alive: true,
       nextPossibleSpawn: 0,
@@ -924,6 +944,25 @@ MapleMap.update = function (msPerTick) {
   respawnAccumulator += msPerTick;
   if (respawnAccumulator >= RESPAWN_TICK_MS) {
     respawnAccumulator = 0;
+
+    // Boss spawn points come back strictly on their own deadline. They must not
+    // go through the capacity refill below: a map sitting at its ~75% cap (the
+    // normal state, snails respawn in seconds) leaves no slot, so a boss would
+    // wait out its 20 minutes and then queue behind the population forever.
+    if (isMobHost) {
+      for (const def of monsterSpawnDefs) {
+        if (def.alive || def.mobTime < BOSS_MOBTIME_S) continue;
+        if (def.nextPossibleSpawn > now) continue;
+        def.alive = true;
+        (async () => {
+          if (mapRef.mapId === def.map?.mapId) {
+            await mapRef.spawnMonster({ ...def, fadeIn: true });
+            try { (window as any).__mySocket?.sendMobRespawn(def.oId); } catch {}
+          }
+        })();
+      }
+    }
+
     if (isMobHost && monsterSpawnDefs.length > 0) {
       const players = 1 + (this.characters?.length || 0);
       const capacity = Math.ceil(
@@ -1076,7 +1115,25 @@ MapleMap.render = function (
     }
   };
 
-  _backLayers[0].forEach(draw);
+  // Backgrounds are composed for the authored 800x600 frame and scaled up to
+  // cover a bigger viewport (see getBackgroundScale). Smoothing is off globally
+  // to keep sprites crisp, but an upscaled panorama needs it — nearest-neighbour
+  // turns the sky gradient into steps.
+  const drawBackgroundLayer = (layer: any[]) => {
+    const scale = getBackgroundScale();
+    if (scale === 1) {
+      layer.forEach(draw);
+      return;
+    }
+    const ctx = canvas.context;
+    ctx.save();
+    ctx.scale(scale, scale);
+    ctx.imageSmoothingEnabled = true;
+    layer.forEach(draw);
+    ctx.restore();
+  };
+
+  drawBackgroundLayer(_backLayers[0]);
 
   // Docked/enemy vessel sits on the water behind every gameplay layer
   if (this.shipObject) {
@@ -1168,7 +1225,7 @@ MapleMap.render = function (
     .forEach(drawLevelUp);
 
   this.portals.forEach(draw);
-  _backLayers[1].forEach(draw);
+  drawBackgroundLayer(_backLayers[1]);
 
   this.itemDrops.forEach((drop: DropItemSprite) => {
     drop.draw(canvas, camera);
@@ -1276,21 +1333,18 @@ async function _handleClickInner(
 
   for (const npc of this.npcs as any[]) {
     if (!npc.pos || npc.hide) continue;
-    // Compute hitbox from the NPC's current sprite frame (same coords as draw())
-    const currentFrame = npc.stances?.[npc.stance]?.frames?.[npc.frame];
-    const spriteW = currentFrame?.nWidth || 56;
-    const spriteH = currentFrame?.nHeight || 70;
-    const originX = currentFrame?.nGet?.("origin")?.nGet?.("nX", 0) || Math.floor(spriteW / 2);
-    const originY = currentFrame?.nGet?.("origin")?.nGet?.("nY", 0) || spriteH;
-    const adjustX = !npc.flipped ? originX : spriteW - originX;
-    const npcX = npc.x - camera.x - adjustX;
-    const npcY = npc.cy - camera.y - originY;
+    // Hitbox = the NPC's drawn sprite unioned with its authored dc* click box
+    // (see NPC.getBounds) — NPCs painted into the map scenery have nothing but
+    // that box to aim at
+    const bounds = npc.getBounds();
+    const npcX = bounds.left - camera.x;
+    const npcY = bounds.top - camera.y;
 
     if (
       mouseX >= npcX &&
-      mouseX <= npcX + spriteW &&
+      mouseX <= bounds.right - camera.x &&
       mouseY >= npcY &&
-      mouseY <= npcY + spriteH
+      mouseY <= bounds.bottom - camera.y
     ) {
       console.log(`Clicked on NPC ${npc.id}:`, npc);
       try {

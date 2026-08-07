@@ -3,6 +3,7 @@ import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import MapleMap from '../MapleMap';
 import MyCharacter from '../MyCharacter';
+import UIWorldMap from './UIWorldMap';
 
 interface MiniMapFrame {
   nw: HTMLImageElement;
@@ -32,6 +33,11 @@ interface MiniMapData {
   centerY: number;
   mag: number;
 }
+
+// Every mark in Map.wz/MapHelper.img/mark is 38x38 (Halloween alone is 39
+// wide). Laying the header out on the constant rather than the image's own
+// width keeps the names from shifting when a mark decodes a frame or two late.
+const MAP_MARK_SIZE = 38;
 
 const UIMiniMap = {
   initialized: false,
@@ -84,6 +90,7 @@ const UIMiniMap = {
   // so the inferred type carries them for the callers in MapState/MapleMap
   initialize: undefined as unknown as () => Promise<void>,
   loadMapData: undefined as unknown as () => void,
+  _resolveMapMark: undefined as unknown as () => void,
   _buildCache: undefined as unknown as () => void,
   update: undefined as unknown as (msPerTick: number) => void,
   render: undefined as unknown as (canvas: GameCanvas, camera: CameraInterface) => void,
@@ -141,9 +148,32 @@ UIMiniMap.initialize = async function () {
     }
 
     this.initialized = true;
+
+    // MapState loads the first map *before* it initializes the HUD, so that
+    // map's loadMapData() looked the mark up in a table this function had not
+    // filled yet and left the header iconless until the next map change. The
+    // marks exist now — resolve the one the current map wanted.
+    this._resolveMapMark();
   } catch (e) {
     console.error('[UIMiniMap] Failed to initialize:', e);
   }
+};
+
+/**
+ * Point mapMark at the current map's icon. Safe to call again at any time:
+ * it only ever upgrades a missing mark into a present one, and invalidates
+ * the cached header so the new icon actually gets drawn.
+ */
+UIMiniMap._resolveMapMark = function () {
+  if (this.mapMark || !MapleMap.wzNode) return;
+
+  const markName = MapleMap.wzNode.info?.mapMark?.nValue;
+  if (!markName || !this.marks[markName]) return;
+
+  this.mapMark = this.marks[markName];
+  this.mapMarkName = markName;
+  this._cachedFrame = null;
+  this._layout = null;
 };
 
 UIMiniMap.loadMapData = function () {
@@ -170,11 +200,7 @@ UIMiniMap.loadMapData = function () {
       mag: mmNode.mag?.nValue || 4,
     };
 
-    const markName = MapleMap.wzNode.info?.mapMark?.nValue;
-    if (markName && this.marks[markName]) {
-      this.mapMark = this.marks[markName];
-      this.mapMarkName = markName;
-    }
+    this._resolveMapMark();
 
     this.isHidden = false;
   } catch (e) {
@@ -215,7 +241,7 @@ UIMiniMap._buildCache = function () {
   const padY = 5;
 
   // Measure header text width so the frame is wide enough to show map/street names
-  const hdrMarkW = (this.mapMark) ? 38 : 0; // map mark icon is 38x38
+  const hdrMarkW = this.mapMark ? MAP_MARK_SIZE : 0;
   const hdrNameX = nwW + 7 + hdrMarkW + 10;
   let headerTextW = 0;
   if (MapleMap.names) {
@@ -342,18 +368,22 @@ UIMiniMap._buildCache = function () {
     draw(this.btMin, minBtnX, minBtnY);
   }
 
-  // Map mark icon (38x38)
+  // Map mark icon. Going through draw() is what matters here: the mark is one
+  // of ~66 sprites decoded in one go at startup, so it is the piece most likely
+  // to still be undecoded on the first build. Skipping it silently baked an
+  // iconless header into the cache for the rest of the map — draw() flags the
+  // miss instead, and render() rebuilds until it lands.
   const markX = nwW + 7;
   const markY = 20;
-  if (this.mapMark && this.mapMark.width > 0) {
+  const markW = this.mapMark ? MAP_MARK_SIZE : 0;
+  if (this.mapMark) {
     ctx.strokeStyle = '#8e8e8e';
     ctx.lineWidth = 1;
-    ctx.strokeRect(markX - 0.5, markY - 0.5, this.mapMark.width + 1, this.mapMark.height + 1);
+    ctx.strokeRect(markX - 0.5, markY - 0.5, markW + 1, MAP_MARK_SIZE + 1);
     draw(this.mapMark, markX, markY);
   }
 
   // Street name and map name
-  const markW = (this.mapMark && this.mapMark.width > 0) ? this.mapMark.width : 0;
   const nameX = markX + markW + 10;
   if (MapleMap.names) {
     const streetName = MapleMap.names.streetName || '';
@@ -577,7 +607,7 @@ UIMiniMap.handleClick = function (cx: number, cy: number): boolean {
       return true;
     }
     if (hit(M.mapBtnX, M.mapBtnY, M.mapBtnW, M.mapBtnH)) {
-      console.log('[UIMiniMap] World map button clicked');
+      UIWorldMap.toggle(Number(MapleMap.mapId ?? 0));
       return true;
     }
     return false;
@@ -593,7 +623,7 @@ UIMiniMap.handleClick = function (cx: number, cy: number): boolean {
   }
 
   if (hit(bx + L.worldBtnX, by + L.worldBtnY, L.worldBtnW, L.worldBtnH)) {
-    console.log('[UIMiniMap] World map button clicked');
+    UIWorldMap.toggle(Number(MapleMap.mapId ?? 0));
     return true;
   }
 

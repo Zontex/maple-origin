@@ -12,6 +12,7 @@ import WZManager from '../wz-utils/WZManager';
 import { getEquipWzPath, EquipData } from '../Inventory/Item';
 import { getItemNameSync } from '../Quest/QuestData';
 import MyCharacter from '../MyCharacter';
+import { JOB_REQ_BITS } from '../Constants/Jobs';
 
 interface EquipInfo {
   reqLevel: number;
@@ -97,7 +98,9 @@ const CATEGORY_NAMES: Record<number, string> = {
 };
 
 // v83 reqJob bitmask, indices match Job/enable|disable 0..5
-const JOB_BITS = [0, 1, 2, 4, 8, 16]; // beginner, warrior, magician, bowman, thief, pirate
+// (beginner, warrior, magician, bowman, thief, pirate) — the same mask
+// MapleCharacter.canEquip enforces, so a greyed word here means a refused equip
+const JOB_BITS = JOB_REQ_BITS;
 
 const W = 261;            // Frame piece width
 const FRAME_CAP = 8;      // panel padding at top and bottom

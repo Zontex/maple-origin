@@ -17,6 +17,7 @@ import UIChannelSelect from "./UIChannelSelect";
 import UISystemOption from "./UISystemOption";
 import UIGameOption from "./UIGameOption";
 import UIKeyConfig from "./UIKeyConfig";
+import UIWorldMap from "./UIWorldMap";
 
 export interface UIMapInterface {
   statusBarLevelDigits: any[];
@@ -185,6 +186,7 @@ UIMap.addButtons = function (canvas) {
   void UISystemOption.initialize(canvas);
   void UIGameOption.initialize(canvas);
   void UIKeyConfig.initialize(canvas);
+  void UIWorldMap.initialize(canvas);
   // No server-side channels yet, so switching is a local selection only: the
   // player is told, and the choice is remembered for when the server grows
   // real channel support.
@@ -531,8 +533,9 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
     return;
   }
 
-  // Top-center mob HP gauge (drawn under the rest of the HUD)
-  UIMobGage.draw(canvas);
+  // Top-center boss HP gauge (drawn under the rest of the HUD). It follows
+  // whatever boss is on the map, so it needs the live monster list.
+  UIMobGage.draw(canvas, MapleMap.monsters);
   const barY = 529 + startUIPosition.y;
 
   UIDevTools.track('statusBar', startUIPosition.x, barY, 800, config.height - barY, 'screen', 'UI.wz/StatusBar.img');
@@ -632,6 +635,12 @@ UIMap.doRender = function (canvas, camera, lag, msPerTick, tdelta) {
   UISystemOption.draw(canvas, camera, lag, msPerTick, tdelta);
   UIGameOption.doUpdate(canvas);
   UIGameOption.draw(canvas, camera, lag, msPerTick, tdelta);
+  // World map sits above the option windows and below the cursor. Its input
+  // runs here with them; the drawing follows immediately since nothing else
+  // opens on top of it.
+  UIWorldMap.doUpdate(canvas);
+  UIWorldMap.draw(canvas, camera, lag, msPerTick, tdelta, Number(MapleMap.mapId ?? 0));
+
   UIKeyConfig.doUpdate(canvas);
   // Drawn from MapState instead, before the inventory/stats/quest windows —
   // this block runs after them, so KEYBOARD SETTING covered every menu

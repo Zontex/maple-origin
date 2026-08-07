@@ -38,6 +38,7 @@ import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
 import UIGameOption from "./UI/UIGameOption";
 import UIKeyConfig from "./UI/UIKeyConfig";
+import UIWorldMap from "./UI/UIWorldMap";
 import KeyBindings, { ACTIONS, BindableAction, FACE_EXPRESSIONS } from "./KeyBindings";
 import HenesysPQ from "./Events/HenesysPQ";
 
@@ -310,6 +311,9 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
 
   // v83 map-enter scripts (info/onUserEnter): the Maple Island job-experience
   // rooms play a Direction3 cutscene that ends by warping back out
+  // Where the Aran intro deposits you — Rien, which is also the returnMap the
+  // last two cutscene chambers name
+  const ARAN_INTRO_END_MAP = 140000000;
   const JOB_INTRO_SCRIPTS: Record<string, string> = {
     goSwordman: 'swordman',
     goMagician: 'magician',
@@ -328,6 +332,17 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
       console.warn(`[MapState] Job intro failed — returning to map ${returnMap}`);
       MapStateInstance.changeMap(returnMap);
     }
+  } else if (onUserEnter === 'aranDirection' && loadSeq === mapLoadSeq) {
+    // Aran's closing cutscene chambers (914090010-015, 914090100, 914090200).
+    // Same shape as the job-intro rooms — a single spawn portal, no way out —
+    // except the first six also carry returnMap 999999999, so there is no
+    // destination to fall back to. Athena's farewell warps you straight into
+    // the first one, which is a soft-lock until the scenes are played.
+    // Passing through to where the intro ends is the only safe behaviour.
+    const returnMap = MapleMap.wzNode?.info?.returnMap?.nValue;
+    const dest = returnMap && returnMap > 0 && returnMap < 999999999 ? returnMap : ARAN_INTRO_END_MAP;
+    console.warn(`[MapState] aranDirection cutscene not implemented — continuing to map ${dest}`);
+    MapStateInstance.changeMap(dest);
   }
   // Fade-in will be triggered automatically when doneLoading becomes true
 }
@@ -509,6 +524,11 @@ MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
       const cx = (event.clientX - rect.left) / scaleX;
       const cy = (event.clientY - rect.top) / scaleY;
 
+      // The world map covers the middle of the screen, so a click that lands
+      // on it must not also reach an NPC or a portal underneath. Its own
+      // buttons and links are driven from doUpdate; this only swallows.
+      if (UIWorldMap.isVisible && UIWorldMap.containsPoint(cx, cy)) return;
+
       // Minimap click (world button)
       if (UIMiniMap.handleClick(cx, cy)) return;
 
@@ -645,7 +665,7 @@ MapStateInstance.doUpdate = function (
         (MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) || ShopUI.isVisible || questDialogOpen ||
         DirectionScene.isActive || UIGameMenu.isVisible ||
         UISystemOption.isVisible || UIGameOption.isVisible ||
-        UIChannelSelect.isVisible || UIKeyConfig.isVisible;
+        UIChannelSelect.isVisible || UIKeyConfig.isVisible || UIWorldMap.isVisible;
 
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
@@ -742,6 +762,8 @@ MapStateInstance.doUpdate = function (
           MapleMap.npcDialog.setIsHidden(true);
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
+        } else if (UIWorldMap.isVisible) {
+          UIWorldMap.escape();
         } else if (UIKeyConfig.isVisible) {
           UIKeyConfig.hide();
         } else if (UISystemOption.isVisible) {

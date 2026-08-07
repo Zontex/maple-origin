@@ -126,12 +126,68 @@ const wzSize = function (node: any): { width: number; height: number } {
   return { width: img?.width ?? 0, height: img?.height ?? 0 };
 };
 
+/**
+ * The rows of a sprite that actually have ink in them.
+ *
+ * A handful of WZ canvases are far taller than the art they hold — the Lost
+ * Kid (NPC 1209006) is authored as 43x477 with the child occupying only the
+ * bottom 52px and the rest filled with near-invisible alpha. Anything that
+ * sizes itself to `nHeight` ends up reserving room for emptiness, which is
+ * how one NPC could stretch the dialog frame past the top and bottom of the
+ * screen.
+ *
+ * Returns null while the image is still decoding — callers should fall back
+ * to the declared canvas size until then.
+ */
+const INK_ALPHA = 24;  // the padding rows top out around 32; real art is 255
+const inkBoundsCache = new WeakMap<HTMLImageElement, { top: number; height: number }>();
+
+function verticalInkBounds(
+  img: HTMLImageElement | null | undefined
+): { top: number; height: number } | null {
+  if (!img || !img.complete || !img.naturalWidth || !img.naturalHeight) return null;
+  const cached = inkBoundsCache.get(img);
+  if (cached) return cached;
+
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  let bounds = { top: 0, height: h };
+  try {
+    const scratch = document.createElement('canvas');
+    scratch.width = w;
+    scratch.height = h;
+    const ctx = scratch.getContext('2d', { willReadFrequently: true });
+    if (ctx) {
+      ctx.drawImage(img, 0, 0);
+      const { data } = ctx.getImageData(0, 0, w, h);
+      let first = -1;
+      let last = -1;
+      for (let y = 0; y < h; y++) {
+        const rowStart = y * w * 4;
+        for (let x = 0; x < w; x++) {
+          if (data[rowStart + x * 4 + 3] > INK_ALPHA) {
+            if (first < 0) first = y;
+            last = y;
+            break;
+          }
+        }
+      }
+      if (first >= 0) bounds = { top: first, height: last - first + 1 };
+    }
+  } catch {
+    // Reading pixels can throw on a tainted canvas — keep the full height
+  }
+  inkBoundsCache.set(img, bounds);
+  return bounds;
+}
+
 const GUIUtil = {
   pointInRectangle,
   rectanglesOverlap,
   imageInView,
   tileRange,
   wzSize,
+  verticalInkBounds,
 };
 
 export default GUIUtil;

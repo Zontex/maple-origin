@@ -19,6 +19,13 @@ export default class QuestManager {
   // questId -> whether completion requirements were already fulfilled (for
   // firing the GMS "quest completed" notification exactly on the transition)
   private fulfilledState: Map<number, boolean> = new Map();
+  /**
+   * "Area info" — the free-form per-quest scratch strings the Aran and Evan
+   * tutorials use to remember which one-shot hint has already fired
+   * (`updateAreaInfo(21002, "arr0=o")`). Keyed by the info-quest id the
+   * scripts pass, which is the same `infoNumber` Check.img names.
+   */
+  private areaInfo: Map<number, string> = new Map();
   private character: MapleCharacter;
 
   constructor(character: MapleCharacter) {
@@ -108,6 +115,52 @@ export default class QuestManager {
 
   async initialize(): Promise<void> {
     await QuestData.initialize();
+  }
+
+  /**
+   * Drop every scrap of quest state. This manager hangs off the MyCharacter
+   * singleton, which outlives any one character: log out and pick a different
+   * one and the old quest log is still sitting here, so the restore below adds
+   * to it instead of replacing it — and the next autosave writes the lot onto
+   * the character you just loaded. A freshly created character turned up with
+   * someone else's completed quests, job-advancement flags and mob progress.
+   */
+  reset(): void {
+    this.activeQuests.clear();
+    this.completedQuests.clear();
+    this.fulfilledState.clear();
+    this.areaInfo.clear();
+    this.trackedQuests = [];
+  }
+
+  // ─── Area info (tutorial hint bookkeeping) ───────────────────────
+
+  /** True once `data` has been written into this quest's area-info string */
+  containsAreaInfo(questId: number, data: string): boolean {
+    return (this.areaInfo.get(questId) || '').includes(data);
+  }
+
+  /**
+   * Merge `data` into the quest's area-info string. Scripts pass either a
+   * single `key=value` or a whole `;`-separated run of them, and re-set keys
+   * they've already written, so each key is stored once and later writes win.
+   */
+  updateAreaInfo(questId: number, data: string): void {
+    const entries = new Map<string, string>();
+    const absorb = (raw: string) => {
+      for (const pair of raw.split(';')) {
+        if (!pair) continue;
+        const eq = pair.indexOf('=');
+        if (eq < 0) entries.set(pair, '');
+        else entries.set(pair.slice(0, eq), pair.slice(eq + 1));
+      }
+    };
+    absorb(this.areaInfo.get(questId) || '');
+    absorb(data || '');
+    const merged = [...entries]
+      .map(([k, v]) => (v === '' ? k : `${k}=${v}`))
+      .join(';');
+    this.areaInfo.set(questId, merged);
   }
 
   getQuestState(questId: number): QuestState {
@@ -563,6 +616,27 @@ export default class QuestManager {
     if (req.meso && (this.character.inventory?.mesos ?? 0) < req.meso) return false;
 
     return true;
+  }
+
+  /**
+   * Cosmic's needQuestItem: whether a quest drop should still drop for us.
+   *
+   * Having the quest active is only half the test — GMS also stops the drop
+   * once you are holding the number the quest asks for. Without the count half,
+   * killing a second Jr. Stone Ball for "Todd's How-to-Hunt" (which wants one
+   * shellpiece) drops a second one, and the spare sits in the ETC tab forever
+   * after turn-in, since completing the quest only removes what it asked for.
+   */
+  needQuestItem(questId: number, itemId: number): boolean {
+    if (!this.activeQuests.has(questId)) return false;
+
+    const reqs = QuestData.requirements.get(questId);
+    const required = reqs?.complete.items?.find((i) => i.id === itemId)?.count ?? 0;
+    // Quest-gated drops that the quest does not actually count (flavour items,
+    // scripted checks) stay unlimited, exactly as they are in Cosmic
+    if (required <= 0) return true;
+
+    return this.getItemCount(itemId) < required;
   }
 
   getItemCount(itemId: number): number {

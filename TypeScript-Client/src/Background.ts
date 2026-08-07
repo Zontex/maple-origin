@@ -3,6 +3,26 @@ import GameCanvas from "./GameCanvas";
 import config from "./Config";
 import WZManager from "./wz-utils/WZManager";
 
+/**
+ * Factor that blows the authored background frame up to cover the viewport.
+ *
+ * Every v83 back layer is drawn to blanket exactly one 800x600 view: the sheets
+ * end where the screen ended, and the pieces are placed relative to the screen
+ * centre. Give that composition a 1920x1080 window and it comes apart — the
+ * island sheets in vicportTown stop in mid-air, and the 256x600 sky tile, typed
+ * to repeat on Y where repeating could never show, bands across the lower
+ * screen. Rather than tile art that was never meant to tile, the whole layer
+ * stack is composed at the authored size and scaled up, so a high-resolution
+ * viewport shows the original scene at the original proportions. Only the
+ * background scales; the world in front of it stays 1:1.
+ */
+export function getBackgroundScale(): number {
+  return Math.max(
+    config.width / config.originalWidth,
+    config.height / config.originalHeight
+  );
+}
+
 class Background {
   wzNode: any;
   ani: boolean = false;
@@ -144,22 +164,38 @@ class Background {
       }
       return;
     }
+    // The caller draws this pass under getBackgroundScale(), so the viewport is
+    // measured in authored units here — never in config.width/height, which are
+    // device pixels and would put the parallax anchor off-screen.
+    const scale = getBackgroundScale();
+    const viewW = config.width / scale;
+    const viewH = config.height / scale;
+    // Camera in authored units. Every term derived from it is magnified by the
+    // pass, so feeding it raw device pixels would make a layer track the camera
+    // `scale` times too fast — the type-4 cloud bands, which follow the camera
+    // 1:1, would race across the sky at more than twice the speed of the ground
+    // under them. Divided here, the on-screen parallax rate stays exactly what
+    // it is at 800x600. The drift term is scene animation, not camera motion,
+    // so it magnifies with the art it belongs to.
+    const camX = camera.x / scale;
+    const camY = camera.y / scale;
+
     let dx = this.x;
     let dy = this.y;
 
     if (this.velocityX !== 0) {
-      dx += (tdelta * this.rx) / 200 - camera.x;
+      dx += (tdelta * this.rx) / 200 - camX;
     } else {
-      const wOffset = config.width / 2;
-      const shiftX = (this.rx * (camera.x + wOffset)) / 100 + wOffset;
+      const wOffset = viewW / 2;
+      const shiftX = (this.rx * (camX + wOffset)) / 100 + wOffset;
       dx += shiftX;
     }
 
     if (this.velocityY !== 0) {
-      dy += (tdelta * this.ry) / 200 - camera.y;
+      dy += (tdelta * this.ry) / 200 - camY;
     } else {
-      const hOffset = config.height / 2;
-      const shiftY = (this.ry * (camera.y + hOffset)) / 100 + hOffset;
+      const hOffset = viewH / 2;
+      const shiftY = (this.ry * (camY + hOffset)) / 100 + hOffset;
       dy += shiftY;
     }
 
@@ -207,14 +243,13 @@ class Background {
     const percent = this.delay / this.nextDelay;
     const alpha = percent * a1 + (1 - percent) * a0;
 
-    // Wider-than-authored viewports: a type-0 panorama sheet sized to blanket
-    // the 800x600 view (dryRock's 900x882 cloud sheet over Perion) runs out
-    // at the edges and bares the flat sky tile behind it. Screen-filling
-    // sheets are therefore tiled once the viewport outgrows the authored
-    // frame; small type-0 props (totems, distant rocks) stay single — tiling
-    // those would march copies across the sky.
-    const effTileX = this.tileX || (config.width > 800 && width >= 800);
-    const effTileY = this.tileY || (config.height > 600 && height >= 600);
+    // Tiling is whatever the WZ type asks for and nothing more. Sheets used to
+    // be force-tiled to paper over the gaps a wide viewport opened up, which
+    // repeated art that has no seamless join (vicportTown's 800-wide horizon
+    // band showed its mountains butting against its own beach). Scaling the
+    // pass removes the gaps, so the force-tiling can go.
+    const effTileX = this.tileX;
+    const effTileY = this.tileY;
 
     let xBegin = dx;
     let xEnd = dx;
@@ -229,12 +264,12 @@ class Background {
       }
       xBegin -= width;
 
-      xEnd -= config.width;
+      xEnd -= viewW;
       xEnd %= cx;
       if (xEnd >= 0) {
         xEnd -= cx;
       }
-      xEnd += config.width;
+      xEnd += viewW;
     }
 
     if (effTileY) {
@@ -245,12 +280,12 @@ class Background {
       }
       yBegin -= height;
 
-      yEnd -= config.height;
+      yEnd -= viewH;
       yEnd %= cy;
       if (yEnd >= 0) {
         yEnd -= cy;
       }
-      yEnd += config.height;
+      yEnd += viewH;
     }
 
     for (dx = Math.floor(xBegin); dx <= xEnd; dx += cx) {

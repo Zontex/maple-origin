@@ -60,6 +60,17 @@ class NPC {
   // Invisible trigger NPC (map life hide=1) — never rendered or clickable
   hide: boolean = false;
 
+  /**
+   * The NPC's authored click rectangle from `info/dcLeft|dcTop|dcRight|
+   * dcBottom`, as offsets from (x, cy). 5,893 of the 6,900-odd NPCs declare
+   * one; for most it simply restates the sprite's own box, but a handful of
+   * NPCs are painted into the map scenery and exist only as an invisible
+   * hitbox somewhere else entirely — Athena Pierce on the ark (1209007) is a
+   * 1x229 transparent strip at the foot of a ladder whose box sits 150-210px
+   * above, over the art. Without this she is effectively unclickable.
+   */
+  clickBox: { left: number; top: number; right: number; bottom: number } | null = null;
+
   // Whether to display chat balloon
   showDialog: boolean = false;
   
@@ -119,6 +130,21 @@ class NPC {
       npcFile = await WZManager.get(`Npc.wz/${strId}.img`);
     }
     this.npcFile = npcFile;
+
+    // Authored click rectangle, when the NPC declares one
+    const dc = (key: string) => npcFile.info?.nGet(key)?.nGet("nValue", null);
+    const dcLeft = dc("dcLeft");
+    const dcTop = dc("dcTop");
+    const dcRight = dc("dcRight");
+    const dcBottom = dc("dcBottom");
+    if (dcLeft !== null && dcTop !== null && dcRight !== null && dcBottom !== null) {
+      this.clickBox = {
+        left: Number(dcLeft),
+        top: Number(dcTop),
+        right: Number(dcRight),
+        bottom: Number(dcBottom),
+      };
+    }
 
     // Gather stance frames
     this.stances = {};
@@ -310,6 +336,34 @@ class NPC {
     this.tvAdNextDelay = stanceFrame.nGet("delay").nGet("nValue", 100);
   }
 
+  /**
+   * The NPC's extent in world coordinates: the union of its drawn sprite and
+   * its authored click box. Both matter — the sprite is what you see, the box
+   * is what v83 says you can click, and for scenery-painted NPCs only the box
+   * is anywhere near the visible art.
+   */
+  getBounds(): { left: number; top: number; right: number; bottom: number } {
+    const frame = this.stances?.[this.stance]?.frames?.[this.frame];
+    const w = frame?.nWidth || 56;
+    const h = frame?.nHeight || 70;
+    const originX = frame?.nGet?.("origin")?.nGet?.("nX", 0) || Math.floor(w / 2);
+    const originY = frame?.nGet?.("origin")?.nGet?.("nY", 0) || h;
+    const adjustX = !this.flipped ? originX : w - originX;
+
+    let left = this.x - adjustX;
+    let top = this.cy - originY;
+    let right = left + w;
+    let bottom = top + h;
+
+    if (this.clickBox) {
+      left = Math.min(left, this.x + this.clickBox.left);
+      top = Math.min(top, this.cy + this.clickBox.top);
+      right = Math.max(right, this.x + this.clickBox.right);
+      bottom = Math.max(bottom, this.cy + this.clickBox.bottom);
+    }
+    return { left, top, right, bottom };
+  }
+
   draw(canvas: GameCanvas, camera: CameraInterface, lag: number, msPerTick: number, tdelta: number) {
     if (this.hide) return;
 
@@ -395,14 +449,20 @@ class NPC {
     const icon = frames[this.questIconFrame % frames.length];
     if (!icon) return;
 
-    const npcScreenX = this.x - camera.x;
-    const npcScreenY = this.cy - camera.y;
+    // Float above the NPC's own head, not a fixed distance above its feet.
+    // The old constant assumed every NPC was about 80px tall, so it buried
+    // the notice inside tall sprites and stranded it far below the scenery-
+    // painted ones — Athena's book sat down at the foot of her ladder while
+    // she leaned out of a window 200px up.
+    const bounds = this.getBounds();
+    const centerX = Math.round((bounds.left + bounds.right) / 2 - camera.x);
+    const headY = Math.round(bounds.top - camera.y);
 
     if (balloon) {
       const bw = balloon.width;
       const bh = balloon.height;
-      const bx = Math.round(npcScreenX - bw / 2);
-      const by = Math.round(npcScreenY - bh - icon.height - 80);
+      const bx = Math.round(centerX - bw / 2);
+      const by = headY - bh - icon.height;
 
       canvas.drawImage({ img: balloon, dx: bx, dy: by });
 
@@ -412,8 +472,8 @@ class NPC {
     } else {
       canvas.drawImage({
         img: icon,
-        dx: Math.round(npcScreenX - icon.width / 2),
-        dy: Math.round(npcScreenY - 120),
+        dx: Math.round(centerX - icon.width / 2),
+        dy: headY - icon.height - 40,
       });
     }
   }

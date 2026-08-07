@@ -55,10 +55,11 @@ function handleCreateCharacter(playerId, data) {
     skin: data.skin,
     gender: data.gender,
     equips: data.equips,
+    jobId: data.jobId,
   });
   sendToPlayer(player.ws, { type: 'create_character_result', ...result });
   if (result.success) {
-    console.log(`[Char] Created: ${data.name} in world ${data.worldId}`);
+    console.log(`[Char] Created: ${data.name} (job ${data.jobId ?? 0}) in world ${data.worldId}`);
     const characters = Character.getByUserAndWorld(player.userId, data.worldId);
     sendToPlayer(player.ws, { type: 'character_list', worldId: data.worldId, characters });
   }

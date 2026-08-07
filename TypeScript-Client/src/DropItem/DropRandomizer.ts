@@ -191,11 +191,16 @@ const getRandomDropItems = async (
   mobDropItems.forEach((monsterDropEntry: MonsterDropEntry) =>
     chooseRandomAmounts(monsterDropEntry)
   );
-  // Quest-gated entries only drop while that quest is active (Cosmic needQuestItem)
+  // Quest-gated entries only drop while that quest is active AND still short of
+  // what it asks for — the full Cosmic needQuestItem test. Checking only that
+  // the quest was active let a second kill drop a second copy of a one-item
+  // requirement, leaving a spare in the ETC tab that turn-in never cleans up.
   const questManager = (window as any).charecter?.questManager;
   return mobDropItems.filter((monsterDropEntry: MonsterDropEntry) => {
     if (monsterDropEntry.questid && monsterDropEntry.questid > 0) {
-      if (!questManager?.activeQuests?.has(monsterDropEntry.questid)) return false;
+      if (!questManager?.needQuestItem?.(monsterDropEntry.questid, monsterDropEntry.itemId)) {
+        return false;
+      }
     }
     return isDroped(monsterDropEntry.chance);
   });

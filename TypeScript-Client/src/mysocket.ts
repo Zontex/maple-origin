@@ -268,7 +268,11 @@ class MySocket {
   }
 
   // Create a character
-  createCharacter(data: { worldId: number; name: string; hair: number; face: number; skin: number; gender: number }): Promise<any> {
+  createCharacter(data: {
+    worldId: number; name: string; hair: number; face: number; skin: number; gender: number;
+    jobId?: number;
+    equips?: { slot: number; itemId: number }[];
+  }): Promise<any> {
     return new Promise((resolve) => {
       this._createCharCallback = resolve;
       this.sendMessage({ type: 'create_character', data });
@@ -1652,7 +1656,7 @@ class MySocket {
     const attacker = data.sourcePlayerId
       ? this.otherPlayers.get(data.sourcePlayerId)
       : null;
-    if (attacker) mob.aggroTarget = attacker;
+    if (attacker) mob.setAggro(attacker);
     // Apply damage on host — hit() handles HP, death, drops
     mob.hit(data.damage, data.knockbackDir || 1, null);
   }

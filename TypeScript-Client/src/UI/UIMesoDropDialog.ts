@@ -5,18 +5,35 @@ import { MapleStanceButton } from './MapleStanceButton';
 import ClickManager from './ClickManager';
 import config from '../Config';
 
-// Notice4 known dimensions from WZ data
+// Notice3 and Notice4 known dimensions from WZ data. The two frames are the
+// same 266-wide panel and differ only in the bottom piece: Notice4/s has the
+// white entry box drawn into the sprite, Notice3/s is a plain panel. A dialog
+// that only reports something ("You cannot sell this item.") therefore has to
+// be built from Notice3 — hiding the input value is not enough, the box itself
+// is part of the frame and shows up under text with nothing to type into it.
 const NOTICE_WIDTH = 266;
 const NOTICE_TOP_H = 21;
 const NOTICE_CENTER_H = 20;
-const NOTICE_BOTTOM_H = 78;
+const INPUT_BOTTOM_H = 78;   // Notice4/s — entry box above the button strip
+const MESSAGE_BOTTOM_H = 55; // Notice3/s — button strip only
 const CENTER_REPEATS = 2;
 
-// Total dialog height
-const DIALOG_H = NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS + NOTICE_BOTTOM_H;
+// Blue panel interior, measured from the dialog's top-left: the top piece is
+// frame + grey down to row 11, and Notice3's bottom piece stays blue for 11
+// more rows before its border. Message text is centred in that band.
+const BLUE_TOP = 11;
+const BLUE_TAIL = 11;
+const LINE_H = 16;
 
-// Button sizes: BtOK2=41x18, BtCancel2=47x18
-const BTN_OK_W = 41;
+// Button strip offsets within the bottom piece: Notice4's grey runs 35..72
+// (below the entry box), Notice3's runs 12..49.
+const INPUT_BTN_Y = 50;
+const MESSAGE_BTN_Y = 21;
+
+// Button sizes: both BtOK2 and BtCancel2 are 47x18 in Basic.img. OK was down
+// as 41 here, which ate the whole gap between the pair and left it 3px off
+// centre.
+const BTN_OK_W = 47;
 const BTN_CANCEL_W = 47;
 const BTN_GAP = 6;
 
@@ -24,9 +41,8 @@ export type DropDialogMode = 'meso' | 'item' | 'message';
 
 export default class UIMesoDropDialog {
   private basicImg: any = null;
-  private noticeTopNode: any = null;
-  private noticeCenterNode: any = null;
-  private noticeBottomNode: any = null;
+  private inputFrame: { t: any; c: any; s: any } | null = null;
+  private messageFrame: { t: any; c: any; s: any } | null = null;
   isHidden: boolean = true;
   private buttons: MapleStanceButton[] = [];
   private canvas: GameCanvas;
@@ -58,20 +74,37 @@ export default class UIMesoDropDialog {
   }
 
   private get y(): number {
-    return Math.floor((config.height - DIALOG_H) / 2);
+    return Math.floor((config.height - this.dialogHeight) / 2);
+  }
+
+  /** Frame pieces for the current mode — Notice3 reports, Notice4 asks. */
+  private get frame(): { t: any; c: any; s: any } {
+    return (this.mode === 'message' ? this.messageFrame : this.inputFrame)!;
+  }
+
+  private get bottomHeight(): number {
+    return this.mode === 'message' ? MESSAGE_BOTTOM_H : INPUT_BOTTOM_H;
+  }
+
+  private get dialogHeight(): number {
+    return NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS + this.bottomHeight;
   }
 
   async load() {
     this.basicImg = await WZManager.get('UI.wz/Basic.img');
 
-    this.noticeTopNode = this.basicImg.nGet('Notice4').nGet('t');
-    this.noticeCenterNode = this.basicImg.nGet('Notice4').nGet('c');
-    this.noticeBottomNode = this.basicImg.nGet('Notice4').nGet('s');
+    const pieces = (name: string) => {
+      const node = this.basicImg.nGet(name);
+      const frame = { t: node.nGet('t'), c: node.nGet('c'), s: node.nGet('s') };
+      // Pre-decode images so they're ready when we draw
+      frame.t.nGetImage();
+      frame.c.nGetImage();
+      frame.s.nGetImage();
+      return frame;
+    };
 
-    // Pre-decode images so they're ready when we draw
-    this.noticeTopNode.nGetImage();
-    this.noticeCenterNode.nGetImage();
-    this.noticeBottomNode.nGetImage();
+    this.inputFrame = pieces('Notice4');
+    this.messageFrame = pieces('Notice3');
   }
 
   private createButtons() {
@@ -79,12 +112,10 @@ export default class UIMesoDropDialog {
     this.buttons.forEach(btn => ClickManager.removeButton(btn));
     this.buttons = [];
 
-    // Bottom piece starts here
+    // Bottom piece starts here. Buttons sit in its grey strip, which begins
+    // below the entry box on Notice4 and right under the panel on Notice3.
     const bottomY = this.y + NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS;
-    // Buttons centered in the bottom piece, below the input box
-    // The input box area is roughly at y+14 to y+32 in the bottom piece
-    // Buttons sit at roughly y+50 in the bottom piece
-    const btnY = bottomY + 50;
+    const btnY = bottomY + (this.mode === 'message' ? MESSAGE_BTN_Y : INPUT_BTN_Y);
     const totalBtnW = BTN_OK_W + BTN_GAP + BTN_CANCEL_W;
     const btnStartX = this.x + Math.floor((NOTICE_WIDTH - totalBtnW) / 2);
 
@@ -250,30 +281,39 @@ export default class UIMesoDropDialog {
 
     const x = this.x;
     let y = this.y;
+    const frame = this.frame;
+    if (!frame) return;
 
     // Draw top piece
-    canvas.drawImage({ img: this.noticeTopNode.nGetImage(), dx: x, dy: y });
+    canvas.drawImage({ img: frame.t.nGetImage(), dx: x, dy: y });
     y += NOTICE_TOP_H;
 
     // Draw repeated center strips
     for (let i = 0; i < CENTER_REPEATS; i++) {
-      canvas.drawImage({ img: this.noticeCenterNode.nGetImage(), dx: x, dy: y });
+      canvas.drawImage({ img: frame.c.nGetImage(), dx: x, dy: y });
       y += NOTICE_CENTER_H;
     }
 
     // Draw bottom piece
-    canvas.drawImage({ img: this.noticeBottomNode.nGetImage(), dx: x, dy: y });
+    canvas.drawImage({ img: frame.s.nGetImage(), dx: x, dy: y });
 
     // Draw dialog text centered in the top + center area
     const textX = x + Math.floor(NOTICE_WIDTH / 2);
     const textAreaTop = this.y + NOTICE_TOP_H + 2;
 
     if (this.mode === 'message') {
+      // Nothing follows the text on a message, so it sits centred in the blue
+      // panel rather than pinned under the top edge with dead space below.
+      const blueTop = this.y + BLUE_TOP;
+      const blueBottom = this.y + NOTICE_TOP_H + NOTICE_CENTER_H * CENTER_REPEATS + BLUE_TAIL;
+      const blockTop = Math.floor(
+        (blueTop + blueBottom - this.messageLines.length * LINE_H) / 2
+      );
       this.messageLines.forEach((line, i) => {
         canvas.drawText({
           text: line,
           x: textX,
-          y: textAreaTop + i * 16,
+          y: blockTop + i * LINE_H,
           color: '#000000',
           fontSize: 12,
           align: 'center',

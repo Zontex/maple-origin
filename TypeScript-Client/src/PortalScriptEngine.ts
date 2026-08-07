@@ -23,11 +23,21 @@ export default class PortalScriptEngine {
 
   lastMessage: string = '';
 
+  /** Surface a portal script's message as a system line in the chat log */
+  private showMessage(text: string) {
+    if (!text) return;
+    this.lastMessage = text;
+    console.log(`[PortalScript] ${text}`);
+    import('./UI/UIChatLog')
+      .then(({ default: UIChatLog }) => UIChatLog.system(text))
+      .catch(() => {});
+  }
+
   async execute(
     scriptName: string,
     character: any,
     portal: any,
-    changeMapFn: (mapId: number, portalName?: string) => Promise<void>
+    changeMapFn: (mapId: number, portalNameOrIndex?: string | number) => Promise<void>
   ): Promise<boolean> {
     this.lastMessage = '';
     const scriptCode = await this.loadScript(scriptName);
@@ -62,10 +72,16 @@ export default class PortalScriptEngine {
     // Handle warp if script called pi.warp()
     if (warpTarget !== null) {
       const wt = warpTarget as { mapId: number; portal?: any };
-      const portalName = typeof wt.portal === 'string' ? wt.portal : undefined;
-      console.log(`[PortalScript] Warping to map ${wt.mapId}, portal=${portalName}`);
+      // The second argument is either a portal NAME or a portal INDEX, and
+      // both have to survive. Dropping the numeric form put every scripted
+      // return at the destination's spawn point instead of the door it came
+      // out of — leaving the Wounded Soldier's Camp landed you in the middle
+      // of the ark camp rather than at its entrance.
+      const target =
+        typeof wt.portal === 'string' || typeof wt.portal === 'number' ? wt.portal : undefined;
+      console.log(`[PortalScript] Warping to map ${wt.mapId}, portal=${JSON.stringify(target)}`);
       fadeToBlack();
-      await changeMapFn(wt.mapId, portalName);
+      await changeMapFn(wt.mapId, target);
       return true;
     }
 
@@ -137,7 +153,7 @@ export default class PortalScriptEngine {
         if (c?.savedLocations) delete c.savedLocations[type];
       },
       getInventory(type: any) { return { getNumFreeSlot() { return 10; } }; },
-      dropMessage(type: number, text: string) { console.log(`[PortalScript] ${text}`); },
+      dropMessage: (type: number, text: string) => { this.showMessage(text); },
       isQuestStarted(questId: number) { return questManager?.getQuestState(questId) === QuestState.STARTED; },
       isQuestCompleted(questId: number) { return questManager?.getQuestState(questId) === QuestState.COMPLETED; },
     };
@@ -196,6 +212,17 @@ export default class PortalScriptEngine {
       getQuestProgressInt(questId: number) { return 0; },
       setQuestProgress(questId: number, progress: string) { /* stub */ },
 
+      // Area info — how the tutorials remember which one-shot hint already
+      // fired. Without a real implementation the safe-shim's chainable no-op
+      // reads as truthy, every `if (containsAreaInfo(...)) return false` fires
+      // on the first visit, and none of the guidance ever shows.
+      containsAreaInfo(questId: number, data: string) {
+        return questManager?.containsAreaInfo?.(questId, data) ?? false;
+      },
+      updateAreaInfo(questId: number, data: string) {
+        questManager?.updateAreaInfo?.(questId, data);
+      },
+
       // Items
       haveItem(itemId: number, count?: number) {
         return (questManager?.getItemCount(itemId) ?? 0) >= (count ?? 1);
@@ -212,11 +239,16 @@ export default class PortalScriptEngine {
       blockPortal(name?: string) { onBlock(); },
       unblockPortal(name?: string) { /* stub */ },
 
-      // Messages — stored so caller can display them
-      message: (text: string) => { console.log(`[PortalScript] ${text}`); this.lastMessage = text; },
-      playerMessage: (type: number, text: string) => { console.log(`[PortalScript] ${text}`); this.lastMessage = text; },
-      dropMessage: (type: number, text: string) => { console.log(`[PortalScript] ${text}`); this.lastMessage = text; },
-      mapMessage: (type: number, text: string) => { console.log(`[PortalScript] ${text}`); this.lastMessage = text; },
+      // Messages — shown in the chat log, the way the original client does.
+      // These are not decoration: a blocked portal explains itself only
+      // through them ("You can only exit after you accept the quest from
+      // Athena Pierce"), and the Aran tutorial teaches the attack key this
+      // way. Swallowing them to the console leaves the player facing a
+      // portal that silently refuses and no idea why.
+      message: (text: string) => { this.showMessage(text); },
+      playerMessage: (type: number, text: string) => { this.showMessage(text); },
+      dropMessage: (type: number, text: string) => { this.showMessage(text); },
+      mapMessage: (type: number, text: string) => { this.showMessage(text); },
 
       // Stubs for unimplemented systems
       getParty() { return null; },

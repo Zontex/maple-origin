@@ -28,6 +28,7 @@ import { AttackType } from "./Constants/AttackType";
 import Inventory from "./Inventory/Inventory";
 import Stats, { DamageRange } from "./Stats/Stats";
 import { BOOSTER_SKILL_IDS } from "./Constants/CombatSkills";
+import { jobMeetsEquipReq } from "./Constants/Jobs";
 import { MapleMap } from "./MapleMap";
 import Monster from "./Monster";
 import Portal from "./Portal";
@@ -969,10 +970,13 @@ class MapleCharacter {
   }
 
   /**
-   * v83 equip requirement gate (Cosmic canWearEquipment parity): level, total
-   * stats (base + equip bonuses) and fame must meet the item's req values.
-   * reqJob is display-only in GMS — any class may wear any equip whose stat
-   * requirements are met.
+   * v83 equip requirement gate: job, level, total stats (base + equip bonuses)
+   * and fame must all meet the item's req values.
+   *
+   * reqJob was skipped here on the belief that GMS treated it as a display-only
+   * hint, which let a warrior wear the Grey/Brown Training Shirt (1040017,
+   * reqJob 2). GMS enforces it — the job bar at the bottom of the tooltip is
+   * exactly this mask, and the greyed-out classes are the ones refused.
    */
   canEquip(infoNode: any, itemId?: number): boolean {
     // Gender lives in the item ID, not the info node: the thousands digit of
@@ -990,6 +994,7 @@ class MapleCharacter {
     };
     const s: any = this.stats;
     return (
+      jobMeetsEquipReq(s.jobId ?? 0, req("reqJob")) &&
       s.level >= req("reqLevel") &&
       (s.localStr ?? s.str) >= req("reqSTR") &&
       (s.localDex ?? s.dex) >= req("reqDEX") &&
@@ -1898,10 +1903,10 @@ isCloseToMob = (inAllDirections = true) => {
           portal.script,
           this,
           portal,
-          async (mapId: number, portalName?: string) => {
+          async (mapId: number, portalNameOrIndex?: string | number) => {
             const MapStateInstance = (window as any).MapStateInstance;
             if (MapStateInstance?.changeMap) {
-              await MapStateInstance.changeMap(mapId, portalName);
+              await MapStateInstance.changeMap(mapId, portalNameOrIndex);
             }
           }
         );
@@ -2469,8 +2474,19 @@ isCloseToMob = (inAllDirections = true) => {
     if (currentTime - this.lastHitTime < this.hitCooldownTimeInMS) return;
     this.lastHitTime = currentTime;
 
-    // Tutorial mobs always miss the player
-    const TUTORIAL_MOB_IDS = [9300018, 9300328, 9300383, 9409000, 9409001];
+    // Tutorial mobs always miss the player.
+    //
+    // The Aran trio (9300379/80/81) is the Black Mage's army in the Burning
+    // Forest. They carry 60,000-80,000 HP and 0 EXP, no quest or portal in the
+    // chain asks for a kill, and each one spawns in exactly one tutorial map:
+    // they are scenery to practice the attack key on while the arrows point
+    // you west, not a fight. A level 1 Aran with 50 HP cannot walk past eleven
+    // of them across three maps if they connect, and dying there force-returns
+    // you to the start of the tutorial.
+    const TUTORIAL_MOB_IDS = [
+      9300018, 9300328, 9300383, 9409000, 9409001,
+      9300379, 9300380, 9300381,
+    ];
     const isTutorialMob = TUTORIAL_MOB_IDS.includes(monster.id);
 
     const isMiss = isTutorialMob || (isMagic

@@ -124,6 +124,25 @@ export function getJobNiche(jobId: number): number {
   return Math.floor((jobId / 100) % 10);
 }
 
+/**
+ * Equip reqJob bitmask, indexed by job niche. A beginner has no bit of their
+ * own, so any item that names a class at all is closed to them until they
+ * advance — which is why 0 has to mean "everyone" rather than "beginner".
+ */
+export const JOB_REQ_BITS = [0, 1, 2, 4, 8, 16];
+
+/**
+ * Whether a job may wear an equip with this `info/reqJob`. Values combine, so
+ * a dagger at 9 is warrior|thief and a spear at 13 is warrior|bowman|thief.
+ */
+export function jobMeetsEquipReq(jobId: number, reqJob: number): boolean {
+  if (!reqJob) return true;   // 0 — no class named, anyone may wear it
+  if (reqJob < 0) return true; // -1 on a few event weapons: every bit set
+  const niche = getJobNiche(jobId);
+  if (niche > 5) return true; // GM jobs (800/900) wear anything
+  return (reqJob & JOB_REQ_BITS[niche]) !== 0;
+}
+
 /** Get job advancement branch: 0=beginner, 1=1st job, 2=2nd, 3=3rd, 4=4th */
 export function getJobBranch(jobId: number): number {
   if (jobId % 1000 === 0) return 0; // Beginner/Noblesse/Legend

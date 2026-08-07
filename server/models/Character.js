@@ -13,6 +13,44 @@ const DEFAULT_EQUIPS = [
 // New characters start with empty inventory
 const DEFAULT_ITEMS = [];
 
+// The only jobs a character may be created as, and where each one starts.
+// Anything else the client asks for is refused — creation is the one place a
+// player could otherwise hand themselves a job they never advanced into.
+const CREATABLE_JOBS = {
+  0: 10000,        // Beginner  — Maple Island: Amherst
+  1000: 130030000, // Noblesse  — Ereve, first room of the Cygnus tutorial
+  2000: 914000000, // Legend    — Rien snowfield, first room of the Aran tutorial
+};
+
+/**
+ * Starting stats, per creatable job.
+ *
+ * v83 has no character-creation dice — Nexon dropped the stat roll around
+ * v56-v63 — so every level 1 of a given class starts identical. Explorers get
+ * a STR-weighted 25 points so a fresh Beginner can actually kill Snails and
+ * Shrooms on Maple Island; Noblesse get a flat all-round baseline. None of it
+ * is permanent: the 1st job instructor at level 10 (8 for Magicians) resets
+ * and re-allocates to suit the class you pick.
+ *
+ * These live here, not in the table definition. A DDL default is invisible to
+ * the code and, worse, frozen at whatever the database was first created with
+ * — `CREATE TABLE IF NOT EXISTS` never revisits it, so db.js and a long-lived
+ * maple.db had silently disagreed about both stats and starting mesos.
+ */
+const STARTING_STATS = {
+  0:    { str: 12, dex: 5, int: 4, luk: 4 },  // Explorer / Beginner
+  1000: { str: 6,  dex: 6, int: 6, luk: 6 },  // Noblesse (Cygnus Knight)
+  // Aran: the spread Nexon shipped isn't confirmed — using the Explorer one
+  // for now, since Aran is a pure warrior and starts with a polearm
+  2000: { str: 12, dex: 5, int: 4, luk: 4 },  // Legend (Aran)
+};
+
+// v83 level 1: 50 HP / 5 MP for every class (many quest scripts test
+// `getHp() >= 50`), no AP banked, and an empty wallet
+const STARTING_HP = 50;
+const STARTING_MP = 5;
+const STARTING_MESOS = 0;
+
 class Character {
   static isNameTaken(worldId, name) {
     const db = getDb();
@@ -25,13 +63,18 @@ class Character {
     return { valid: true, taken: !!existing };
   }
 
-  static create(userId, { worldId, name, hair, face, skin, gender, equips }) {
+  static create(userId, { worldId, name, hair, face, skin, gender, equips, jobId }) {
     if (typeof worldId !== 'number') {
       return { success: false, error: 'Invalid world' };
     }
     if (!NAME_REGEX.test(name)) {
       return { success: false, error: 'Name must be 3-12 characters (letters and numbers only)' };
     }
+
+    // Job decides the start map, not the client — an unknown job falls back to
+    // Beginner rather than being honoured
+    const job = Object.prototype.hasOwnProperty.call(CREATABLE_JOBS, jobId) ? Number(jobId) : 0;
+    const startMap = CREATABLE_JOBS[job];
 
     const db = getDb();
 
@@ -52,8 +95,12 @@ class Character {
     }
 
     const insertChar = db.prepare(`
-      INSERT INTO characters (user_id, world_id, name, hair, face, skin, gender)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO characters (
+        user_id, world_id, name, hair, face, skin, gender, job_id, map_id,
+        level, exp, str, dex, int, luk, ap,
+        hp, max_hp, mp, max_mp, mesos, fame
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertEquip = db.prepare(`
@@ -65,9 +112,13 @@ class Character {
     `);
 
     const createTransaction = db.transaction(() => {
+      const stats = STARTING_STATS[job] || STARTING_STATS[0];
       const result = insertChar.run(
         userId, worldId, name,
-        hair || 30030, face || 20000, skin || 0, gender || 0
+        hair || 30030, face || 20000, skin || 0, gender || 0,
+        job, startMap,
+        1, 0, stats.str, stats.dex, stats.int, stats.luk, 0,
+        STARTING_HP, STARTING_HP, STARTING_MP, STARTING_MP, STARTING_MESOS, 0
       );
       const charId = result.lastInsertRowid;
 

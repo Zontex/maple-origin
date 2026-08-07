@@ -13,7 +13,6 @@ import GameCanvas from "./GameCanvas";
 import { CameraInterface } from "./Camera";
 import MySocket from "./mysocket";
 import MobProjectile from "./Projectile/MobProjectile";
-import UIMobGage from "./UI/UIMobGage";
 import PartyManager from "./Party/PartyManager";
 
 // Aggro tuning (v83-style: firstAttack mobs charge on sight, others when hit)
@@ -22,6 +21,29 @@ const AGGRO_RANGE_Y = 100;
 const DEAGGRO_RANGE_X = 400;
 const DEAGGRO_GRACE_MS = 3000;
 const TARGET_SCAN_MS = 250;
+// How long a mob keeps chasing after the last hit that provoked it. Aggro used
+// to be permanent once damage landed, so a snail you tapped once followed you
+// around its patrol for the rest of its life. Aggressive (firstAttack) mobs
+// re-acquire on the very next scan while you are in range, so this only calls
+// off the chase for mobs whose interest you created by attacking them.
+const AGGRO_HOLD_MS = 10000;
+// How long a chasing jump-mob must fail to advance before it reads as pinned
+// and hops, then how long until it may hop again (longer when the last hop
+// gained no ground — that barrier isn't clearable).
+const CHASE_PIN_MS = 350;
+const CHASE_HOP_MS = 700;
+const CHASE_HOP_RETRY_MS = 2500;
+// How long a pinned mob walks the other way before it may turn back — long
+// enough to read as pacing rather than as a mob vibrating against a wall.
+const CHASE_BACKOFF_MS = 900;
+// Strikes against the same obstacle before a chasing mob accepts it cannot get
+// there, and how long it then ignores the target. Without the window an
+// aggressive mob re-acquires the player on the next 250ms scan and walks back
+// into the same corner for good.
+const PIN_STRIKES_TO_GIVE_UP = 2;
+const AGGRO_GIVEUP_MS = 10000;
+// Getting around cleanly for this long wipes the strike count
+const PIN_STRIKE_RESET_MS = 5000;
 
 type MobMoveType = "stationary" | "walk" | "jump" | "fly";
 
@@ -40,6 +62,7 @@ class Monster {
   lastDirectionChangeTime: number = 0;
   delayBetweenDirectionChange: number = 0;
   isBoss: boolean = false;
+  hpTagColor: number = 0;
   elemMultipliers: Record<string, number> = {};
   sounds: any = {};
   dying: boolean = false;
@@ -93,6 +116,8 @@ class Monster {
   mad: number = 0;
   spawnCy: number = 0;
   aggroTarget: any = null;
+  /** Timestamp the current chase expires at — refreshed by every hit */
+  aggroUntil: number = 0;
   lastTargetScan: number = 0;
   outOfRangeSince: number = 0;
   flyTargetX: number = 0;
@@ -252,6 +277,9 @@ class Monster {
     if (mobFile.info.boss && mobFile.info.boss.nValue === 1) {
       this.isBoss = true;
     }
+    // Which UIWindow.img/MobGage/Gage colour the boss bar fills with (Mano is
+    // 1, red). Bosses that never carry the field fall back to it in the UI.
+    this.hpTagColor = mobFile.info.hpTagColor?.nValue ?? 0;
 
     // Elemental resistances from WZ elemAttr, e.g. "F2I1" = strong vs fire, immune to ice.
     // Digit meaning (Cosmic): 1=immune (x0), 2=strong (x0.5), 3=weak (x1.5), 4=neutral
@@ -579,10 +607,10 @@ async addDrops() {
     const indicatorType = isCritical
       ? DamageIndicatorType.PlayerCritialHitMob
       : DamageIndicatorType.PlayerHitMob;
-    // v83 top-center HP gauge is boss-only
-    if (this.isBoss && responsibleMapleCharacter && responsibleMapleCharacter === (window as any).charecter) {
-      UIMobGage.show(this);
-    }
+    // The boss gauge is not armed here any more — UIMobGage picks its target
+    // off the map's monster list, so it is already up before the first swing
+    // and stays up between them.
+
     // Remote mob (non-host client): send damage request to host, show visual only
     if (this.isRemote) {
       // Send damage request to host via server
@@ -602,9 +630,10 @@ async addDrops() {
       return;
     }
 
-    // Being hit aggros passive mobs onto the attacker
+    // Being hit aggros passive mobs onto the attacker, and every further hit
+    // renews the interest clock — keep swinging and the mob keeps coming.
     if (responsibleMapleCharacter && !this.dying && !this.isFriendly) {
-      this.aggroTarget = responsibleMapleCharacter;
+      this.setAggro(responsibleMapleCharacter);
     }
 
     // Players hitting a friendly mob (Moon Bunny) makes it "feel sick" —
@@ -714,6 +743,21 @@ async addDrops() {
     }
   }
 
+  /** Take or refresh a target, restarting the interest clock. */
+  setAggro(target: any) {
+    this.aggroTarget = target;
+    this.aggroUntil = Date.now() + AGGRO_HOLD_MS;
+  }
+
+  /** Lose interest and go back to wandering, with no chase state left over. */
+  clearAggro() {
+    this.aggroTarget = null;
+    this.aggroUntil = 0;
+    this.outOfRangeSince = 0;
+    this._chaseDir = 0;
+    this._pinnedSince = 0;
+  }
+
   /**
    * Host-only target scan: validate/de-aggro the current target and let
    * firstAttack mobs auto-acquire a nearby player inside patrol bounds.
@@ -734,30 +778,31 @@ async addDrops() {
       // converges on it
       if ((t as any).isFriendly) {
         if (t.dying || t.destroyed) {
-          this.aggroTarget = null;
-          this.outOfRangeSince = 0;
+          this.clearAggro();
         }
         return;
       }
       const stillPresent = candidates.includes(t);
       const dx = Math.abs((t.pos?.x ?? Infinity) - this.pos.x);
-      if (!stillPresent || t.isDead || dx > DEAGGRO_RANGE_X) {
-        this.aggroTarget = null;
-        this.outOfRangeSince = 0;
+      if (now > this.aggroUntil) {
+        // Interest ran out — back to wandering. Aggressive mobs pick the player
+        // straight back up below if they are still standing close.
+        this.clearAggro();
+      } else if (!stillPresent || t.isDead || dx > DEAGGRO_RANGE_X) {
+        this.clearAggro();
       } else if (t.pos.x < this.minX || t.pos.x > this.maxX) {
         // Target left the patrol area — give up after a grace period
         if (!this.outOfRangeSince) {
           this.outOfRangeSince = now;
         } else if (now - this.outOfRangeSince > DEAGGRO_GRACE_MS) {
-          this.aggroTarget = null;
-          this.outOfRangeSince = 0;
+          this.clearAggro();
         }
       } else {
         this.outOfRangeSince = 0;
       }
     }
 
-    if (!this.aggroTarget && this.firstAttack) {
+    if (!this.aggroTarget && this.firstAttack && now >= this._aggroBlockedUntil) {
       let best: any = null;
       let bestDx = Infinity;
       for (const c of candidates) {
@@ -774,13 +819,101 @@ async addDrops() {
           bestDx = dx;
         }
       }
-      if (best) this.aggroTarget = best;
+      if (best) this.setAggro(best);
     }
   }
 
   _chaseDir: number = 0;
   _chaseDecideAt: number = 0;
   _lastChaseHop: number = 0;
+  _hopFromX: number = 0;
+  // Pin state, shared by chasing and wandering
+  _lastMoveX: number = 0;
+  _pinnedSince: number = 0;
+  _moveHoldUntil: number = 0;
+  _pinStrikes: number = 0;
+  _lastPinAt: number = 0;
+  _aggroBlockedUntil: number = 0;
+
+  /**
+   * Hop out of a pin, for mobs that can. A hop that got the mob nowhere was
+   * into a barrier it cannot clear, so the next attempt waits much longer
+   * instead of grinding against it.
+   */
+  tryPinnedHop(now: number): boolean {
+    if (this.moveType !== "jump") return false;
+    const lastHopGained = Math.abs(this.pos.x - this._hopFromX) > 8;
+    const cooldown = lastHopGained ? CHASE_HOP_MS : CHASE_HOP_RETRY_MS;
+    if (now - this._lastChaseHop <= cooldown) return false;
+    this._lastChaseHop = now;
+    this._hopFromX = this.pos.x;
+    this.jump();
+    return true;
+  }
+
+  /**
+   * Get a stuck mob unstuck. Pressing a direction on solid ground while x
+   * refuses to advance is a pin — a wall, a step, the end of a foothold, the
+   * patrol boundary — and the way out is the same whether the mob is chasing
+   * or wandering: hop it if it can, otherwise turn round and walk away for long
+   * enough that the next decision does not put it straight back into it.
+   *
+   * A mob that keeps hitting the same pin while chasing has a target it simply
+   * cannot reach. Pacing at the obstacle forever is no better than leaning on
+   * it, so after a second strike it loses interest and goes back to its patrol.
+   * The give-up window is what makes that stick: an aggressive mob would
+   * otherwise re-acquire the player standing below the ledge on the very next
+   * scan and walk right back to the same corner.
+   *
+   * Knockback counts as advancing, so being hit never reads as a pin.
+   */
+  updatePinEscape(now: number) {
+    if (this.moveType === "fly" || this.moveType === "stationary") return;
+    if (this.isInHit || this.dying || this.isAttacking || !this.pos.fh) {
+      this._pinnedSince = 0;
+      this._lastMoveX = this.pos.x;
+      return;
+    }
+
+    // Strikes lapse once the mob has been getting around fine for a while
+    if (this._pinStrikes > 0 && now - this._lastPinAt > PIN_STRIKE_RESET_MS) {
+      this._pinStrikes = 0;
+    }
+
+    const pressing = this.pos.left || this.pos.right;
+    const advanced = Math.abs(this.pos.x - this._lastMoveX) > 0.5;
+    this._lastMoveX = this.pos.x;
+
+    if (!pressing || advanced || now < this._moveHoldUntil) {
+      this._pinnedSince = 0;
+      return;
+    }
+    if (!this._pinnedSince) {
+      this._pinnedSince = now;
+      return;
+    }
+    if (now - this._pinnedSince <= CHASE_PIN_MS) return;
+
+    this._pinnedSince = 0;
+    if (this.tryPinnedHop(now)) return;
+
+    this._pinStrikes++;
+    this._lastPinAt = now;
+
+    if (this.aggroTarget && this._pinStrikes >= PIN_STRIKES_TO_GIVE_UP) {
+      this._pinStrikes = 0;
+      this.clearAggro();
+      this._aggroBlockedUntil = now + AGGRO_GIVEUP_MS;
+    }
+
+    // Turn round and hold the new direction for a beat
+    if (this.pos.right) this.left();
+    else this.right();
+    this._chaseDir = this.pos.right ? 1 : -1;
+    this._chaseDecideAt = now;
+    this._moveHoldUntil = now + CHASE_BACKOFF_MS;
+    this.lastDirectionChangeTime = now;
+  }
 
   /** Walk/jump mobs chase the aggro target at their WZ walk speed. */
   updateChase() {
@@ -793,8 +926,10 @@ async addDrops() {
     // player. The 300ms decision hold is what creates that overshoot (and
     // keeps a target overhead from churning the stance into a shake): the
     // mob walks past you, notices ~a third of a second later, comes back.
+    // While backing out of a pin the held direction wins outright, or the mob
+    // would turn back into the obstacle on the next decision.
     if (this._chaseDir === 0) this._chaseDir = dx >= 0 ? 1 : -1;
-    if (now - this._chaseDecideAt >= 300 && absDx > 2) {
+    if (now >= this._moveHoldUntil && now - this._chaseDecideAt >= 300 && absDx > 2) {
       const want = dx > 0 ? 1 : -1;
       if (want !== this._chaseDir) {
         this._chaseDir = want;
@@ -803,19 +938,6 @@ async addDrops() {
     }
     if (this._chaseDir > 0) this.right();
     else this.left();
-
-    // Jump-stance mobs (Orange Mushroom, slimes) hop as pursuit locomotion —
-    // the arc is what carries them up ledges, exactly as in GMS. jump() is
-    // stance-gated, so walk-only mobs (pigs, snails) can never do this.
-    if (
-      this.moveType === "jump" &&
-      this._chaseDir !== 0 &&
-      this.pos.fh &&
-      now - this._lastChaseHop > 700
-    ) {
-      this._lastChaseHop = now;
-      this.jump();
-    }
   }
 
   /** Flying mobs steer toward a wander point (or the aggro target). */
@@ -1012,6 +1134,20 @@ async addDrops() {
     // --- Local AI (host only) ---
     const now = Date.now();
 
+    // isAttacking only means "an attack stance is playing". Nothing but that
+    // stance's finish callback ever cleared it, and setStance() replaces the
+    // pending callback whenever anything else takes the stance — so a mob hit
+    // mid-swing lost its attack callback to hit1's and stayed "attacking" for
+    // good: no stance set (the block below falls into the isAttacking arm and
+    // does nothing), no movement decisions, and tryAttack refusing to start
+    // another. That is what froze the banana-throwing monkeys the moment you
+    // hit one mid-throw. Re-deriving the flag from the stance repairs it a
+    // frame later, whatever stole the stance.
+    if (this.isAttacking && !String(this.stance).startsWith("attack")) {
+      this.isAttacking = false;
+      this.currentAttack = null;
+    }
+
     if (!this.dying && !this.isInHit) {
       this.updateAggro(now);
       this.tryAttack(now);
@@ -1058,13 +1194,18 @@ async addDrops() {
       } else if (this.aggroTarget && this.moveType !== "stationary") {
         this.updateChase();
       } else if (this.moveType === "walk" || this.moveType === "jump") {
-        // need to add some time between changes to avoid jitter
-        if (Math.random() < 0.02) {
+        // need to add some time between changes to avoid jitter. A mob walking
+        // out of a pin keeps its direction until the hold expires — a random
+        // turn here is exactly what used to send it back into the corner.
+        if (now >= this._moveHoldUntil && Math.random() < 0.02) {
           this.changeDirectionRandomly();
         }
       } else {
         this.stand();
       }
+      // Runs for chasing and wandering alike: whatever set the direction above,
+      // this is what notices the mob is not actually getting anywhere
+      this.updatePinEscape(now);
     }
 
     this.updateAttackFire(msPerTick);

@@ -17,6 +17,7 @@ import UILoginTOS from './UILoginTOS';
 import config from '../Config';
 import MapleStandingCharacter from '../MapleStandingCharacter';
 import DebugDrag from './DebugDrag';
+import { CharCreationOptions, CreationRace, getRaceInfo, makeRaceOptions } from '../Constants/CharCreation';
 
 interface UILoginInterface {
   uiLogin: WZNode;
@@ -26,7 +27,6 @@ interface UILoginInterface {
   gameInAudio: any;
   inputUsn: MapleInput | null;
   inputPwd: MapleInput | null;
-  newCharStats: number[];
   initialize: (canvas: GameCanvas) => Promise<void>;
   doUpdate: (msPerTick: number, camera: any, canvas: GameCanvas) => void;
   doRender: (
@@ -128,22 +128,7 @@ interface UILoginInterface {
   drawCharacterSelect: (canvas: GameCanvas, camera: any, lag: number, msPerTick: number, tdelta: number) => void;
   // Create character
   newChar: MapleStandingCharacter | null;
-  newCharOptions: {
-    faces: number[];
-    hairs: number[];       // base hair IDs (style)
-    hairColors: number[];  // color offsets (0-7)
-    skinColors: number[];
-    tops: number[];
-    bottoms: number[];
-    shoes: number[];
-    faceIndex: number;
-    hairIndex: number;
-    hairColorIndex: number;
-    skinIndex: number;
-    topIndex: number;
-    bottomIndex: number;
-    shoesIndex: number;
-  };
+  newCharOptions: CharCreationOptions;
   createCharButtons: MapleButton[];
   newCharNameInput: MapleInput | null;
   initCreateCharacter: () => void;
@@ -155,13 +140,12 @@ interface UILoginInterface {
   newCharView: number; // unused, kept for back button compat
   _createCharKeyHandler: ((e: KeyboardEvent) => void) | null;
   _appearanceUpdating: boolean;
-  _diceAnimFrame: number;
-  _diceAnimDelay: number;
-  _diceRolling: boolean;
   _clickConsumed: boolean;
   loadCharactersFromServer: () => Promise<void>;
   createCharStage: 'raceSelect' | 'nameEntry' | 'charCustomize';
-  selectedRace: 'normal' | 'knight' | 'aran';
+  selectedRace: CreationRace;
+  applyRaceOptions: (race: CreationRace, gender: number) => void;
+  _newCharPreviewAppearance: () => any;
   _drawRaceSelect: (canvas: any, mx: number, my: number, clicked: boolean, msPerTick: number) => void;
   _drawNameEntry: (canvas: any, mx: number, my: number, clicked: boolean) => void;
   _drawCharCustomize: (canvas: any, camera: any, mx: number, my: number, clicked: boolean, msPerTick: number, tdelta: number) => void;
@@ -314,9 +298,13 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       MyChar.maxExp = ExpTable.getExpNeededForLevel(charData.stats.level);
       MyChar.recalcLocalStats();
 
-      // Apply equipped items — clear and reload from DB
+      // Apply equipped items — clear and reload from DB. equippedItemData is
+      // per-slot scroll bonuses and belongs to the same wipe: left behind, the
+      // previous character's scrolls kept applying to whatever this one happens
+      // to wear in that slot.
       MyChar.equips = [];
       MyChar.equippedItemIds = {};
+      MyChar.equippedItemData = {};
       if (charData.equipped) {
         for (const eq of charData.equipped) {
           try {
@@ -358,6 +346,12 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         }
         MyChar.inventory.mesos = charData.mesos ?? 0;
       }
+
+      // Clear the previous character's quest log FIRST, and unconditionally —
+      // the restore below only ever adds, and a character with no quests at all
+      // skips that block entirely, which is how a brand new character inherited
+      // the last one's completed quests and mob progress.
+      MyChar.questManager?.reset();
 
       // Apply quests. Quest data must be loaded first: forceStartQuest reads
       // requirements to rebuild mob progress — with the data still loading it
@@ -707,21 +701,10 @@ UILogin.initialize = async function (canvas: GameCanvas) {
     y: 90,
   });
 
-  /*
-  const dice = new MapleFrameButton({
-    x: 245,
-    y: -1835,
-    img: uiLogin.NewChar.dice.nChildren,
-    onEndFrame: () => {
-      this.newCharStats = Random.generateDiceRollStats();
-      console.log("Random stats: ", this.newCharStats);
-    },
-    hoverAudio: false,
-  });
-  ClickManager.addButton(dice);
-  */
-
-  this.newCharStats = Random.generateDiceRollStats();
+  // No stat roll here: v83 has no character-creation dice. Nexon dropped it
+  // around v56-v63, so every level 1 of a class starts with the same spread —
+  // the server assigns it in Character.create. Login.img still ships the old
+  // `dice` and `statTb` art, but the feature was gone long before v83.
 
   // Plain world coordinates — FrameAnimation.draw already subtracts the camera.
   // This used to be `-830 - Camera.y`, which only ever worked on boot: main.ts
@@ -1420,9 +1403,6 @@ UILogin.initCreateCharacter = function () {
   this.newCharView = 1;
   this.newChar = null;
   this._appearanceUpdating = false;
-  this._diceAnimFrame = 0;
-  this._diceAnimDelay = 0;
-  this._diceRolling = false;
   this._clickConsumed = false;
   this._checkingName = false;
   this.createCharStage = 'raceSelect';
@@ -1433,26 +1413,8 @@ UILogin.initCreateCharacter = function () {
   this.inFrontOfFrameButtons.forEach((btn: any) => { btn.isHidden = true; });
   this.behindFrameButtons.forEach((btn: any) => { btn.isHidden = true; });
 
-  // v83 Beginner starter options
-  this.newCharOptions = {
-    faces: [20000, 20001, 20002],
-    hairs: [30030, 30020, 30000],
-    hairColors: [0, 1, 2, 3, 4, 5, 6, 7],
-    skinColors: [0, 1, 2, 3, 4, 5, 9],
-    tops: [1040002, 1040006, 1040010],
-    bottoms: [1060002, 1060006],
-    shoes: [1072001, 1072005, 1072037, 1072038],
-    weapons: [1302000, 1322005, 1312004],
-    faceIndex: 0,
-    hairIndex: 0,
-    hairColorIndex: 0,
-    skinIndex: 0,
-    topIndex: 0,
-    bottomIndex: 0,
-    shoesIndex: 0,
-    weaponIndex: 0,
-    gender: 0,
-  };
+  // Starter options for the selected race (defaults to Explorer)
+  this.newCharOptions = makeRaceOptions('normal', 0);
 
   // Keyboard handler for name input (only active in nameEntry and charCustomize stages)
   this._createCharKeyHandler = (e: KeyboardEvent) => {
@@ -1478,15 +1440,9 @@ UILogin.initCreateCharacter = function () {
             this.showNotice(NoticeType.NORMAL, NoticeMessage.NAME_IN_USE);
           } else {
             this.createCharStage = 'charCustomize';
-            const o = this.newCharOptions;
-            MapleStandingCharacter.fromAppearance({
-              name: this.newCharName,
-              skinColor: o.skinColors[0],
-              hairId: o.hairs[0] + o.hairColors[0],
-              faceId: o.faces[0],
-              flipped: true,
-              equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
-            }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
+            MapleStandingCharacter.fromAppearance(this._newCharPreviewAppearance())
+              .then((ch: any) => { this.newChar = ch; })
+              .catch(() => {});
           }
         }).catch(() => { this._checkingName = false; });
       }
@@ -1509,6 +1465,33 @@ UILogin.initCreateCharacter = function () {
     }
   };
   window.addEventListener('keydown', this._createCharKeyHandler, true);
+};
+
+/**
+ * Load the appearance lists for a race/gender pair and reset every row to its
+ * first entry. Races don't share wardrobes — Aran has one fixed outfit and its
+ * own faces — so the indices can't survive a switch.
+ */
+UILogin.applyRaceOptions = function (race: CreationRace, gender: number) {
+  this.newCharOptions = makeRaceOptions(race, gender);
+};
+
+/** The currently selected appearance, as MapleStandingCharacter wants it */
+UILogin._newCharPreviewAppearance = function () {
+  const o = this.newCharOptions;
+  return {
+    name: this.newCharName || '',
+    skinColor: o.skinColors[o.skinIndex] ?? 0,
+    hairId: (o.hairs[o.hairIndex] ?? 30030) + (o.hairColors[o.hairColorIndex] ?? 0),
+    faceId: o.faces[o.faceIndex] ?? 20000,
+    flipped: true,
+    equipIds: [
+      o.tops[o.topIndex],
+      o.bottoms[o.bottomIndex],
+      o.shoes[o.shoesIndex],
+      o.weapons?.[o.weaponIndex],
+    ].filter(Boolean),
+  };
 };
 
 UILogin.cleanupCreateCharacter = function () {
@@ -1539,6 +1522,9 @@ UILogin.confirmCreateCharacter = async function () {
   const hair = o.hairs[o.hairIndex] + o.hairColors[o.hairColorIndex];
   const face = o.faces[o.faceIndex];
   const skin = o.skinColors[o.skinIndex];
+  // Race decides the job the character is born into and where they wake up:
+  // Explorers on Maple Island, Knights in Ereve, Aran in the Rien snowfield
+  const race = getRaceInfo(this.selectedRace);
 
   // Save to server with selected equipment
   const result = await MySocket.createCharacter({
@@ -1547,7 +1533,8 @@ UILogin.confirmCreateCharacter = async function () {
     hair,
     face,
     skin,
-    gender: 0,
+    gender: o.gender ?? 0,
+    jobId: race.jobId,
     equips: [
       { slot: 4, itemId: o.tops[o.topIndex] },
       { slot: 5, itemId: o.bottoms[o.bottomIndex] },
@@ -1649,7 +1636,13 @@ UILogin._drawRaceSelect = function (canvas: any, mx: number, my: number, clicked
       // Click detection
       if (clicked && mx >= race.x && mx <= race.x + race.w &&
           my >= race.y && my <= race.y + race.h) {
-        this.selectedRace = race.key;
+        if (this.selectedRace !== race.key) {
+          this.selectedRace = race.key as CreationRace;
+          // Swap in that race's wardrobe, and drop the preview built from the
+          // old one so the next stage rebuilds it (Aran's gear differs)
+          this.applyRaceOptions(this.selectedRace, this.newCharOptions.gender);
+          this.newChar = null;
+        }
       }
     } catch (e) {}
   }
@@ -1670,14 +1663,8 @@ UILogin._drawRaceSelect = function (canvas: any, mx: number, my: number, clicked
       canvas.drawImage({ img: selectImg, dx: sx, dy: sy });
 
       if (clicked && mx >= sx && mx <= sx + 73 && my >= sy && my <= sy + 29) {
-        if (this.selectedRace === 'normal') {
-          // Proceed to name entry for Explorers
-          this.createCharStage = 'nameEntry';
-          this.newCharName = '';
-        } else {
-          // Show "not available" notice for other races
-          this.showNotice(NoticeType.NORMAL, NoticeMessage.AN_ERROR_OCCURRED);
-        }
+        this.createCharStage = 'nameEntry';
+        this.newCharName = '';
       }
     }
   } catch (e) {}
@@ -1703,15 +1690,9 @@ UILogin._drawNameEntry = function (canvas: any, mx: number, my: number, clicked:
       });
     } catch (e) {}
   } else if (!this.newChar) {
-    const o = this.newCharOptions;
-    MapleStandingCharacter.fromAppearance({
-      name: '',
-      skinColor: o.skinColors[0],
-      hairId: o.hairs[0] + o.hairColors[0],
-      faceId: o.faces[0],
-      flipped: true,
-      equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
-    }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
+    MapleStandingCharacter.fromAppearance(this._newCharPreviewAppearance())
+      .then((ch: any) => { this.newChar = ch; })
+      .catch(() => {});
   }
 
   // "NAME OF CHARACTER" wooden sign (201x224)
@@ -1754,15 +1735,9 @@ UILogin._drawNameEntry = function (canvas: any, mx: number, my: number, clicked:
               this.showNotice(NoticeType.NORMAL, NoticeMessage.NAME_IN_USE);
             } else {
               this.createCharStage = 'charCustomize';
-              const o = this.newCharOptions;
-              MapleStandingCharacter.fromAppearance({
-                name: this.newCharName,
-                skinColor: o.skinColors[0],
-                hairId: o.hairs[0] + o.hairColors[0],
-                faceId: o.faces[0],
-                flipped: true,
-                equipIds: [o.tops[0], o.bottoms[0], o.shoes[0], o.weapons?.[0]].filter(Boolean),
-              }).then((ch: any) => { this.newChar = ch; }).catch(() => {});
+              MapleStandingCharacter.fromAppearance(this._newCharPreviewAppearance())
+                .then((ch: any) => { this.newChar = ch; })
+                .catch(() => {});
             }
           }).catch(() => { this._checkingName = false; });
         } else if (this.newCharName.trim().length === 0) {
@@ -1824,12 +1799,33 @@ UILogin._drawCharCustomize = function (canvas: any, camera: any, mx: number, my:
   const ROW_X = 496;
 
   const nameMap: Record<string, Record<number, string>> = {
-    faces: { 20000: 'Male 2 (Black)', 20001: 'Male 1 (Brown)', 20002: 'Male 3 (Blue)', 21000: 'Female 1 (Black)', 21001: 'Female 2 (Brown)', 21002: 'Female 3 (Blue)' },
-    hairs: { 30030: 'Buzz Hair', 30020: 'Sammy', 30000: 'Toben', 31000: 'Angelica', 31010: 'Ariel', 31020: 'Connie' },
-    tops: { 1040002: 'White Undershirt', 1040006: 'Undershirt', 1040010: 'Grey T-Shirt' },
-    bottoms: { 1060002: 'Blue Jean Shorts', 1060006: 'Red-Striped Shorts' },
-    shoes: { 1072001: 'Red Rubber Boots', 1072005: 'Leather Sandals', 1072037: 'Yellow Sneakers', 1072038: 'Blue Sneakers' },
-    weapons: { 1302000: 'Sword', 1322005: 'Wooden Club', 1312004: 'Long Sword' },
+    faces: {
+      20000: 'Male 2 (Black)', 20001: 'Male 1 (Brown)', 20002: 'Male 3 (Blue)',
+      21000: 'Female 1 (Black)', 21001: 'Female 2 (Brown)', 21002: 'Female 3 (Blue)',
+      // Aran-only faces from MakeCharInfo's OrientChar sets
+      20100: 'Determined', 20401: 'Fearless', 20402: 'Defiant',
+      21700: 'Resolute', 21201: 'Spirited',
+    },
+    hairs: {
+      30030: 'Buzz Hair', 30020: 'Sammy', 30000: 'Toben',
+      31000: 'Angelica', 31010: 'Ariel', 31020: 'Connie',
+      31040: 'Cathy', 31050: 'Emma',
+    },
+    tops: {
+      1040002: 'White Undershirt', 1040006: 'Undershirt', 1040010: 'Grey T-Shirt',
+      1041002: 'White Tubetop', 1041006: 'Yellow T-Shirt', 1041010: 'Green T-Shirt', 1041011: 'Red-Striped Top',
+      1042167: 'Simple Warrior Top',
+    },
+    bottoms: {
+      1060002: 'Blue Jean Shorts', 1060006: 'Red-Striped Shorts',
+      1061002: 'Red Miniskirt', 1061008: 'Indigo Miniskirt',
+      1062115: 'Simple Warrior Pants',
+    },
+    shoes: {
+      1072001: 'Red Rubber Boots', 1072005: 'Leather Sandals', 1072037: 'Yellow Sneakers', 1072038: 'Blue Sneakers',
+      1072383: 'Average Musashi Shoes',
+    },
+    weapons: { 1302000: 'Sword', 1322005: 'Wooden Club', 1312004: 'Long Sword', 1442079: 'Basic Polearm' },
   };
 
   for (let i = 0; i < rowLabels.length; i++) {
@@ -1874,17 +1870,8 @@ UILogin._drawCharCustomize = function (canvas: any, camera: any, mx: number, my:
 
         if (clicked && mx >= lx && mx <= lx + 15 && my >= ly && my <= ly + 16) {
           if (i === 8) {
-            this.newCharOptions.gender = this.newCharOptions.gender === 0 ? 1 : 0;
-            // Switch face/hair options for gender
-            if (this.newCharOptions.gender === 0) {
-              this.newCharOptions.faces = [20000, 20001, 20002];
-              this.newCharOptions.hairs = [30030, 30020, 30000];
-            } else {
-              this.newCharOptions.faces = [21000, 21001, 21002];
-              this.newCharOptions.hairs = [31000, 31010, 31020];
-            }
-            this.newCharOptions.faceIndex = 0;
-            this.newCharOptions.hairIndex = 0;
+            // Faces, hair and clothes are all gendered — reload the whole set
+            this.applyRaceOptions(this.selectedRace, this.newCharOptions.gender === 0 ? 1 : 0);
             this.updateNewCharAppearance();
           } else if (optionKeys[i]) {
             const o = this.newCharOptions;
@@ -1916,17 +1903,8 @@ UILogin._drawCharCustomize = function (canvas: any, camera: any, mx: number, my:
 
         if (clicked && mx >= rx && mx <= rx + 15 && my >= ry && my <= ry + 16) {
           if (i === 8) {
-            this.newCharOptions.gender = this.newCharOptions.gender === 0 ? 1 : 0;
-            // Switch face/hair options for gender
-            if (this.newCharOptions.gender === 0) {
-              this.newCharOptions.faces = [20000, 20001, 20002];
-              this.newCharOptions.hairs = [30030, 30020, 30000];
-            } else {
-              this.newCharOptions.faces = [21000, 21001, 21002];
-              this.newCharOptions.hairs = [31000, 31010, 31020];
-            }
-            this.newCharOptions.faceIndex = 0;
-            this.newCharOptions.hairIndex = 0;
+            // Faces, hair and clothes are all gendered — reload the whole set
+            this.applyRaceOptions(this.selectedRace, this.newCharOptions.gender === 0 ? 1 : 0);
             this.updateNewCharAppearance();
           } else if (optionKeys[i]) {
             const o = this.newCharOptions;

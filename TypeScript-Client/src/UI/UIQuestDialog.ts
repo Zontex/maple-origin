@@ -256,8 +256,7 @@ export default class UIQuestDialog {
       const linkId = npcFile.info.link.nValue;
       npcFile = await WZManager.get(`Npc.wz/${`${linkId}`.padStart(7, '0')}.img`);
     }
-    this.speakerNode = npcFile?.stand?.[0] || null;
-    this.speakerImg = this.speakerNode?.nGetImage?.() || null;
+    this.setSpeakerSprite(npcFile);
 
     // Ensure item/map names are loaded for #t and #m format codes
     await ensureItemNames();
@@ -307,8 +306,7 @@ export default class UIQuestDialog {
         const linkId = npcFile.info.link.nValue;
         npcFile = await WZManager.get(`Npc.wz/${`${linkId}`.padStart(7, '0')}.img`);
       }
-      this.speakerNode = npcFile?.stand?.[0] || null;
-      this.speakerImg = this.speakerNode?.nGetImage?.() || null;
+      this.setSpeakerSprite(npcFile);
     }
 
     // Preload item icons referenced in text via \x01ITEM:id\x02 markers
@@ -453,6 +451,57 @@ export default class UIQuestDialog {
     );
   }
 
+  /**
+   * Where the speaker's art sits inside its canvas, and how tall it really is.
+   * Falls back to the declared WZ size while the sprite is still decoding —
+   * that size is right for every NPC but the padded ones, and a re-layout
+   * fires once the image lands.
+   */
+  /**
+   * Ink bounds can only be read once the sprite has decoded. Usually it
+   * already has — the NPC is standing on the map you clicked it from — but
+   * when it hasn't, lay out again as soon as it lands rather than leaving the
+   * frame sized to a canvas that is mostly empty.
+   */
+  /**
+   * Pick the portrait for the dialog's left column.
+   *
+   * `stand/0` is the right answer for almost every NPC, but a handful are
+   * painted into the map scenery and carry a transparent placeholder there
+   * instead — Athena Pierce on the ark (1209007) has a 1x229 empty strip. Her
+   * real portrait lives in `info/default`, which is what those NPCs use.
+   * Taking the placeholder gave a blank portrait and, because the frame sizes
+   * itself to the sprite, a dialog 229px taller than it needed to be.
+   */
+  private setSpeakerSprite(npcFile: any) {
+    const stand = npcFile?.stand?.[0] || null;
+    const fallback = npcFile?.info?.default || null;
+
+    this.speakerNode = stand;
+    this.speakerImg = stand?.nGetImage?.() || null;
+
+    // Degenerate placeholders are a sliver wide; anything real is not
+    const standIsPlaceholder = !stand || (GUIUtil.wzSize(stand).width || 0) <= 2;
+    if (standIsPlaceholder && fallback) {
+      this.speakerNode = fallback;
+      this.speakerImg = fallback.nGetImage?.() || null;
+    }
+    this.relayoutWhenSpriteDecodes();
+  }
+
+  private relayoutWhenSpriteDecodes() {
+    const img = this.speakerImg;
+    if (!img || img.complete) return;
+    img.addEventListener('load', () => {
+      if (this.speakerImg === img && !this.isHidden) this.recalcLayout();
+    }, { once: true });
+  }
+
+  private speakerMetrics(): { top: number; height: number } {
+    const declared = GUIUtil.wzSize(this.speakerNode).height || this.speakerImg?.height || 0;
+    return GUIUtil.verticalInkBounds(this.speakerImg) || { top: 0, height: declared };
+  }
+
   private recalcLayout() {
     // fillCount based on NPC sprite height AND text height
     const currentLines = this.pages[this.currentPage] || [''];
@@ -465,7 +514,7 @@ export default class UIQuestDialog {
     this.fillCount = 6;
     if (this.speakerImg) {
       const nameTagH = GUIUtil.wzSize(this.nameTagImg).height || 19;
-      const spriteNeeded = GUIUtil.wzSize(this.speakerNode).height + nameTagH + 5;
+      const spriteNeeded = this.speakerMetrics().height + nameTagH + 5;
       while (this.fillCount * FILL_H < spriteNeeded) {
         this.fillCount++;
       }
@@ -878,7 +927,10 @@ export default class UIQuestDialog {
       const tagW = GUIUtil.wzSize(this.nameTagImg).width || 121;
       const tagH = GUIUtil.wzSize(this.nameTagImg).height || 19;
       const spriteW = GUIUtil.wzSize(this.speakerNode).width || this.speakerImg.width;
-      const spriteH = GUIUtil.wzSize(this.speakerNode).height || this.speakerImg.height;
+      // Height of the art itself, and how far down its canvas it starts —
+      // the whole canvas still gets drawn, just shifted so the visible part
+      // lands where the layout reserved room for it
+      const { top: spriteInkTop, height: spriteH } = this.speakerMetrics();
 
       // Portrait and name tag are one group, centred vertically in the
       // dialog body — not pinned to the top. A dialog grown tall by a long
@@ -889,7 +941,7 @@ export default class UIQuestDialog {
       const groupY = this.y + TOP_H + Math.max(0, Math.floor((bodyH - groupH) / 2));
 
       const spriteX = this.x + LEFT_PADDING + Math.floor(tagW / 2) - Math.floor(spriteW / 2);
-      canvas.drawImage({ img: this.speakerImg, dx: spriteX, dy: groupY });
+      canvas.drawImage({ img: this.speakerImg, dx: spriteX, dy: groupY - spriteInkTop });
 
       const tagY = groupY + spriteH + NAME_TAG_GAP;
       if (nameTagImgEl) {

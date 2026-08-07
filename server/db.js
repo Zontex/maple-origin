@@ -31,8 +31,13 @@ function initSchema() {
       name TEXT NOT NULL COLLATE NOCASE,
       level INTEGER DEFAULT 1,
       exp INTEGER DEFAULT 0,
-      str INTEGER DEFAULT 4,
-      dex INTEGER DEFAULT 4,
+      -- Starting stats are chosen per job by Character.create, which passes
+      -- them explicitly. These defaults only cover rows inserted without
+      -- them; do not treat them as the game rule (an existing database keeps
+      -- whatever defaults it was built with — CREATE TABLE IF NOT EXISTS
+      -- never revisits a table, which is how this drifted in the first place)
+      str INTEGER DEFAULT 12,
+      dex INTEGER DEFAULT 5,
       int INTEGER DEFAULT 4,
       luk INTEGER DEFAULT 4,
       ap INTEGER DEFAULT 0,
