@@ -41,6 +41,10 @@ cd TypeScript-Client && npm install && npm run dev   # Vite dev server on :3000
 
 Login: `admin` / `admin`
 
+> ⚠️ The default credentials are for **local development only**. If you expose the
+> server beyond localhost, change the admin password first (registration is disabled;
+> accounts are managed directly in the SQLite database).
+
 ### 3. Production Build
 
 ```bash
@@ -173,6 +177,10 @@ See [CHANGELOG.md](CHANGELOG.md) for recent fixes. Major remaining work:
 - **Missing features**: Party system, facial expressions, passive HP/MP regen, world map
 
 ---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: contributions are welcome, but **pull requests must never include game assets** (WZ data, sprites, audio) — this project ships none and that's what keeps it publishable.
 
 ## License
 
