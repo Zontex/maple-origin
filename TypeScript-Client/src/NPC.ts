@@ -346,6 +346,20 @@ class NPC {
    * is anywhere near the visible art.
    */
   getBounds(): { left: number; top: number; right: number; bottom: number } {
+    const b = this.getSpriteBounds();
+    if (this.clickBox) {
+      return {
+        left: Math.min(b.left, this.x + this.clickBox.left),
+        top: Math.min(b.top, this.cy + this.clickBox.top),
+        right: Math.max(b.right, this.x + this.clickBox.right),
+        bottom: Math.max(b.bottom, this.cy + this.clickBox.bottom),
+      };
+    }
+    return b;
+  }
+
+  /** The drawn sprite's box in world coordinates */
+  private getSpriteBounds(): { left: number; top: number; right: number; bottom: number } {
     const frame = this.stances?.[this.stance]?.frames?.[this.frame];
     const w = frame?.nWidth || 56;
     const h = frame?.nHeight || 70;
@@ -353,18 +367,33 @@ class NPC {
     const originY = frame?.nGet?.("origin")?.nGet?.("nY", 0) || h;
     const adjustX = !this.flipped ? originX : w - originX;
 
-    let left = this.x - adjustX;
-    let top = this.cy - originY;
-    let right = left + w;
-    let bottom = top + h;
+    const left = this.x - adjustX;
+    const top = this.cy - originY;
+    return { left, top, right: left + w, bottom: top + h };
+  }
 
-    if (this.clickBox) {
-      left = Math.min(left, this.x + this.clickBox.left);
-      top = Math.min(top, this.cy + this.clickBox.top);
-      right = Math.max(right, this.x + this.clickBox.right);
-      bottom = Math.max(bottom, this.cy + this.clickBox.bottom);
+  /**
+   * Where the NPC visually *is*, for anything that hangs off its head.
+   *
+   * This is the sprite, not `getBounds()`: a click box is a generous target
+   * and is routinely far taller than the art (NPC 1052116 declares dcTop -135
+   * over a 68px sprite), so anchoring to the union floats notices well clear
+   * of everyone. The exception is the handful of NPCs painted into the map
+   * scenery, whose sprite is a transparent sliver and whose click box is the
+   * only thing pointing at the artwork.
+   */
+  getVisualBounds(): { left: number; top: number; right: number; bottom: number } {
+    const sprite = this.getSpriteBounds();
+    const isPlaceholder = (this.stances?.[this.stance]?.frames?.[this.frame]?.nWidth || 0) <= 2;
+    if (this.clickBox && isPlaceholder) {
+      return {
+        left: this.x + this.clickBox.left,
+        top: this.cy + this.clickBox.top,
+        right: this.x + this.clickBox.right,
+        bottom: this.cy + this.clickBox.bottom,
+      };
     }
-    return { left, top, right, bottom };
+    return sprite;
   }
 
   draw(canvas: GameCanvas, camera: CameraInterface, lag: number, msPerTick: number, tdelta: number) {
@@ -452,20 +481,23 @@ class NPC {
     const icon = frames[this.questIconFrame % frames.length];
     if (!icon) return;
 
-    // Float above the NPC's own head, not a fixed distance above its feet.
-    // The old constant assumed every NPC was about 80px tall, so it buried
-    // the notice inside tall sprites and stranded it far below the scenery-
-    // painted ones — Athena's book sat down at the foot of her ladder while
-    // she leaned out of a window 200px up.
-    const bounds = this.getBounds();
+    // Hover a short, fixed distance above the NPC's own head. The original
+    // constant measured from the feet and assumed everyone was ~80px tall,
+    // which buried the notice inside tall sprites and left it far below the
+    // scenery-painted ones — Athena's book sat at the foot of her ladder
+    // while she leaned out of a window 200px up.
+    const bounds = this.getVisualBounds();
     const centerX = Math.round((bounds.left + bounds.right) / 2 - camera.x);
     const headY = Math.round(bounds.top - camera.y);
+    const NOTICE_GAP = 12;
 
     if (balloon) {
+      // The icon sits *inside* the balloon, so only the balloon's own height
+      // belongs in the offset
       const bw = balloon.width;
       const bh = balloon.height;
       const bx = Math.round(centerX - bw / 2);
-      const by = headY - bh - icon.height;
+      const by = headY - bh - NOTICE_GAP;
 
       canvas.drawImage({ img: balloon, dx: bx, dy: by });
 
@@ -473,10 +505,12 @@ class NPC {
       const iconY = by + Math.round((bh - icon.height) / 2) - 4;
       canvas.drawImage({ img: icon, dx: iconX, dy: iconY });
     } else {
+      // v83 ships the bubble, the symbol and the mouse glyph as one sprite
+      // (UIWindow.img/QuestIcon/<state>/<frame>), so the icon is the notice
       canvas.drawImage({
         img: icon,
         dx: Math.round(centerX - icon.width / 2),
-        dy: headY - icon.height - 40,
+        dy: headY - icon.height - NOTICE_GAP,
       });
     }
   }
