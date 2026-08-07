@@ -1,4 +1,5 @@
 import WZManager from "./wz-utils/WZManager";
+import { preloadFrames } from "./wz-utils/WZNode";
 import config from "./Config";
 import GUIUtil from "./GuiUtils";
 import PLAY_AUDIO from "./Audio/PlayAudio";
@@ -731,6 +732,7 @@ class MapleCharacter {
       const fx: any = await WZManager.get("Effect.wz/BasicEff.img/JobChanged");
       if (fx?.nChildren?.length > 0) {
         this.jobChangedFrames = fx.nChildren;
+        await preloadFrames(this.jobChangedFrames);
         this.jobChangedActive = true;
         this.jobChangedFrame = 0;
         this.jobChangedDelay = 0;
@@ -831,6 +833,7 @@ class MapleCharacter {
 
     const lu: any = await WZManager.get("Effect.wz/BasicEff.img/LevelUp");
     this.levelUpFrames = lu.nChildren;
+    await preloadFrames(this.levelUpFrames);
 
     PLAY_AUDIO(levelUpAudio);
     this.levelingUp = true;
@@ -845,6 +848,7 @@ class MapleCharacter {
       const qc: any = await WZManager.get("Effect.wz/BasicEff.img/QuestClear");
       if (qc?.nChildren?.length > 0) {
         this.questClearFrames = qc.nChildren;
+        await preloadFrames(this.questClearFrames);
         this.questClearActive = true;
         this.questClearFrame = 0;
         this.questClearDelay = 0;
@@ -862,6 +866,7 @@ class MapleCharacter {
       if (qa?.nChildren?.length > 0) {
         // Filter to only canvas frames (some children are $int properties like 'pos')
         this.questStartFrames = qa.nChildren.filter((n: any) => n.nTagName === 'canvas');
+        await preloadFrames(this.questStartFrames);
         this.questStartActive = true;
         this.questStartFrame = 0;
         this.questStartDelay = 0;
@@ -955,6 +960,7 @@ class MapleCharacter {
       const ie: any = await WZManager.get("Effect.wz/BasicEff.img/IncEXP");
       if (ie?.nChildren?.length > 0) {
         this.incExpFrames = ie.nChildren;
+        await preloadFrames(this.incExpFrames);
         this.incExpActive = true;
         this.incExpFrame = 0;
         this.incExpDelay = 0;

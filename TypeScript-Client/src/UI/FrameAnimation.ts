@@ -1,4 +1,4 @@
-import WZNode from '../wz-utils/WZNode';
+import WZNode, { preloadFrames } from '../wz-utils/WZNode';
 import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 
@@ -32,6 +32,10 @@ export default class FrameAnimation {
     this.zigzag = wzNode.nGet('zigzag')?.nValue === '1';
     this.x = x;
     this.y = y;
+    // Decode every frame up front — drawImage skips an image that hasn't
+    // finished decoding, and these animations reach most of their frames for
+    // the first time mid-playback, which reads as flicker
+    void preloadFrames(this.frames);
     this.setFrame(0);
   }
 

@@ -118,4 +118,21 @@ class WZNode {
   }
 }
 
+/**
+ * Decode a whole animation's frames before anything tries to draw them.
+ *
+ * A one-shot effect reaches most of its frames for the very first time while
+ * it is playing, so without this each new frame is created lazily, isn't
+ * decoded yet, and gets skipped — the animation strobes on its first run.
+ * Await this before starting an effect; fire-and-forget for looping sprites
+ * that can afford to warm up over their first cycle.
+ */
+export function preloadFrames(frames: any): Promise<void> {
+  if (!frames) return Promise.resolve();
+  const list: any[] = Array.isArray(frames) ? frames : Array.from(frames);
+  return Promise.all(
+    list.map((f: any) => f?.nPreloadImage?.() ?? Promise.resolve())
+  ).then(() => undefined);
+}
+
 export default WZNode;

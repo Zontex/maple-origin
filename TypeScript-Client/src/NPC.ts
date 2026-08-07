@@ -1,4 +1,5 @@
 import WZManager from "./wz-utils/WZManager";
+import { preloadFrames } from "./wz-utils/WZNode";
 import config from "./Config";
 import Random from "./Random";
 import GameCanvas from "./GameCanvas";
@@ -158,9 +159,7 @@ class NPC {
     // drawImage until decoded, which makes the NPC blink on each frame's
     // first render. Fire and forget: awaiting every decode blocks map load.
     // Frames can be undefined when a UOL fails to resolve.
-    for (const s of Object.values(this.stances) as any[]) {
-      for (const f of s?.frames ?? []) void f?.nPreloadImage?.();
-    }
+    for (const s of Object.values(this.stances) as any[]) void preloadFrames(s?.frames);
 
     // Load NPC strings
     this.strings = await this.loadStrings(this.id);
@@ -205,6 +204,10 @@ class NPC {
       this.tvAdStances = tvMsg.nChildren.map((stance: any, i: number) => {
         return this.loadStance(tvMsg, i.toString());
       });
+      // Same reason the NPC's own stances are decoded up front: a frame drawn
+      // before it has decoded is skipped, so the ad strobes through its first
+      // cycle. Fire and forget — the TV loops, so warming up is enough.
+      for (const s of this.tvAdStances) void preloadFrames(s?.frames);
       this.setTvAdFrame(Random.randInt(0, this.tvAdStances.length - 1), 0);
       this.mapleTvMsgImg = tvFile.TVbasic[0].nGetImage();
     }
