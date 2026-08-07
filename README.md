@@ -3,7 +3,7 @@
 A 1:1 recreation of pre-Big Bang **MapleStory v83** running entirely in the browser.  
 TypeScript + HTML5 Canvas client, Node.js WebSocket server, everything rendered from original WZ game assets.
 
-> All graphics and sound assets are property of Nexon. This project is for research and educational purposes only.
+> **Legal notice:** This is an unofficial fan project for research and educational purposes. It is not affiliated with, endorsed, sponsored, or approved by Nexon. "MapleStory" is a trademark of Nexon and is used here only to describe what this project recreates. **No game assets are included or distributed** — all MapleStory graphics, audio, and game data are the property of Nexon, and you must supply your own legally obtained copy of the v83 game files to run this project. If you are a rights holder with a concern, please open an issue on this repository and it will be addressed promptly.
 
 ---
 
@@ -174,6 +174,17 @@ See [CHANGELOG.md](CHANGELOG.md) for recent fixes. Major remaining work:
 
 ---
 
+## License
+
+This project is licensed under the **GNU Affero General Public License v3.0** — see [LICENSE](LICENSE).
+
+The NPC, quest, and portal scripts (`TypeScript-Client/public/scripts/`) and the DB seed data (`tools/cosmic-db-data/`, drop tables) originate from the [OdinMS](https://odinms.de) lineage of open-source server emulators ([HeavenMS](https://github.com/ronancpl/HeavenMS), [Cosmic](https://github.com/P0nk/Cosmic)) and are distributed under the same AGPL-3.0 terms, with their original copyright headers preserved:
+
+> Copyright (C) 2008 Patrick Huy, Matthias Butz, Jan Christian Meyer
+
 ## Credits
 
-Fork of [MapleWeb](https://github.com/Jeck-Sparrow-5/MapleWeb). Server reference: [Cosmic](https://github.com/P0nk/Cosmic).
+- Fork of [MapleWeb](https://github.com/Jeck-Sparrow-5/MapleWeb)
+- Server logic, scripts, and game data reference: [Cosmic](https://github.com/P0nk/Cosmic) by P0nk, descended from [HeavenMS](https://github.com/ronancpl/HeavenMS) and OdinMS
+- WZ file parsing: [MapleStory-node-resources](https://github.com/PhilippSchwab/MapleStory-node-resources) by Philipp Schwab, GPL-3.0 (`tools/wz-parser/`, cloned separately — not distributed with this repo)
+- MapleStory is © Nexon. All game assets belong to Nexon.

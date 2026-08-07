@@ -4,7 +4,8 @@
 node_modules
 dist
 
-# WZ game data — too large for git, distribute separately
+# Converted WZ game data — user-supplied from their own legally obtained
+# game files (see README), never committed or distributed with this repo.
 TypeScript-Client/public/wz_client/
 # Local safety copy of the above (the .wz source binaries no longer exist,
 # so wz_client is the sole copy of this data). Deliberately outside
@@ -26,3 +27,6 @@ __pycache__/
 
 # Cosmic v83 reference repo
 backend/
+
+# Local debug screenshots (contain copyrighted game art — never commit)
+debug/

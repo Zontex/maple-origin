@@ -1,6 +1,7 @@
 {
-  "name": "vite-vanilla-ts",
+  "name": "maple-origin-client",
   "version": "0.0.0",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
