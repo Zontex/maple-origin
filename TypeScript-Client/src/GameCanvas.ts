@@ -207,7 +207,15 @@ class GameCanvas {
     };
     let mouseTouchId: number | null = null;
     this.game.style.touchAction = "none";
-    this.game.addEventListener("touchstart", (e: TouchEvent) => {
+    // Capture-phase on window: DOM overlays (the fixed-position chat
+    // <input> and friends) sit above the canvas and swallow its touches —
+    // the "joystick dead exactly at its resting spot" bug. Capture fires
+    // before any overlay can intercept. Touches aimed at a visible input
+    // are exempt so the chat field stays usable.
+    const touchTargetsInput = (e: TouchEvent) =>
+      e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+    window.addEventListener("touchstart", (e: TouchEvent) => {
+      if (touchTargetsInput(e)) return;
       e.preventDefault();
       const TouchControls = this._touchControls;
       for (const t of Array.from(e.changedTouches)) {
@@ -224,8 +232,9 @@ class GameCanvas {
           this.focusGame = true;
         }
       }
-    }, { passive: false });
-    this.game.addEventListener("touchmove", (e: TouchEvent) => {
+    }, { passive: false, capture: true });
+    window.addEventListener("touchmove", (e: TouchEvent) => {
+      if (touchTargetsInput(e)) return;
       e.preventDefault();
       const TouchControls = this._touchControls;
       for (const t of Array.from(e.changedTouches)) {
@@ -236,8 +245,9 @@ class GameCanvas {
           this.mouseY = y;
         }
       }
-    }, { passive: false });
+    }, { passive: false, capture: true });
     const touchEnd = (e: TouchEvent) => {
+      if (touchTargetsInput(e)) return;
       e.preventDefault();
       const TouchControls = this._touchControls;
       for (const t of Array.from(e.changedTouches)) {
@@ -261,8 +271,8 @@ class GameCanvas {
         }
       }
     };
-    this.game.addEventListener("touchend", touchEnd, { passive: false });
-    this.game.addEventListener("touchcancel", touchEnd, { passive: false });
+    window.addEventListener("touchend", touchEnd, { passive: false, capture: true });
+    window.addEventListener("touchcancel", touchEnd, { passive: false, capture: true });
 
     // Fullscreen transitions, tab switches, and OS gestures can swallow
     // touchend — clear all touch state so nothing is left stuck "held"
