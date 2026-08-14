@@ -12,7 +12,7 @@ Object.defineProperty(window, '__MapleMap', {
 import MyCharacter from "./MyCharacter";
 import UIState from './UIState';
 import Camera, { CameraInterface } from "./Camera";
-import config, { enterBrowserFullscreen } from "./Config";
+import config from "./Config";
 import { applyConfiguredResolution } from "./Resolution";
 import GameCanvas from "./GameCanvas";
 import UIMap from "./UI/UIMap";
@@ -25,6 +25,8 @@ import TouchJoyStick, {
 } from "./UI/TouchJoyStick";
 import ClickManager from "./UI/ClickManager";
 import ShopUI from "./UI/ShopUI";
+import CashShopUI from "./UI/CashShopUI";
+import UIAvatarMegaphone from "./UI/UIAvatarMegaphone";
 import WZManager from "./wz-utils/WZManager";
 import UIMiniMap from "./UI/UIMiniMap";
 import UIQuestAlarm from "./UI/UIQuestAlarm";
@@ -33,6 +35,7 @@ import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
 import CharInfoMenuSprite from "./UI/Menu/CharInfoMenuSprite";
 import PartyMenuSprite from "./UI/Menu/PartyMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
+import PetManager from "./Pet/PetManager";
 import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
@@ -308,6 +311,11 @@ async function initializeMapState(map = defaultMap, isFirstUpdate = false, porta
   MyCharacter.pos.fallDistance = 0;
   MyCharacter.pos.landingImpactVy = 0;
   oobRespawning = false;
+
+  // Pets follow across maps: re-anchor live pets at the owner, and (on
+  // login) summon the ones whose blobs were saved as summoned
+  PetManager.onMapChange();
+  void PetManager.spawnFromInventory(MyCharacter);
 
   // v83 map-enter scripts (info/onUserEnter): the Maple Island job-experience
   // rooms play a Direction3 cutscene that ends by warping back out
@@ -601,6 +609,14 @@ MapStateInstance.doUpdate = function (
       ShopUI.update(msPerTick);
     }
 
+    // Cash Shop overlay — the world underneath keeps ticking (mob host!)
+    if (CashShopUI.isVisible) {
+      CashShopUI.update(msPerTick);
+    }
+
+    // Megaphone banner animation/expiry (world-wide shouts)
+    UIAvatarMegaphone.update(msPerTick);
+
     // When dead, only update tombstone animation + death dialog, block all input
     if (MyCharacter.isDead) {
       MyCharacter.update(msPerTick);
@@ -662,7 +678,8 @@ MapStateInstance.doUpdate = function (
       // are included for the same reason — the character should stand still
       // while an option dialog has the screen.
       const dialogOpen =
-        (MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) || ShopUI.isVisible || questDialogOpen ||
+        (MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) || ShopUI.isVisible ||
+        CashShopUI.isVisible || UIAvatarMegaphone.isDialogOpen || questDialogOpen ||
         DirectionScene.isActive || UIGameMenu.isVisible ||
         UISystemOption.isVisible || UIGameOption.isVisible ||
         UIChannelSelect.isVisible || UIKeyConfig.isVisible || UIWorldMap.isVisible;
@@ -763,6 +780,9 @@ MapStateInstance.doUpdate = function (
           MapleMap.questDialog.hide();
         } else if (MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) {
           MapleMap.npcDialog.setIsHidden(true);
+        } else if (CashShopUI.isVisible) {
+          // First ESC closes the confirm dialog, the next one leaves the shop
+          CashShopUI.escape();
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
         } else if (UIWorldMap.isVisible) {
@@ -965,8 +985,10 @@ MapStateInstance.doRender = function (
     }
 
     // Job-intro cutscenes are full-screen: everything that frames the game
-    // stays down for the duration so only the scene shows
-    const inCutscene = DirectionScene.isActive;
+    // stays down for the duration so only the scene shows. The Cash Shop
+    // overlay borrows the same treatment — HUD, minimap and chat input all
+    // drop while it has the screen.
+    const inCutscene = DirectionScene.isActive || CashShopUI.isVisible;
     setHudHiddenForCutscene(inCutscene);
 
     if (!inCutscene) {
@@ -988,6 +1010,15 @@ MapStateInstance.doRender = function (
 
     // Direction cutscene overlay (job-experience rooms) above the world
     DirectionScene.render(canvas, camera);
+
+    // Cash Shop covers everything except the cursor (UIMap draws it next)
+    if (CashShopUI.isVisible) {
+      CashShopUI.render(canvas, camera);
+    }
+
+    // Megaphone banner + message dialog — over the world and the cash shop,
+    // under the cursor
+    UIAvatarMegaphone.render(canvas);
 
     // UIMap draws HUD + cursor (HUD suppressed while hudHidden)
     UIMap.doRender(canvas, camera, lag, msPerTick, tdelta);

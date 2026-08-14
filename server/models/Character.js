@@ -238,6 +238,7 @@ class Character {
       posX: char.pos_x,
       posY: char.pos_y,
       mesos: char.mesos,
+      nx: char.nx,
       hair: char.hair,
       face: char.face,
       skin: char.skin,
@@ -259,7 +260,7 @@ class Character {
         level = ?, exp = ?, str = ?, dex = ?, int = ?, luk = ?, ap = ?, sp = ?, sp_by_tier = ?,
         hp = ?, max_hp = ?, mp = ?, max_mp = ?,
         job_id = ?, map_id = ?, pos_x = ?, pos_y = ?,
-        mesos = ?, fame = ?, hair = ?, face = ?, skin = ?
+        mesos = ?, nx = ?, fame = ?, hair = ?, face = ?, skin = ?
       WHERE id = ?
     `);
 
@@ -357,7 +358,7 @@ class Character {
         data.mp ?? current.mp, data.maxMp ?? current.max_mp,
         data.jobId ?? current.job_id, data.mapId ?? current.map_id,
         data.posX ?? current.pos_x, data.posY ?? current.pos_y,
-        data.mesos ?? current.mesos, data.fame ?? current.fame,
+        data.mesos ?? current.mesos, data.nx ?? current.nx, data.fame ?? current.fame,
         data.hair ?? current.hair, data.face ?? current.face, data.skin ?? current.skin,
         characterId
       );

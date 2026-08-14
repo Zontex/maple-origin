@@ -50,6 +50,7 @@ function initSchema() {
       pos_x INTEGER DEFAULT 0,
       pos_y INTEGER DEFAULT 0,
       mesos INTEGER DEFAULT 0,
+      nx INTEGER DEFAULT 0,
       hair INTEGER DEFAULT 30030,
       face INTEGER DEFAULT 20000,
       skin INTEGER DEFAULT 0,
@@ -110,6 +111,11 @@ function initSchema() {
       FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS cash_shop_sales (
+      item_id INTEGER PRIMARY KEY,
+      count INTEGER DEFAULT 0
+    );
+
     CREATE INDEX IF NOT EXISTS idx_characters_user_world ON characters(user_id, world_id);
     CREATE INDEX IF NOT EXISTS idx_inventory_character ON inventory_items(character_id);
     CREATE INDEX IF NOT EXISTS idx_equipped_character ON equipped_items(character_id);
@@ -144,6 +150,13 @@ function initSchema() {
   // Migration: quest completion timestamps (INTERVAL repeatable quests)
   try {
     db.exec(`ALTER TABLE quests ADD COLUMN completed_at INTEGER`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+
+  // Migration: NX balance for the Cash Shop (client-authoritative, like mesos)
+  try {
+    db.exec(`ALTER TABLE characters ADD COLUMN nx INTEGER DEFAULT 0`);
   } catch (e) {
     // Column already exists — ignore
   }

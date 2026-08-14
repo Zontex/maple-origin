@@ -163,6 +163,7 @@ function autoSaveCharacter(player) {
     hp: info.hp, maxHp: info.maxHp, mp: info.mp, maxMp: info.maxMp,
     jobId: info.job ?? info.jobId,
     mesos: info.mesos,
+    nx: info.nx,
     fame: info.fame,
   };
   // Map/position only when the client reported a real in-game map — a save

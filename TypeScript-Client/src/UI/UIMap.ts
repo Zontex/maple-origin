@@ -18,6 +18,7 @@ import UISystemOption from "./UISystemOption";
 import UIGameOption from "./UIGameOption";
 import UIKeyConfig from "./UIKeyConfig";
 import UIWorldMap from "./UIWorldMap";
+import CashShopUI from "./CashShopUI";
 
 export interface UIMapInterface {
   statusBarLevelDigits: any[];
@@ -167,7 +168,7 @@ UIMap.addButtons = function (canvas) {
   // row (left → right): SHOP, TRADE, MENU, SHORT CUT
   const bigY = 565 + startUIPosition.y;
   addBtn(570, this.statusBarNode.BtShop, () => {
-    console.log("cash shop click — not implemented yet");
+    void CashShopUI.show(canvas);
   }, bigY);
   addBtn(626, this.statusBarNode.BtNPT, () => {
     console.log("trade click — not implemented yet");
@@ -360,6 +361,13 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
           // Regular chat message - show in a chat balloon
           this.showPlayerChatBalloon(msg);
           UIChatLog.addMessage(`${MyCharacter.name} : ${msg}`, 'player');
+
+          // Summoned pets listen to the owner's chat for their commands
+          // ("sit", "iloveyou", ...) — non-exclusive, the message still
+          // shows as normal chat like v83
+          import('../Pet/PetManager').then(({ default: PetManager }) => {
+            PetManager.onOwnerChat(msg);
+          }).catch(() => {});
 
           // Send chat message to other players via socket
           import('../mysocket').then(({ default: MySocket }) => {

@@ -335,6 +335,8 @@ export default class MapleStandingCharacter {
       102: { dir: "Accessory", slot: 2 },
       103: { dir: "Accessory", slot: 3 },
       112: { dir: "Accessory", slot: 16 },
+      113: { dir: "Accessory", slot: 18 },
+      114: { dir: "Accessory", slot: 15 },
       100: { dir: "Cap", slot: 0 },
       110: { dir: "Cape", slot: 8 },
       104: { dir: "Coat", slot: 4 },
@@ -348,6 +350,9 @@ export default class MapleStandingCharacter {
       131: { dir: "Weapon", slot: 10 },
       132: { dir: "Weapon", slot: 10 },
       133: { dir: "Weapon", slot: 10 },
+      134: { dir: "Weapon", slot: 10 },
+      135: { dir: "Weapon", slot: 10 },
+      136: { dir: "Weapon", slot: 10 },
       137: { dir: "Weapon", slot: 10 },
       138: { dir: "Weapon", slot: 10 },
       139: { dir: "Weapon", slot: 10 },
@@ -368,11 +373,17 @@ export default class MapleStandingCharacter {
     const meta = equipMap[firstThree];
     if (!meta || meta.slot === undefined) return;
 
-    const equip = await WZManager.get(`Character.wz/${meta.dir}/0${id}.img`);
-    this.equips[meta.slot] = equip;
-    this.equippedIdsBySlot[meta.slot] = id;
-    if (meta.slot === 10) this.weaponEquipId = id;
-    this.syncLook();
+    // A missing WZ sprite (odd cash prefixes) must never reject the caller —
+    // the Cash Shop try-on attaches arbitrary catalog ids
+    try {
+      const equip = await WZManager.get(`Character.wz/${meta.dir}/0${id}.img`);
+      this.equips[meta.slot] = equip;
+      this.equippedIdsBySlot[meta.slot] = id;
+      if (meta.slot === 10) this.weaponEquipId = id;
+      this.syncLook();
+    } catch (e) {
+      console.warn(`[StandingCharacter] no sprite for equip ${id}`);
+    }
   }
 
   // --- Animation control -----------------------------------------------------
@@ -621,6 +632,14 @@ export default class MapleStandingCharacter {
 
     imgs.forEach((img) => {
       if (!img) return;
+      // Back view (ladder/rope): the face and everything worn ON it — face
+      // accessory and eye accessory — stay hidden behind the head
+      if (
+        useBackHead &&
+        (img === this.Face || img === faceAcc || img === this.equips[2])
+      ) {
+        return;
+      }
       const vslot = img.info.vslot.nValue;
       const isHead = img === this.head;
       const isFace = img === this.Face || img === faceAcc;

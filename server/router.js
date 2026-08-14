@@ -3,7 +3,8 @@
 const { handlePlayerInfo, handlePlayerUpdate, handlePlayerLevelUp, handlePlayerHitByMob, sendPlayerList } = require('./handlers/player');
 const { handleMonsterDamage, handleMobStateBatch, handleMobDamageRequest, handleMobDeath, handleMobRespawn } = require('./handlers/mob');
 const { handleItemDrop, handleItemPickup } = require('./handlers/item');
-const { handleChatMessage } = require('./handlers/chat');
+const { handleChatMessage, handleMegaphone } = require('./handlers/chat');
+const { handleCashBuyLog, handleGetBestItems } = require('./handlers/cashshop');
 const { handleReactorHit, handleReactorRespawn } = require('./handlers/reactor');
 const { handleRegister, handleLogin, handleGetWorlds, handleGetCharacters, handleCheckName, handleCreateCharacter, handleDeleteCharacter, handleSelectCharacter, handleSaveCharacter } = require('./handlers/auth');
 const { players } = require('./state');
@@ -54,6 +55,15 @@ function handleMessage(playerId, data) {
       break;
     case 'chat_message':
       handleChatMessage(playerId, data.data);
+      break;
+    case 'megaphone':
+      handleMegaphone(playerId, data.data);
+      break;
+    case 'cash_buy_log':
+      handleCashBuyLog(playerId, data.data);
+      break;
+    case 'get_best_items':
+      handleGetBestItems(playerId);
       break;
     case 'item_drop':
       handleItemDrop(playerId, data.data);

@@ -10,6 +10,7 @@ import DropItemSprite from "./DropItem/DropItemSprite";
 import config from "./Config";
 import PartyManager from "./Party/PartyManager";
 import { serializeFullKeymap } from "./KeyBindings";
+import PetManager from "./Pet/PetManager";
 
 let nextDropId = 1;
 
@@ -446,6 +447,7 @@ class MySocket {
         posY: (MapleMap.isPositionValid?.(MyCharacter.pos.x, MyCharacter.pos.y))
           ? Math.round(MyCharacter.pos.y) : 0,
         mesos: inv?.mesos ?? 0,
+        nx: inv?.nx ?? 0,
         fame: MyCharacter.fame ?? 0,
         sp: MyCharacter.stats?.sp ?? 0,
         // The per-tier split; `sp` above stays the total for anything reading it
@@ -648,6 +650,18 @@ class MySocket {
           break;
         case "item_drop":
           this.handleItemDrop(data.data);
+          break;
+        case "megaphone":
+          // Dynamic import — UIAvatarMegaphone pulls in the UI stack, and a
+          // static import here would thread it through every socket consumer
+          void import('./UI/UIAvatarMegaphone').then((m) =>
+            m.default.showBanner(data.data)
+          );
+          break;
+        case "best_items":
+          void import('./UI/CashShopUI').then((m) =>
+            m.default.setBestItems(data.data?.items || [])
+          );
           break;
         case "item_pickup":
           this.handleItemPickup(data.data);
@@ -875,7 +889,11 @@ class MySocket {
       attacking: false,
       equipped: equippedItems,
     };
-    
+
+    // Summoned-pet roster: joiners see already-out pets via player_joined/
+    // player_list (the server rebroadcasts the whole stored info)
+    (playerInfo as any).pets = PetManager.getSummonedSummary();
+
     console.log("Sending player info:", playerInfo);
     
     this.sendMessage({
@@ -929,6 +947,12 @@ class MySocket {
       (update as any).emote = MyCharacter.faceExpr;
     }
 
+    // Pet roster (positions are never sent — remotes simulate the follow AI
+    // locally against the owner's lerped position) + one-shot actions
+    (update as any).pets = PetManager.getSummonedSummary();
+    const petAction = PetManager.consumePendingAction();
+    if (petAction) (update as any).petAction = petAction;
+
     this.sendMessage({
       type: "player_update",
       data: update
@@ -952,7 +976,28 @@ class MySocket {
       data: chatMessage
     });
   }
-  
+
+  /** Cash Shop megaphone — world-wide; look = the sender's visible avatar */
+  sendMegaphone(itemId: number, message: string, look: any) {
+    if (!this.playerId) return;
+    this.sendMessage({
+      type: "megaphone",
+      data: { itemId, message, look },
+    });
+  }
+
+  /** Tally a Cash Shop purchase for the Best Item rail */
+  sendCashBuyLog(itemId: number) {
+    if (!this.playerId) return;
+    this.sendMessage({ type: "cash_buy_log", data: { itemId } });
+  }
+
+  /** Ask for the world's top-5 sold cash items → 'best_items' reply */
+  requestBestItems() {
+    if (!this.playerId) return;
+    this.sendMessage({ type: "get_best_items", data: {} });
+  }
+
   sendMonsterDamage(monsterId: number, damage: number) {
     if (!this.playerId) return;
     
@@ -1184,6 +1229,9 @@ class MySocket {
         // Add to map characters
         MapleMap.characters.push(character);
 
+        // Their summoned pets (roster rode in on player_info)
+        this.applyRemotePets(character, playerData);
+
         console.log(`Added player ${character.name} to the map`);
       } catch (error) {
         this._loadingPlayers.delete(playerId);
@@ -1193,6 +1241,10 @@ class MySocket {
       // Update existing player — set target for lerp interpolation
       try {
         const character = this.otherPlayers.get(playerId)!;
+
+        // Roster refresh (player_list) carries pets too — apply before the
+        // dead-stance branch's early return can skip it
+        this.applyRemotePets(character, playerData);
 
         const dx = playerData.x - character.pos.x;
         const dy = playerData.y - character.pos.y;
@@ -1322,6 +1374,30 @@ class MySocket {
           })();
         }
       }
+
+      // Pet roster changes + one-shot pet actions
+      this.applyRemotePets(character, playerData);
+    }
+  }
+
+  /**
+   * Spawn/despawn a remote player's pets when their announced roster
+   * changes (same key-compare idiom as equipment), and play transient
+   * command/level-up actions. Remote pet MOVEMENT is never received — the
+   * follow AI runs locally against the owner's lerped position.
+   */
+  applyRemotePets(character: any, playerData: any) {
+    if (playerData.pets !== undefined) {
+      const newPetKey = (playerData.pets || [])
+        .map((p: any, i: number) => `${i}:${p.itemId}:${p.name}:${p.level}:${p.equip ?? 0}`)
+        .join(',');
+      if (newPetKey !== ((character as any)._lastPetKey ?? '')) {
+        (character as any)._lastPetKey = newPetKey;
+        void PetManager.syncRemotePets(character, playerData.pets || []);
+      }
+    }
+    if (playerData.petAction) {
+      PetManager.playRemoteAction(character, playerData.petAction);
     }
   }
   
@@ -1510,6 +1586,8 @@ class MySocket {
   // Last time a mob_state_batch arrived; drives the stuck-host watchdog
   _lastMobStateAt: number = 0;
   _lastMobStateSig: string = '';
+  /** oIds mid-spawn from roster reconciliation — prevents duplicate spawns */
+  _spawningOIds: Set<number> = new Set();
   _lastHostCheckAt: number = 0;
   _lastHeartbeatAt: number = 0;
 
@@ -1644,6 +1722,48 @@ class MySocket {
         mob.setStance(mob.stances['die'] ? 'die' : 'die1');
       }
     }
+
+    // The host's batch is the authoritative roster. A local live mob the
+    // host stops reporting is a ghost — born from stale MapStateCache
+    // positions or a missed death broadcast — and it would stand frozen
+    // (and unkillable) forever. ~15 batches/s, so 30 misses ≈ 2s of
+    // absence before it is removed.
+    const batchIds = new Set(data.mobs.map((m: any) => m.oId));
+    for (const mob of MapleMap.monsters) {
+      if (mob.destroyed || mob.dying) continue;
+      if (batchIds.has(mob.oId)) {
+        (mob as any)._absentBatches = 0;
+      } else {
+        const misses = ((mob as any)._absentBatches =
+          ((mob as any)._absentBatches || 0) + 1);
+        if (misses > 30) {
+          console.log(`[MobSync] Removing ghost mob oId=${mob.oId} — absent from the host's roster`);
+          mob.destroy();
+        }
+      }
+    }
+
+    // The reverse divergence: the host reports a mob we never spawned
+    // (joined mid-respawn, missed a broadcast). Spawn it as remote so the
+    // rosters converge from both directions.
+    for (const mobState of data.mobs) {
+      const oId = mobState.oId;
+      if (MapleMap.findMonsterByOId(oId) || this._spawningOIds.has(oId)) continue;
+      const def = MapleMap.getMonsterSpawnDefs().find((s: any) => s.oId === oId);
+      if (!def) continue;
+      this._spawningOIds.add(oId);
+      void MapleMap.spawnMonster({ ...def, fadeIn: true }).then(() => {
+        this._spawningOIds.delete(oId);
+        const mob = MapleMap.findMonsterByOId(oId);
+        if (mob) {
+          mob.isRemote = true;
+          mob.pos.x = mobState.x;
+          mob.pos.y = mobState.y;
+          mob._targetX = mobState.x;
+          mob._targetY = mobState.y;
+        }
+      }).catch(() => this._spawningOIds.delete(oId));
+    }
   }
 
   // Host receives damage request from non-host
@@ -1704,12 +1824,22 @@ class MySocket {
   async handleMobRespawn(data: any) {
     if (this.isMobHost) return;
     if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    // Never stack a second monster on an oId — if a stale copy is still
+    // around (a ghost the roster sweep hasn't caught yet), replace it.
+    // Duplicate oIds made findMonsterByOId feed batches to one copy while
+    // the other floated frozen forever.
+    const existing = MapleMap.findMonsterByOId(data.oId);
+    if (existing && !existing.destroyed) existing.destroy();
     const spawnDefs = MapleMap.getMonsterSpawnDefs();
     const spawnDef = spawnDefs.find((s: any) => s.oId === data.oId);
     if (spawnDef) {
       await MapleMap.spawnMonster({ ...spawnDef, fadeIn: true });
-      // Mark newly spawned mob as remote
-      const mob = MapleMap.findMonsterByOId(data.oId);
+      // Mark newly spawned mob as remote. findMonsterByOId can still see
+      // the destroyed copy until the next update filters it, so search for
+      // the live one explicitly.
+      const mob = MapleMap.monsters.find(
+        (m: any) => m.oId === data.oId && !m.destroyed
+      );
       if (mob) {
         mob.isRemote = true;
         mob._targetX = mob.pos.x;
@@ -1746,6 +1876,7 @@ class MySocket {
     let lastStance = '';
     let lastFrame = 0;
     let lastFlipped = false;
+    let lastPetKey = '';
     
     setInterval(() => {
       try {
@@ -1769,22 +1900,28 @@ class MySocket {
           Math.abs(MyCharacter.pos.y - lastPosY) > 1
         );
         
+        // Pet roster changes (summon/despawn/rename/level) and one-shot
+        // actions must go out even while the player stands still
+        const petKey = PetManager.getSummonedKey();
+        const petChanged = petKey !== lastPetKey || PetManager.hasPendingAction();
+
         const stateChanged = (
           MyCharacter.stance !== lastStance ||
           MyCharacter.frame !== lastFrame ||
           MyCharacter.flipped !== lastFlipped ||
           MyCharacter.isInAttack
         );
-        
-        if (posChanged || stateChanged) {
+
+        if (posChanged || stateChanged || petChanged) {
           this.sendPlayerUpdate();
-          
+
           // Update last known position and state
           lastPosX = MyCharacter.pos.x;
           lastPosY = MyCharacter.pos.y;
           lastStance = MyCharacter.stance;
           lastFrame = MyCharacter.frame;
           lastFlipped = MyCharacter.flipped;
+          lastPetKey = petKey;
         }
       } catch (error) {
         console.error("Error in update loop:", error);

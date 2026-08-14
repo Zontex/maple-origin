@@ -167,9 +167,12 @@ class Background {
     // The caller draws this pass under getBackgroundScale(), so the viewport is
     // measured in authored units here — never in config.width/height, which are
     // device pixels and would put the parallax anchor off-screen.
+    // Ceil to match the compositor canvas (MapleMap._bgCompose), which must
+    // have integer dimensions — tiling to the fractional size would leave its
+    // last sub-pixel row/column untiled and visible after the scaled blit.
     const scale = getBackgroundScale();
-    const viewW = config.width / scale;
-    const viewH = config.height / scale;
+    const viewW = Math.ceil(config.width / scale);
+    const viewH = Math.ceil(config.height / scale);
     // Camera in authored units. Every term derived from it is magnified by the
     // pass, so feeding it raw device pixels would make a layer track the camera
     // `scale` times too fast — the type-4 cloud bands, which follow the camera

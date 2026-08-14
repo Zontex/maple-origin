@@ -14,6 +14,9 @@ import getEquipTypeById from '../../Constants/EquipType';
 import { ensureItemNames, getItemNameSync } from '../../Quest/QuestData';
 import DebugDrag from '../DebugDrag';
 import UIDevTools from '../UIDevTools';
+import PetManager from '../../Pet/PetManager';
+import { PET_EQUIP_CELLS } from '../../Pet/PetConstants';
+import { formatRemaining } from '../../Shop/CashShopData';
 
 // Equipment slot definitions with pixel positions on the 175x304 background
 // Each slot is ~36x36 with 1px borders
@@ -112,12 +115,25 @@ class EquipMenuSprite extends DragableMenu {
   // Tooltip state
   hoveredSlot: EquipSlot | null = null;
   hoveredItemId: number = 0;
+  /** Slot the hovered icon actually lives at (base+100 for cash covers) */
+  hoveredIconSlot: number | null = null;
   itemNamesReady: boolean = false;
   // Double-click tracking
   lastClickSlot: number = -1;
   lastClickTime: number = 0;
   // Debug registration flag
   _debugRegistered: boolean = false;
+
+  // --- Pet equip extension panel (UIWindow.img/Equip/pet) ---
+  petPanelOpen: boolean = false;
+  petPanelImage: HTMLImageElement | null = null;
+  btPetShow: HTMLImageElement | null = null;
+  btPetHide: HTMLImageElement | null = null;
+  btPet: { normal: HTMLImageElement | null; pressed: HTMLImageElement | null; disabled: HTMLImageElement | null; mouseOver: HTMLImageElement | null }[] = [];
+  _petEquipIcons: Map<number, HTMLImageElement | null> = new Map();
+  _petCellLastClickKey: string = '';
+  _petCellLastClickTime: number = 0;
+  hoveredPetCell: { key: string; x: number; y: number; label: string } | null = null;
 
   static async fromOpts(opts: any) {
     const obj = new EquipMenuSprite(opts);
@@ -138,8 +154,24 @@ class EquipMenuSprite extends DragableMenu {
     this.isHidden = this.opts.isHidden;
 
     try {
-      const equipNode = await WZManager.get('UI.wz/UIWindow.img/Equip');
+      const equipNode: any = await WZManager.get('UI.wz/UIWindow.img/Equip');
       this.backgroundImage = equipNode.backgrnd.nGetImage();
+
+      // Pet equip extension: panel art + PET EQUIP toggle + pet selectors
+      const stateImg = (btn: any, state: string): HTMLImageElement | null => {
+        const frames = btn?.[state]?.nChildren;
+        const frame = frames?.find((f: any) => f.nTagName === 'canvas') ?? frames?.[0];
+        try { return frame?.nGetImage?.() ?? null; } catch { return null; }
+      };
+      this.petPanelImage = equipNode.pet?.nGetImage?.() ?? null;
+      this.btPetShow = stateImg(equipNode.BtPetEquipShow, 'normal');
+      this.btPetHide = stateImg(equipNode.BtPetEquipHide, 'normal');
+      this.btPet = [1, 2, 3].map((i) => ({
+        normal: stateImg(equipNode[`BtPet${i}`], 'normal'),
+        pressed: stateImg(equipNode[`BtPet${i}`], 'pressed'),
+        disabled: stateImg(equipNode[`BtPet${i}`], 'disabled'),
+        mouseOver: stateImg(equipNode[`BtPet${i}`], 'mouseOver'),
+      }));
     } catch (e) {
       console.error('[EquipMenu] Failed to load background:', e);
     }
@@ -153,9 +185,101 @@ class EquipMenuSprite extends DragableMenu {
     return {
       x: this.x,
       y: this.y,
-      width: this.backgroundImage?.width || 175,
+      // The pet panel hangs off the right edge and moves with the window
+      width: (this.backgroundImage?.width || 175) + (this.petPanelOpen ? (this.petPanelImage?.width || 177) : 0),
       height: this.backgroundImage?.height || 304,
     };
+  }
+
+  // --- Pet panel geometry (attached right, bottom-aligned like v83) ---
+
+  get petPanelX() { return this.x + (this.backgroundImage?.width || 175); }
+  get petPanelY() {
+    return this.y + (this.backgroundImage?.height || 304) - (this.petPanelImage?.height || 181);
+  }
+  /** PET EQUIP toggle button — sits right-of-center on the bottom rim (v83) */
+  get petShowBtnRect() {
+    const w = this.btPetShow?.width || 54;
+    const h = this.btPetShow?.height || 18;
+    return { x: this.x + 97, y: this.y + 281, w, h };
+  }
+
+  // Panel-relative placements for the bottom strip
+  static readonly PET_CELL_SIZE = 31;
+  static readonly BTPET_XS = [10, 44, 78];
+  static readonly BTPET_Y = 150;
+  static readonly BTHIDE_X = 154;
+  static readonly BTHIDE_Y = 155;
+
+  _getPetEquipIcon(itemId: number): HTMLImageElement | null {
+    if (this._petEquipIcons.has(itemId)) return this._petEquipIcons.get(itemId) ?? null;
+    this._petEquipIcons.set(itemId, null);
+    void (async () => {
+      try {
+        const info: any = await WZManager.get(`Character.wz/PetEquip/0${itemId}.img/info`);
+        const iconNode = info?.iconRaw ?? info?.icon;
+        if (iconNode?.nGetImage) this._petEquipIcons.set(itemId, iconNode.nGetImage());
+      } catch { /* keep null */ }
+    })();
+    return null;
+  }
+
+  /** Clicks inside the pet panel: selectors, hide arrow, unequip cells */
+  handlePetPanelClick(mouseX: number, mouseY: number): boolean {
+    const px = this.petPanelX;
+    const py = this.petPanelY;
+    const pw = this.petPanelImage?.width || 177;
+    const ph = this.petPanelImage?.height || 181;
+    if (mouseX < px || mouseX >= px + pw || mouseY < py || mouseY >= py + ph) return false;
+
+    // Back arrow closes the panel
+    const hideW = this.btPetHide?.width || 17;
+    const hideH = this.btPetHide?.height || 16;
+    if (mouseX >= px + EquipMenuSprite.BTHIDE_X && mouseX < px + EquipMenuSprite.BTHIDE_X + hideW &&
+        mouseY >= py + EquipMenuSprite.BTHIDE_Y && mouseY < py + EquipMenuSprite.BTHIDE_Y + hideH) {
+      this.petPanelOpen = false;
+      return true;
+    }
+
+    // Pet selectors 1-3 (only summoned pets are selectable)
+    for (let i = 0; i < 3; i++) {
+      const bx = px + EquipMenuSprite.BTPET_XS[i];
+      const by = py + EquipMenuSprite.BTPET_Y;
+      const bw = this.btPet[i]?.normal?.width || 30;
+      const bh = this.btPet[i]?.normal?.height || 27;
+      if (mouseX >= bx && mouseX < bx + bw && mouseY >= by && mouseY < by + bh) {
+        console.log(`[EquipMenu] pet selector ${i + 1} clicked, summoned=${!!PetManager.pets[i]}`);
+        if (PetManager.pets[i]) PetManager.selectedPetIndex = i;
+        return true;
+      }
+    }
+
+    // Equip cells: double-click a worn item to take it off
+    const pet = PetManager.selectedPet;
+    if (pet) {
+      const equips = PetManager.getPetEquips(pet);
+      for (const cell of PET_EQUIP_CELLS) {
+        const cx = px + cell.x;
+        const cy = py + cell.y;
+        const cs = EquipMenuSprite.PET_CELL_SIZE;
+        if (mouseX >= cx && mouseX < cx + cs && mouseY >= cy && mouseY < cy + cs) {
+          const entry = equips[cell.key];
+          if (!entry?.id) return true;
+          const now = Date.now();
+          if (this._petCellLastClickKey === cell.key && now - this._petCellLastClickTime < 400) {
+            this._petCellLastClickKey = '';
+            this._petCellLastClickTime = 0;
+            void PetManager.unequipPetSlot(pet, cell.key, this.charecter);
+          } else {
+            this._petCellLastClickKey = cell.key;
+            this._petCellLastClickTime = now;
+          }
+          return true;
+        }
+      }
+    }
+
+    return true; // inside the panel — consume so the click can't reach the map
   }
 
   setIsHidden(isHidden: boolean) {
@@ -177,6 +301,15 @@ class EquipMenuSprite extends DragableMenu {
 
   onMouseDown(mouseX: number, mouseY: number): boolean {
     if (this.isHidden) return false;
+
+    // PET EQUIP toggle on the bottom rim
+    const showBtn = this.petShowBtnRect;
+    if (mouseX >= showBtn.x && mouseX < showBtn.x + showBtn.w &&
+        mouseY >= showBtn.y && mouseY < showBtn.y + showBtn.h) {
+      this.petPanelOpen = !this.petPanelOpen;
+      return true;
+    }
+    if (this.petPanelOpen && this.handlePetPanelClick(mouseX, mouseY)) return true;
 
     // Check if a slot was clicked
     for (const slot of EQUIP_SLOTS) {
@@ -297,7 +430,13 @@ class EquipMenuSprite extends DragableMenu {
     }
   }
 
-  async unequipItem(slot: number) {
+  async unequipItem(slot: number): Promise<void> {
+    // A worn costume cover (v83 cash layer, slot base+100) comes off first
+    // and returns to the CASH tab; the next double-click reaches the real
+    // gear underneath
+    if (slot < 100 && this.charecter.equippedItemIds[slot + 100]) {
+      return this.unequipItem(slot + 100);
+    }
     const itemId = this.charecter.equippedItemIds[slot];
     if (!itemId) return;
 
@@ -307,10 +446,12 @@ class EquipMenuSprite extends DragableMenu {
     // Remove from character visuals
     this.charecter.detachEquip(slot);
 
-    // Add to inventory equip array at the first free slot (keep positions stable)
+    // Add to the owning tab at the first free slot (keep positions stable)
     try {
       const item = await Item.fromOpts({ itemId, quantity: 1, equipData });
-      const equipArr = this.charecter.inventory.equip;
+      const equipArr = slot >= 100
+        ? this.charecter.inventory.cash
+        : this.charecter.inventory.equip;
       let freeSlot = equipArr.findIndex((it: any) => !it);
       if (freeSlot === -1) freeSlot = equipArr.length;
       equipArr[freeSlot] = item;
@@ -349,11 +490,15 @@ class EquipMenuSprite extends DragableMenu {
       const sx = this.x + slot.x;
       const sy = this.y + slot.y;
 
-      const itemId = this.charecter.equippedItemIds[slot.slot];
+      // A worn cash cover (slot base+100) is what the character visibly
+      // wears, so the window shows it on top; unequip peels it off first
+      const coverId = this.charecter.equippedItemIds[slot.slot + 100];
+      const itemId = coverId ?? this.charecter.equippedItemIds[slot.slot];
+      const iconSlot = coverId ? slot.slot + 100 : slot.slot;
 
       // Draw item icon if equipped
       if (itemId) {
-        const icon = this.charecter.equippedItemIcons[slot.slot];
+        const icon = this.charecter.equippedItemIcons[iconSlot];
         if (icon) {
           canvas.drawImage({
             img: icon,
@@ -368,6 +513,7 @@ class EquipMenuSprite extends DragableMenu {
         if (itemId) {
           this.hoveredSlot = slot;
           this.hoveredItemId = itemId;
+          this.hoveredIconSlot = iconSlot;
         }
       }
     }
@@ -388,9 +534,129 @@ class EquipMenuSprite extends DragableMenu {
       }
     }
 
+    // PET EQUIP toggle + extension panel
+    const showBtn = this.petShowBtnRect;
+    if (this.btPetShow) {
+      canvas.drawImage({ img: this.btPetShow, dx: showBtn.x, dy: showBtn.y });
+    }
+    if (this.petPanelOpen) this.drawPetPanel(canvas);
+
     // Draw tooltip for hovered item
     if (this.hoveredSlot && this.hoveredItemId) {
       this.drawTooltip(canvas);
+    }
+  }
+
+  drawPetPanel(canvas: GameCanvas) {
+    if (!this.petPanelImage) return;
+    const px = this.petPanelX;
+    const py = this.petPanelY;
+    canvas.drawImage({ img: this.petPanelImage, dx: px, dy: py });
+    UIDevTools.track('petEquipPanel', px, py, this.petPanelImage.width, this.petPanelImage.height, 'screen', 'UI.wz/UIWindow.img/Equip/pet');
+
+    const mouseX = this.GameCanvas.mouseX;
+    const mouseY = this.GameCanvas.mouseY;
+    const cs = EquipMenuSprite.PET_CELL_SIZE;
+    this.hoveredPetCell = null;
+
+    // Selected pet's worn equips in their labeled cells
+    const pet = PetManager.selectedPet;
+    let hoveredEntry: { id: number; expireAt?: number } | null = null;
+    if (pet) {
+      const equips = PetManager.getPetEquips(pet);
+      for (const cell of PET_EQUIP_CELLS) {
+        const entry = equips[cell.key];
+        const cx = px + cell.x;
+        const cy = py + cell.y;
+        if (entry?.id) {
+          const icon = this._getPetEquipIcon(entry.id);
+          if (icon) {
+            canvas.drawImage({
+              img: icon,
+              dx: cx + Math.floor((cs - (icon.width || 32)) / 2),
+              dy: cy + Math.floor((cs - (icon.height || 32)) / 2),
+            });
+          }
+        }
+        if (mouseX >= cx && mouseX < cx + cs && mouseY >= cy && mouseY < cy + cs && entry?.id) {
+          this.hoveredPetCell = cell;
+          hoveredEntry = entry;
+        }
+      }
+    }
+
+    // Pet selectors: pressed = selected, mouseOver on hover, disabled = no
+    // pet in that train slot
+    const selectedIdx = Math.min(PetManager.selectedPetIndex, PetManager.pets.length - 1);
+    for (let i = 0; i < 3; i++) {
+      const states = this.btPet[i];
+      if (!states) continue;
+      const bx = px + EquipMenuSprite.BTPET_XS[i];
+      const by = py + EquipMenuSprite.BTPET_Y;
+      const bw = states.normal?.width || 30;
+      const bh = states.normal?.height || 27;
+      const hovered = mouseX >= bx && mouseX < bx + bw && mouseY >= by && mouseY < by + bh;
+      const img = !PetManager.pets[i]
+        ? states.disabled ?? states.normal
+        : i === selectedIdx
+          ? states.pressed ?? states.normal
+          : hovered
+            ? states.mouseOver ?? states.normal
+            : states.normal;
+      if (img) canvas.drawImage({ img, dx: bx, dy: by });
+    }
+    if (this.btPetHide) {
+      canvas.drawImage({ img: this.btPetHide, dx: px + EquipMenuSprite.BTHIDE_X, dy: py + EquipMenuSprite.BTHIDE_Y });
+    }
+
+    // Simple tooltip: item name + slot label + rental countdown
+    if (this.hoveredPetCell && hoveredEntry) {
+      const name = this.itemNamesReady
+        ? (getItemNameSync(hoveredEntry.id) || `Item ${hoveredEntry.id}`)
+        : `Item ${hoveredEntry.id}`;
+      const lines = [name, this.hoveredPetCell.label];
+      if (hoveredEntry.expireAt) lines.push(`Remaining: ${formatRemaining(hoveredEntry.expireAt)}`);
+      const fontSize = 12;
+      let w = 0;
+      for (const l of lines) w = Math.max(w, canvas.measureText({ text: l, fontSize }).width);
+      const tw = w + 16;
+      const th = lines.length * 14 + 10;
+      let tx = px + this.hoveredPetCell.x + cs + 4;
+      let ty = py + this.hoveredPetCell.y;
+      if (tx + tw > config.width) tx = px + this.hoveredPetCell.x - tw - 4;
+      if (ty + th > config.height) ty = config.height - th;
+      const ctx = canvas.context;
+      ctx.save();
+      ctx.fillStyle = 'rgba(20, 20, 60, 0.92)';
+      ctx.fillRect(tx, ty, tw, th);
+      ctx.strokeStyle = '#6688cc';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
+      ctx.restore();
+      lines.forEach((l, i) => {
+        canvas.drawText({
+          text: l,
+          x: tx + 8,
+          y: ty + 6 + i * 14,
+          color: i === 0 ? '#ffffff' : i === 1 ? '#aaaacc' : '#FFaa00',
+          fontSize: i === 0 ? 12 : 11,
+          fontWeight: i === 0 ? 'bold' : 'normal',
+        });
+      });
+    }
+
+    if (DebugDrag.enabled) {
+      for (const cell of PET_EQUIP_CELLS) {
+        const dx = px + cell.x;
+        const dy = py + cell.y;
+        canvas.context.save();
+        canvas.context.strokeStyle = '#00ffff';
+        canvas.context.strokeRect(dx, dy, cs, cs);
+        canvas.context.fillStyle = '#00ffff';
+        canvas.context.font = '8px monospace';
+        canvas.context.fillText(cell.key, dx + 1, dy + 9);
+        canvas.context.restore();
+      }
     }
   }
 
@@ -402,7 +668,8 @@ class EquipMenuSprite extends DragableMenu {
     // GMS-style detailed equip tooltip (REQ stats, job bar, category, stats)
     const anchorX = this.x + this.hoveredSlot.x + SLOT_SIZE + 4;
     const anchorY = this.y + this.hoveredSlot.y;
-    if (UIEquipTooltip.draw(canvas, itemId, this.charecter.equippedItemData?.[this.hoveredSlot.slot], anchorX, anchorY)) {
+    const dataSlot = this.hoveredIconSlot ?? this.hoveredSlot.slot;
+    if (UIEquipTooltip.draw(canvas, itemId, this.charecter.equippedItemData?.[dataSlot], anchorX, anchorY)) {
       return;
     }
 

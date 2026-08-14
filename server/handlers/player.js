@@ -59,6 +59,10 @@ function handlePlayerUpdate(playerId, updateData) {
   if (updateData.attacking !== undefined) updatedInfo.attacking = updateData.attacking;
   // Face emote is transient — present while held, absent otherwise
   updatedInfo.emote = updateData.emote;
+  // Summoned-pet roster (persists in info so late joiners see the pets);
+  // petAction is a one-shot like emote — present for one broadcast only
+  if (updateData.pets !== undefined) updatedInfo.pets = updateData.pets;
+  updatedInfo.petAction = updateData.petAction;
 
   const currentMapId = Number(player.mapId);
   const newMapId = updateData.mapId;

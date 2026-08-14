@@ -49,10 +49,19 @@ export function saveDevSnapshot() {
   try {
     const MapleMap = (window as any).__MapleMap;
     const inv = MyCharacter.inventory;
+    // Must match mysocket's serializeTab: keep null holes (restore places by
+    // index) and carry equipData — dropping it wiped cash expiry and pet
+    // blobs on every dev reload
     const serializeTab = (items: any[]) =>
       (items || []).map((item: any) =>
-        item ? { itemId: item.itemId, quantity: item.quantity ?? 1 } : null
-      ).filter(Boolean);
+        item
+          ? {
+              itemId: item.itemId,
+              quantity: item.quantity ?? 1,
+              equipData: item.equipData ?? undefined,
+            }
+          : null
+      );
 
     const equipped: { slot: number; item_id: number }[] = [];
     if (MyCharacter.equippedItemIds) {
@@ -93,6 +102,7 @@ export function saveDevSnapshot() {
       fame: MyCharacter.fame ?? 0,
       exp: MyCharacter.exp ?? 0,
       mesos: inv?.mesos ?? 0,
+      nx: inv?.nx ?? 0,
       stats: {
         level: MyCharacter.stats?.level ?? 1,
         str: MyCharacter.stats?.str ?? 4,
@@ -276,6 +286,7 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
         (MyCharacter.inventory as any)[tab] = loaded;
       }
       MyCharacter.inventory.mesos = charData.mesos ?? 0;
+      MyCharacter.inventory.nx = charData.nx ?? 0;
     }
 
     // Quests. Quest data must be loaded first — see the same block in
@@ -301,10 +312,12 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
       MyCharacter.skillManager.deserialize(charData.skills);
     }
 
-    // Hotkey bindings (skills + items)
-    if (charData.keymap?.length) {
+    // Hotkey bindings (skills + items). Unconditional: an empty keymap is a
+    // fresh character, and deserialize must still run to wipe whatever
+    // character was loaded before it this session.
+    {
       const UIHotkeyBar = (await import('./UI/UIHotkeyBar')).default;
-      await UIHotkeyBar.deserialize(charData.keymap);
+      await UIHotkeyBar.deserialize(charData.keymap || []);
     }
 
     // Server IDs and position
@@ -312,6 +325,14 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
     (MyCharacter as any)._startMapId = charData.mapId;
     (MyCharacter as any)._startPosX = charData.posX;
     (MyCharacter as any)._startPosY = charData.posY;
+
+    // Expired Cash Shop rentals go before the flip, same as the login path
+    try {
+      const { sweepExpiredCashItems } = await import('./Shop/CashShopData');
+      await sweepExpiredCashItems(MyCharacter);
+    } catch (e) {
+      console.warn('[DevAutoLogin] expiry sweep failed', e);
+    }
 
     // Restore finished — saves are safe from here on
     (MyCharacter as any)._restoreComplete = true;

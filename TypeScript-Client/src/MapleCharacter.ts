@@ -573,9 +573,15 @@ class MapleCharacter {
     this.hair = hair;
   }
 
+  /**
+   * slot >= 100 is the v83 cash layer: slot 100+N covers base slot N. The
+   * cover contributes pixels only — the base item underneath keeps its stats.
+   */
   async attachEquip(slot: number, id: number) {
     if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
-    const realSlot = slot < 0 ? -(slot + 1) : slot;
+    let realSlot = slot < 0 ? -(slot + 1) : slot;
+    const isCashSlot = realSlot >= 100;
+    const baseSlot = isCashSlot ? realSlot - 100 : realSlot;
     const firstThreeDigits = Math.floor(id / 10000);
     const equipMap: any = {
       101: { dir: "Accessory", slot: 1 }, // face accessory
@@ -623,17 +629,14 @@ class MapleCharacter {
     const mapping = equipMap[firstThreeDigits];
     if (!mapping || mapping.slot === undefined) return;
     const targetSlot = mapping.slot;
-    if (realSlot === targetSlot) {
+    if (baseSlot === targetSlot) {
       const dir = mapping.dir;
       const equip = await WZManager.get(`Character.wz/${dir}/0${id}.img`);
       this.equips[realSlot] = equip;
       this.equippedItemIds[realSlot] = id;
       console.log("Adding equip", id, "to slot", realSlot);
       if (targetSlot === 10) {
-        this.weaponEquip = equip;
-        this.weaponEquipId = id;
-        this.weaponStandType = (equip as any)?.info?.stand?.nValue === 2 ? 2 : 1;
-        this.weaponWalkType = (equip as any)?.info?.walk?.nValue === 2 ? 2 : 1;
+        this._refreshWeaponVisual();
       }
       if (targetSlot === 19 && !this.defaultSaddle) {
         // Saddle visuals live in 01912000.img keyed by mount id — preload so
@@ -684,13 +687,23 @@ class MapleCharacter {
     delete this.equippedItemIds[realSlot];
     delete this.equippedItemIcons[realSlot];
     delete this.equippedItemData[realSlot];
-    if (realSlot === 10) {
-      this.weaponEquip = undefined;
-      this.weaponEquipId = undefined;
-      this.weaponStandType = 1;
-      this.weaponWalkType = 1;
+    if (realSlot === 10 || realSlot === 110) {
+      this._refreshWeaponVisual();
     }
     this.recalcLocalStats();
+  }
+
+  /**
+   * The weapon the world sees. A cash weapon cover (slot 110) masks the real
+   * weapon (slot 10) — its stance/walk type drives the animations while worn,
+   * and detaching it hands the visuals back to the real weapon.
+   */
+  _refreshWeaponVisual() {
+    const equip = this.equips[110] ?? this.equips[10];
+    this.weaponEquip = equip;
+    this.weaponEquipId = this.equippedItemIds[110] ?? this.equippedItemIds[10];
+    this.weaponStandType = (equip as any)?.info?.stand?.nValue === 2 ? 2 : 1;
+    this.weaponWalkType = (equip as any)?.info?.walk?.nValue === 2 ? 2 : 1;
   }
   destroy() {
     this.destroyed = true;
@@ -2644,33 +2657,40 @@ isCloseToMob = (inAllDirections = true) => {
     );
 
     for (const itemDrop of itemDrops) {
-      itemDrop.goToPlayer(this.pos.vx, this.pos.vy);
-      itemDrop.isAlreadyPickedUp = true;
-      console.log("itemDrop", itemDrop);
-      // Broadcast pickup to other players
-      const netDropId = (itemDrop as any)._netDropId;
-      if (netDropId && (window as any).__mySocket) {
-        (window as any).__mySocket.sendItemPickup(netDropId);
-      }
-      // this is async. Equips must use the numeric drop id — their
-      // itemFile.nName is a Character.wz filename, not an item id. Other
-      // drops (incl. mesos, id=0) keep resolving via itemFile.nName.
-      // equipData restores scroll bonuses on picked-up gear.
-      const isEquipDrop = Math.floor(itemDrop.id / 1000000) === 1;
-      this.inventory.addToInventory(
-        isEquipDrop ? itemDrop.id : itemDrop.itemFile.nName,
-        itemDrop.amount,
-        isEquipDrop ? (itemDrop as any).equipData ?? undefined : undefined,
-      );
-      this.logPickupMessage(
-        isEquipDrop ? itemDrop.id : parseInt(String(itemDrop.itemFile.nName), 10),
-        itemDrop.amount,
-      );
-
+      this.pickupDrop(itemDrop);
       if (!AllowMultiPickupAtOnce) {
         break;
       }
     }
+  };
+
+  /**
+   * The single pickup path: animation + network broadcast + inventory +
+   * chat log. Player collision and pet auto-loot (Item Pouch/Meso Magnet)
+   * both funnel through here so the flows can never diverge.
+   */
+  pickupDrop = (itemDrop: DropItemSprite) => {
+    itemDrop.goToPlayer(this.pos.vx, this.pos.vy);
+    itemDrop.isAlreadyPickedUp = true;
+    // Broadcast pickup to other players
+    const netDropId = (itemDrop as any)._netDropId;
+    if (netDropId && (window as any).__mySocket) {
+      (window as any).__mySocket.sendItemPickup(netDropId);
+    }
+    // this is async. Equips must use the numeric drop id — their
+    // itemFile.nName is a Character.wz filename, not an item id. Other
+    // drops (incl. mesos, id=0) keep resolving via itemFile.nName.
+    // equipData restores scroll bonuses on picked-up gear.
+    const isEquipDrop = Math.floor(itemDrop.id / 1000000) === 1;
+    this.inventory.addToInventory(
+      isEquipDrop ? itemDrop.id : itemDrop.itemFile.nName,
+      itemDrop.amount,
+      isEquipDrop ? (itemDrop as any).equipData ?? undefined : undefined,
+    );
+    this.logPickupMessage(
+      isEquipDrop ? itemDrop.id : parseInt(String(itemDrop.itemFile.nName), 10),
+      itemDrop.amount,
+    );
   };
 
   // GMS-style chat log line for a picked-up drop
@@ -3001,10 +3021,16 @@ isCloseToMob = (inAllDirections = true) => {
       img.nGet(faceExpr).nGet(faceFrame).nChildren;
 
     const twoChars = /.{1,2}/g;
+    // Base layer only (slots 0-22) — then cash covers (slots 100+N) replace
+    // the pixels of the piece they cover, v83 costume style. The base item
+    // keeps its stats; only the visual swaps.
+    const effectiveEquips = this.equips.slice(0, 23);
+    for (let s = 0; s <= 22; s++) {
+      if (this.equips[100 + s]) effectiveEquips[s] = this.equips[100 + s];
+    }
     // v83 characters are never fully naked — empty top/bottom slots render
     // default underwear (a longcoat covers both, so no underpants under it)
-    const effectiveEquips = [...this.equips];
-    const topId = this.equippedItemIds?.[4];
+    const topId = this.equippedItemIds?.[104] ?? this.equippedItemIds?.[4];
     const hasLongcoat = !!topId && Math.floor(topId / 10000) === 105;
     if (!effectiveEquips[4] && this.underwearTop) {
       effectiveEquips[4] = this.underwearTop;

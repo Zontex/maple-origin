@@ -1,6 +1,7 @@
 import WZManager from "./wz-utils/WZManager";
 
 import Background, { getBackgroundScale } from "./Background";
+import config from "./Config";
 import { getBossSpawns, BOSS_MOBTIME_S } from "./Constants/BossSpawns";
 import Foothold from "./FootHold";
 import Portal from "./Portal";
@@ -28,6 +29,7 @@ import ShipObject from './Transport/ShipObject';
 import { _setMapleMap } from './Physics';
 import { drawSkillHits, clearSkillHits } from './Effects/SkillHitEffect';
 import HenesysPQ from './Events/HenesysPQ';
+import PetManager from './Pet/PetManager';
 
 export interface MapleMap {
   id: number | string;
@@ -702,8 +704,16 @@ MapleMap.loadMonsters = async function (wzNode) {
 
     // Re-entering a map we have been on: a mob still inside its respawn
     // window stays down, and a survivor comes back hurt and where we left it
-    // rather than healed at its spawn point
-    const remembered = MapStateCache.getMonsterState(Number(this.id), spawnDef.oId);
+    // rather than healed at its spawn point.
+    // Solo-play continuity ONLY: under multiplayer the current host's roster
+    // is the truth, and resuming from stale local memory is exactly what
+    // spawned frozen mid-air "ghost" mobs for non-host players. When we are
+    // not (yet) the host, mobs spawn fresh and the host's batches take over.
+    const sock: any = (window as any).__mySocket;
+    const useRemembered = !sock?.isConnected || !!sock?.isMobHost;
+    const remembered = useRemembered
+      ? MapStateCache.getMonsterState(Number(this.id), spawnDef.oId)
+      : null;
     if (remembered && !remembered.alive) {
       spawnDef.alive = false;
       spawnDef.nextPossibleSpawn = remembered.nextPossibleSpawn;
@@ -1026,6 +1036,11 @@ MapleMap.update = function (msPerTick) {
       document.title = `CRASH: ${(e as any)?.message || e}`;
     }
   });
+  // Pets tick after their owners moved this frame (local train + remote)
+  try { PetManager.update(msPerTick); } catch (e) {
+    console.error('[MapleMap] Pet update crash:', e);
+  }
+
   this.portals.forEach((p: Portal) => p.update(msPerTick));
 
   this.itemDrops = this.itemDrops.filter(
@@ -1060,6 +1075,15 @@ const _reactorLayers = makeLayerBuckets();
 const _characterLayers = makeLayerBuckets();
 const _npcLayers = makeLayerBuckets();
 const _backLayers = [[] as any[], [] as any[]]; // [behind, front]
+
+// Offscreen compositor for the scaled background pass. Tiles used to be drawn
+// straight onto the scaled main context; with smoothing on, every drawImage
+// feathers its own edges against transparency, painting a hairline seam at
+// each tile boundary (the vertical "cut lines" in the sky at 1280x720).
+// Composing the layer 1:1 here and blitting it in ONE scaled draw leaves no
+// interior edges to feather.
+let _bgCompose: HTMLCanvasElement | null = null;
+let _bgComposeCtx: CanvasRenderingContext2D | null = null;
 
 function bucketByLayer(list: any[], buckets: any[][]) {
   for (const b of buckets) b.length = 0;
@@ -1118,19 +1142,39 @@ MapleMap.render = function (
   // Backgrounds are composed for the authored 800x600 frame and scaled up to
   // cover a bigger viewport (see getBackgroundScale). Smoothing is off globally
   // to keep sprites crisp, but an upscaled panorama needs it — nearest-neighbour
-  // turns the sky gradient into steps.
+  // turns the sky gradient into steps. The layer is composed 1:1 on an
+  // offscreen canvas and blitted in one smoothed draw (see _bgCompose).
   const drawBackgroundLayer = (layer: any[]) => {
+    if (layer.length === 0) return;
     const scale = getBackgroundScale();
     if (scale === 1) {
       layer.forEach(draw);
       return;
     }
-    const ctx = canvas.context;
-    ctx.save();
-    ctx.scale(scale, scale);
-    ctx.imageSmoothingEnabled = true;
-    layer.forEach(draw);
-    ctx.restore();
+    const w = Math.ceil(config.width / scale);
+    const h = Math.ceil(config.height / scale);
+    if (!_bgCompose || _bgCompose.width !== w || _bgCompose.height !== h) {
+      _bgCompose = document.createElement("canvas");
+      _bgCompose.width = w;
+      _bgCompose.height = h;
+      _bgComposeCtx = _bgCompose.getContext("2d");
+    }
+    const octx = _bgComposeCtx;
+    if (!octx) return;
+    octx.clearRect(0, 0, w, h);
+    // Redirect the entity draw path into the compositor — Background.draw
+    // renders through canvas.drawImage, which reads canvas.context.
+    const mainCtx = canvas.context;
+    canvas.context = octx;
+    try {
+      layer.forEach(draw);
+    } finally {
+      canvas.context = mainCtx;
+    }
+    mainCtx.save();
+    mainCtx.imageSmoothingEnabled = true;
+    mainCtx.drawImage(_bgCompose, 0, 0, w, h, 0, 0, w * scale, h * scale);
+    mainCtx.restore();
   };
 
   drawBackgroundLayer(_backLayers[0]);
@@ -1193,10 +1237,18 @@ MapleMap.render = function (
     _npcLayers[i].forEach(draw);
   };
 
+  // v83 draws pets behind their owner
+  const drawPets = () => {
+    try { PetManager.drawPets(canvas, camera); } catch (e) {
+      console.error('[MapleMap] Pet draw crash:', e);
+    }
+  };
+
   if (isClimbing) {
     // Climbing: draw ALL layers, then player on top (player in front of rope/chain)
     for (let i = 0; i <= 7; i++) drawLayer(i);
 
+    drawPets();
     if (this.PlayerCharacter) {
       draw(this.PlayerCharacter);
       drawPlayerEffects(this.PlayerCharacter);
@@ -1205,6 +1257,7 @@ MapleMap.render = function (
     // Normal/jumping: draw up to player's layer, then player, then higher layers
     for (let i = 0; i <= playerLayer; i++) drawLayer(i);
 
+    drawPets();
     if (this.PlayerCharacter) {
       draw(this.PlayerCharacter);
       drawPlayerEffects(this.PlayerCharacter);
@@ -1245,8 +1298,35 @@ MapleMap.render = function (
     }
   }
 
+  // Pet name tags + chat balloons — same above-everything treatment
+  try { PetManager.drawOverlays(canvas, camera); } catch (e) {
+    console.error('[MapleMap] Pet overlay draw failed:', e);
+  }
+
   // Station departure clock (world-space) / timed-ride countdown
   UIShipClock.draw(canvas, camera);
+
+  // v83 shows black beyond the map's VR bounds. On maps narrower than the
+  // viewport (only possible at widescreen resolutions — the camera centres
+  // them, see Camera.lookAt) the tile stack otherwise ends mid-screen with
+  // the parallax sky running on behind the torn-off edge. Only the sides are
+  // masked: short maps are bottom-anchored and their top gap is legitimately
+  // covered by the scaled background, which many maps rely on for their sky.
+  {
+    const b = camera.boundaries;
+    if (b) {
+      const ctx = canvas.context;
+      const leftGap = Math.round(b.left - camera.x);
+      const rightEdge = Math.round(b.right - camera.x);
+      if (leftGap > 0 || rightEdge < config.width) {
+        ctx.fillStyle = "#000000";
+        if (leftGap > 0) ctx.fillRect(0, 0, leftGap, config.height);
+        if (rightEdge < config.width) {
+          ctx.fillRect(rightEdge, 0, config.width - rightEdge, config.height);
+        }
+      }
+    }
+  }
 
   // F10 collision overlay — on top of everything so lines stay visible
   if (debugCollision) {

@@ -103,6 +103,8 @@ Systems
 ├── Projectile/          → Arrows/stars, targeting, collision
 ├── Audio/               → BGM and SFX
 ├── Effects/             → Damage numbers
+├── Pet/                 → Pet entity, follow AI, commands, feeding, equips (see Pet System)
+├── Shop/CashShopData.ts → Cash Shop catalog (Commodity.img), expiry helpers, face coupons
 
 Quest System
 ├── Quest/QuestData.ts       → Parses Quest.wz (QuestInfo, Check, Act, Say), name lookups, format codes
@@ -121,6 +123,8 @@ UI (all rendered from WZ assets)
 ├── UI/TaxiUI.ts         → Transportation dialog
 ├── UI/Menu/             → Inventory, Stats, Equipment, Quest Log windows (draggable)
 ├── UI/UIMiniMap.ts      → Minimap with cached offscreen rendering
+├── UI/CashShopUI.ts     → Full-screen Cash Shop overlay (playable preview, buy flow)
+├── UI/UIAvatarMegaphone.ts → Avatar megaphone dialog + top-right banner
 ├── UI/DebugDrag.ts      → F9 debug positioning tool
 
 Networking
@@ -564,3 +568,35 @@ Both `MapleCharacter` and `Monster` have an `isRemote` flag:
 - Server prints them with cyan `[CLIENT <id>]` prefix
 - Catches `window.error` and `unhandledrejection` events
 - Enables debugging without opening browser DevTools (which slows the game loop)
+
+## Cash Shop System
+- **Entry**: SHOP status-bar button → `UI/CashShopUI.ts`, a full-screen overlay inside MapState (NOT a StateManager state — the world keeps ticking so a mob-host player in the shop doesn't freeze mobs for everyone). ESC or EXIT returns; HUD buttons are snapshot-hidden/restored; ShopBgm swaps in/out.
+- **NX currency** is client-authoritative like mesos: `Inventory.nx` accessor (setter fires requestSave), `gainNX()` clamped; rides the save payload, `characters.nx` column, and both restore paths. BtCharge grants +10,000 NX free.
+- **Catalog**: `Shop/CashShopData.ts` parses `Etc.wz/Commodity.img` (8,941 entries) once. Tab mapping (label-verified off the baked strip): 1=MAIN (OnSale), 3=EQUIP, 4=USE (cat 2 + cat 5 minus pet stock), 5=SET-UP, 6=ETC, 7=PET (live pets + food + pet equips + Rock of Evolution, deduped by itemId preferring OnSale SKUs), others show the NoItem plate. Packages ≥9000000 excluded (no names exist).
+- **Rentals**: `Period` days → `equipData.expireAt`; `sweepExpiredCashItems` runs in both restore paths before `_restoreComplete` (nulls expired items, dollifies pets, strips expired pet equips, detaches expired worn gear).
+- **Cash equips** land in the CASH tab and wear as costume covers (slot base+100) over real gear — stats untouched.
+- **Avatar megaphone** (`UIAvatarMegaphone`): CSNotice dialog → server `broadcastToAll` → top-right banner with the sender's look standing on the baked shadow (origin-anchored frames so only the tiger shakes).
+- **Face coupons** 5160000-5160014 map to Face.wz expressions via `FACE_COUPON_EXPRESSIONS` (no WZ mapping field exists — pairing is by name); double-click or key binding fires the emote, never consumed.
+- **Best items** rail: server tallies `cash_buy_log` per item (`cash_shop_sales` table), `get_best_items` returns top 5.
+- **Icon loading**: pets are the ONLY whole-.img-per-item type (`Item.wz/Pet/<unpadded id>.img`); everything else is `<first4>.img/<8-digit>`. `_kickIconLoad` and `Item.load()` both special-case this.
+
+## Pet System
+Full v83 pets: up to 3 simultaneous, follow AI on real Physics, feeding/closeness/leveling (cap 30), chat commands, pet equips, evolution, 90-day life. Module: `src/Pet/` (PetConstants, PetWzData, Pet, PetCommands, PetManager, PetOverlayUI).
+
+### Architecture invariants (do not break)
+- **All pet state lives in the cash-tab item's `equipData` blob**: petName, petLevel, closeness, fullness, dead, summoned, petEquips, lifeUsedSec, expireAt (= life clock from `info/life` days at purchase; permanent pets have none). Zero DB schema — rides serializeTab → `inventory_items.equip_data`. PetManager mutates the live blob in place; the 30s autosave persists it.
+- **Pet positions are NEVER sent over the network.** Remote pets run the same follow AI against the lerped remote owner. Only the roster `pets: [{itemId, name, level, equip}]` (on player_info + player_update, change-gated by `getSummonedKey()`) and one-shot `petAction {i, action, say}` sync. `server/handlers/player.js` merges an explicit field whitelist — `pets`/`petAction` must stay listed or they're silently dropped.
+- Pet mutations use `Inventory.removeAt(tab, slot)`, never `removeFromInventory(itemId)` (could hit the wrong same-species pet). Pets have `getSlotMax()=1` (no WZ slotMax → the 100 default would merge two pets' blobs).
+- `sweepExpiredCashItems` DOLLIFIES expired pets (`dead:true`, iconRawD in inventory, unsummonable) — never nulls a pet slot.
+- `getWzNameFromInventoryId` receives 8-digit PADDED ids — the pet branch must use the numeric range 5000000-5009999 (`"05000000"[0]` is `'0'`, so the old `[0]==='5'` check was dead code).
+
+### Behavior
+- **Summon**: double-click in CASH tab (or item hotkey) toggles; `summoned` flag persists → `spawnFromInventory` re-summons after every map load (idempotent). Eggs (evolReqItemID=0) hatch on summon via the evolution roll.
+- **Follow AI** (Pet.ts): walk hysteresis start>72px/stop<24px, +20% walk speed (150), ledge hop via `pos.jump()`, walks off edges freely, teleport-to-owner with `PetEff.img/<id>/warp` when >640x/350y away or stuck 3s. Train: pet i follows pet i-1; despawn splices re-chain. **Climbing: every pet hard-snaps to the owner's back** (x=owner, y=owner−8−12·i, no lerp, `hang` stance, drawn before the player so the torso covers it); remote owners climb via stance `ladder`/`rope`, not `pos.isClimbing`.
+- **Fullness**: −1 every `(48−6·hungry)`s; ≤30 → hungry stance + warning; 0 → −1 closeness, despawn "went home", fullness left at 5. **Feeding**: food's WZ `spec` has `inc` + numbered petId whitelist → hungriest whitelisted pet; consumed on success AND full-refusal; +1 closeness only when below full.
+- **Commands** (PetCommands.ts, hooked in UIMap chat submit, non-exclusive): normalize text → match pipe-separated `cN` aliases in `String.wz/PetDialog.img/<petId>` → interact entry band-gated by l0/l1 (bands 1-9/10-19/20-29/30) → roll `prob`% → success/fail `act` stance + dialog balloon. `interact/<i>/success|fail/<k>`: k is a VARIANT index, not a band. Level-up: ExpTable.pet thresholds, LevelUp effect + `levelup` sound.
+- **Pet equips are MULTI-SLOT**: `petEquips: Record<slotKey, {id, expireAt?}>` — slot keys/cells pixel-scanned from `UIWindow.img/Equip/pet` (4×4 grid, cols x=14/47/80/113, rows y=12/45/78/111). Panel UI in EquipMenuSprite: PET EQUIP button at (97,281) on the window rim, panel docks right bottom-aligned, BtPet1/2/3 (y=150) select `PetManager.selectedPetIndex`, double-click a cell to unequip. `equipFlags` = merged info ints of ALL worn equips; cosmetic overlay (1802xxx, per-petId stance sprites with cross-petId `$uol`) from the 'equip' slot; cosmetic id rides the sync roster so remotes render it.
+- **Functional equips**: Item Pouch `pickupItem` / Meso Magnet `pickupMeso` loot through `MapleCharacter.pickupDrop` — the single pickup path (never add a second); Binocular `longRange` widens the rect, Item Ignore disables. Auto HP/MP pouches drink below 50% via `inventoryMenu.consumeItem` (works with the menu closed).
+- **Evolution**: Rock of Evolution 5380000 on a summoned pet with `evol` node + `petLevel ≥ evolReqPetLvl`; roll weights normalized by SUM of evolProbN (Dragons sum 100, Robos 1000 — never assume 100); `replacePetItem` rewrites the item in-place keeping the blob, petName resets to the new species.
+- **No bindable pet key exists in v83** — verified against the KeyConfig icon strip (0-27 are menu plates, 54 = NPC CHAT). Don't invent a "pet" BindableAction; summon is double-click/item-hotkey only.
+- Overlays: pet name tag = `UI.wz/NameTag.img/pet/<info.nameTag>` 3-slice (fallback plain tag), balloons = `ChatBalloon.img/pet/<info.chatBalloon>` 9-patch (fallback style "0"), both in the map overlay pass.

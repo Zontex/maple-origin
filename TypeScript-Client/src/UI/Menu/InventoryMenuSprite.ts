@@ -3,7 +3,15 @@ import WZFiles from "../../Constants/enums/WZFiles";
 import ClickManager from "../ClickManager";
 import { MapleStanceButton } from "../MapleStanceButton";
 import DragableMenu from "./DragableMenu";
-import { MapleInventoryType } from "../../Constants/Inventory/MapleInventory";
+import {
+  MapleInventoryType,
+  isPetItemId,
+  isPetFoodItemId,
+  isPetEquipItemId,
+  EVOLUTION_ROCK_ID,
+} from "../../Constants/Inventory/MapleInventory";
+import PetManager from "../../Pet/PetManager";
+import ExpTable from "../../Constants/ExpTable";
 import { CameraInterface } from "../../Camera";
 import { Position } from "../../Effects/DamageIndicator";
 import GameCanvas from "../../GameCanvas";
@@ -18,6 +26,8 @@ import UIDevTools from "../UIDevTools";
 import mySocket from "../../mysocket";
 import UIHotkeyBar from "../UIHotkeyBar";
 import UIEquipTooltip from "../UIEquipTooltip";
+import { formatRemaining, FACE_COUPON_EXPRESSIONS } from "../../Shop/CashShopData";
+import UIAvatarMegaphone, { isMegaphoneItem } from "../UIAvatarMegaphone";
 import { getEquipSlotForItem } from "./EquipMenuSprite";
 import UIKeyConfig from "../UIKeyConfig";
 
@@ -444,7 +454,14 @@ class InventoryMenuSprite extends DragableMenu {
         if (slotIndex < items.length && items[slotIndex]) {
           const item = items[slotIndex];
           let icon = null;
-          if (item.node && item.node.iconRaw) {
+          // Expired pets show their doll icon (iconRawD)
+          if (item.equipData?.dead) {
+            const dollNode = item.node?.info?.iconRawD ?? item.node?.info?.iconD;
+            try {
+              if (dollNode?.nGetImage) icon = dollNode.nGetImage();
+            } catch { /* fall through to the live icon */ }
+          }
+          if (!icon && item.node && item.node.iconRaw) {
             try {
               icon = item.node.iconRaw.nGetImage();
             } catch (e) {
@@ -739,6 +756,29 @@ class InventoryMenuSprite extends DragableMenu {
                 this.equipItem(item, slotIndex);
               } else if (this.currentTab === MapleInventoryType.SETUP) {
                 this.useSetupItem(item);
+              } else if (this.currentTab === MapleInventoryType.CASH) {
+                if (Math.floor(item.itemId / 1000000) === 1) {
+                  if (isPetEquipItemId(item.itemId)) {
+                    // Pet equips go on a summoned pet, not the character
+                    void PetManager.equipPetItem(item, slotIndex, this.charecter);
+                  } else {
+                    // Cash clothes wear as a costume cover (slot base+100)
+                    // over the real gear — v83 style, stats untouched
+                    this.equipItem(item, slotIndex, true);
+                  }
+                } else if (isPetItemId(item.itemId)) {
+                  // Live pet: double-click toggles summon
+                  void PetManager.toggleSummon(item, this.charecter);
+                } else if (isPetFoodItemId(item.itemId)) {
+                  PetManager.feedPet(item, slotIndex, this.charecter);
+                } else if (item.itemId === EVOLUTION_ROCK_ID) {
+                  void PetManager.useEvolutionRock(item, slotIndex, this.charecter);
+                } else if (isMegaphoneItem(item.itemId)) {
+                  void UIAvatarMegaphone.promptAndSend(item, this.charecter);
+                } else if (FACE_COUPON_EXPRESSIONS[item.itemId]) {
+                  // Face-expression coupons fire their emote (not consumed)
+                  this.charecter.playEmote?.(FACE_COUPON_EXPRESSIONS[item.itemId]);
+                }
               }
               return true;
             }
@@ -1006,16 +1046,19 @@ class InventoryMenuSprite extends DragableMenu {
     });
   }
   
-  // Equip an item from the Equip tab (double-click)
-  async equipItem(item: any, slotIndex: number) {
+  // Equip an item from the Equip tab (double-click). asCash wears it as a
+  // v83 costume cover: slot base+100, swapped occupants return to the CASH
+  // tab, and the real gear underneath keeps its slot and stats.
+  async equipItem(item: any, slotIndex: number, asCash: boolean = false) {
     if (!item || !this.charecter) return;
 
     const itemId = item.itemId;
-    const slot = getEquipSlotForItem(itemId);
-    if (slot < 0) {
+    const baseSlot = getEquipSlotForItem(itemId);
+    if (baseSlot < 0) {
       console.warn(`[Inventory] Cannot determine equip slot for item ${itemId}`);
       return;
     }
+    const slot = asCash ? baseSlot + 100 : baseSlot;
 
     // v83 requirement gate: level/stats/fame must meet the item's reqs
     // (like GMS, the double-click simply does nothing when unmet — the
@@ -1027,7 +1070,9 @@ class InventoryMenuSprite extends DragableMenu {
     }
 
     // Remove from inventory first so the swapped-out item can take this slot
-    const equipArr = this.charecter.inventory.equip;
+    const equipArr = asCash
+      ? this.charecter.inventory.cash
+      : this.charecter.inventory.equip;
     const idx = equipArr.indexOf(item);
     if (idx !== -1) {
       equipArr[idx] = null;
@@ -1312,6 +1357,32 @@ class InventoryMenuSprite extends DragableMenu {
       }
       descSegments.push({ text: remaining.substring(0, cEnd), color: '#FFaa00' });
       remaining = remaining.substring(cEnd + 1);
+    }
+    // Pet status block: name/level/closeness/fullness above the desc, and
+    // the doll line when the pet's life ran out
+    if (isPetItemId(item.itemId) && item.equipData?.petLevel != null) {
+      const d: any = item.equipData;
+      const next = ExpTable.getClosenessNeededForLevel(Math.min(30, (d.petLevel ?? 1) + 1));
+      descSegments.unshift({
+        text:
+          `${d.petName ?? ''}\n` +
+          `Level: ${d.petLevel} | Closeness: ${d.closeness ?? 0}/${next}\n` +
+          `Fullness: ${d.fullness ?? 100}/100${rawDesc ? '\n' : ''}`,
+        color: '#FFffff',
+      });
+      if (d.dead) {
+        descSegments.push({
+          text: '\nThis pet has turned back into a doll.',
+          color: '#FF8888',
+        });
+      }
+    }
+    // Cash Shop rental countdown rides the same colored-segment pipeline
+    if (item.equipData?.expireAt) {
+      descSegments.push({
+        text: `${rawDesc ? '\n' : ''}${isPetItemId(item.itemId) ? 'Life remaining' : 'Remaining'}: ${formatRemaining(item.equipData.expireAt)}`,
+        color: '#FFaa00',
+      });
     }
     // Build plain desc for layout calculation, keep segments for colored rendering
     const desc = descSegments.map(s => s.text).join('');

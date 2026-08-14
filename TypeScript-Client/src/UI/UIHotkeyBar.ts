@@ -4,6 +4,8 @@ import MyCharacter from '../MyCharacter';
 import SkillData, { SkillInfo } from '../Skills/SkillData';
 import WZManager from '../wz-utils/WZManager';
 import PLAY_AUDIO from '../Audio/PlayAudio';
+import { FACE_COUPON_EXPRESSIONS } from '../Shop/CashShopData';
+import { isPetItemId, isPetFoodItemId } from '../Constants/Inventory/MapleInventory';
 import config from '../Config';
 import DragManager, { DragType } from './DragManager';
 
@@ -177,6 +179,41 @@ const UIHotkeyBar = {
   // Consume a bound Use item — same flow as double-clicking it in the
   // inventory (InventoryMenuSprite owns the spec parsing / sound / removal)
   activateItem(itemId: number) {
+    // Cash face-expression coupons play their emote and are never consumed
+    const expr = FACE_COUPON_EXPRESSIONS[itemId];
+    if (expr) {
+      MyCharacter.playEmote?.(expr);
+      return;
+    }
+
+    // Pet food bound to a key: feed the hungriest eligible pet
+    if (isPetFoodItemId(itemId)) {
+      const cashTab = MyCharacter.inventory?.cash || [];
+      const slot = cashTab.findIndex(
+        (i: any) => i && i.itemId === itemId && (i.quantity ?? 1) > 0
+      );
+      if (slot >= 0) {
+        import('../Pet/PetManager').then(({ default: PetManager }) => {
+          PetManager.feedPet(cashTab[slot], slot, MyCharacter);
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    // Pet bound to a key: toggle summon (same as double-click in Cash tab)
+    if (isPetItemId(itemId)) {
+      const cashTab = MyCharacter.inventory?.cash || [];
+      const petItem = cashTab.find(
+        (i: any) => i && i.itemId === itemId && !i.equipData?.dead
+      );
+      if (petItem) {
+        import('../Pet/PetManager').then(({ default: PetManager }) => {
+          void PetManager.toggleSummon(petItem, MyCharacter);
+        }).catch(() => {});
+      }
+      return;
+    }
+
     const inventoryMenu = (window as any).MapStateInstance?.inventoryMenu;
     if (!inventoryMenu) return;
 
@@ -480,8 +517,18 @@ const UIHotkeyBar = {
 
   // Deserialize from DB load. The keymap table also carries the keyboard
   // bindings (bindType 3/4/5) — route those to KeyBindings; 1/2 are ours.
+  // The saved keymap is the whole truth for its character, so the bar is
+  // cleared first — the singleton survives a logout, and without the wipe a
+  // freshly created character inherited the previous character's skill and
+  // potion slots (which the next auto-save then wrote into the new save).
   async deserialize(data: { keyCode: string; bindType: number; actionId: number }[]) {
     if (!this._initialized) this.initialize();
+
+    for (const slot of this.slots) {
+      slot.type = 'none';
+      slot.actionId = 0;
+      slot.icon = null;
+    }
 
     try {
       const { applyKeyboardBindings } = await import('../KeyBindings');

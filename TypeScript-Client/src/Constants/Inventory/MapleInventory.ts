@@ -45,14 +45,31 @@ const isMeso = (itemId: string) => {
   return id >= 9000000 && id <= 9000003;
 };
 
+// Live pets 5000000-5009999. Note: pets are the only item type with a whole
+// .img per item at Item.wz/Pet/<unpadded id>.img — everything else groups
+// under a 4-digit-prefix .img. Callers pass 8-digit padded ids, so the check
+// must be numeric ("05000000"[0] is '0', never '5').
+export const isPetItemId = (id: number): boolean =>
+  id >= 5000000 && id < 5010000;
+
+/** Pet food 5240000-5249999 (cash items; spec.inc + petId whitelist) */
+export const isPetFoodItemId = (id: number): boolean =>
+  id >= 5240000 && id < 5250000;
+
+/** Pet equips: 1802xxx cosmetic, 1812xxx functional, 182x/183x labels */
+export const isPetEquipItemId = (id: number): boolean => {
+  const prefix = Math.floor(id / 10000);
+  return prefix >= 180 && prefix <= 183;
+};
+
+export const EVOLUTION_ROCK_ID = 5380000;
+
 const getWzNameFromInventoryId = (id: string): WzInventoryType => {
   const idAsString = id.toString();
-  if (idAsString[0] === "5") {
+  if (isPetItemId(parseInt(idAsString, 10))) {
     return WzInventoryType.Pet;
   } else {
     const secondDigit = idAsString[1];
-    console.log("secondDigit", secondDigit);
-
     const secondDigitToWzInventoryType: Record<string, WzInventoryType> = {
       5: WzInventoryType.Cash,
       2: WzInventoryType.Consume,
@@ -60,10 +77,6 @@ const getWzNameFromInventoryId = (id: string): WzInventoryType => {
       4: WzInventoryType.Etc,
       9: WzInventoryType.Special,
     };
-    console.log(
-      "secondDigitToWzInventoryType[secondDigit]",
-      secondDigitToWzInventoryType[secondDigit]
-    );
     return secondDigitToWzInventoryType[secondDigit];
   }
 };
@@ -102,6 +115,10 @@ const MapleInventory = {
   getMesosItemId,
   getInventoryTypeFromItemId,
   isMeso,
+  isPetItemId,
+  isPetFoodItemId,
+  isPetEquipItemId,
+  EVOLUTION_ROCK_ID,
 };
 
 export default MapleInventory;

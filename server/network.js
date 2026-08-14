@@ -35,4 +35,19 @@ function broadcastToMap(mapId, message, excludePlayerId = null) {
   }
 }
 
-module.exports = { sendToPlayer, broadcastToMap };
+/** World-wide broadcast — megaphones and other server-wide announcements */
+function broadcastToAll(message, excludePlayerId = null) {
+  const json = JSON.stringify(message);
+  for (const [id, player] of players.entries()) {
+    if (id === excludePlayerId) continue;
+    if (player.ws.readyState === WebSocket.OPEN) {
+      try {
+        player.ws.send(json);
+      } catch (error) {
+        console.error(`Error broadcasting to player ${id}:`, error);
+      }
+    }
+  }
+}
+
+module.exports = { sendToPlayer, broadcastToMap, broadcastToAll };

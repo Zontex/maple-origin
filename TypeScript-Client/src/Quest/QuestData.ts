@@ -139,7 +139,7 @@ let itemNamesPromise: Promise<void> | null = null;
 function ensureItemNames(): Promise<void> {
   if (!itemNamesPromise) {
     itemNamesPromise = (async () => {
-      const files = ['Consume', 'Eqp', 'Etc', 'Ins', 'Cash'];
+      const files = ['Consume', 'Eqp', 'Etc', 'Ins', 'Cash', 'Pet'];
       for (const file of files) {
         const node: any = await WZManager.get(`String.wz/${file}.img`);
         extractItemNames(node);

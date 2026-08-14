@@ -26,6 +26,17 @@ class Inventory {
     (window as any).__mySocket?.requestSave?.();
   }
 
+  // NX (Cash Shop currency) — same save-on-mutation contract as mesos
+  private _nx: number = 0;
+  get nx(): number {
+    return this._nx;
+  }
+  set nx(v: number) {
+    if (v === this._nx) return;
+    this._nx = v;
+    (window as any).__mySocket?.requestSave?.();
+  }
+
   constructor(opts: any) {
     this.equip = opts.equip || [];
     this.use = opts.use || [];
@@ -33,12 +44,19 @@ class Inventory {
     this.setup = opts.setup || [];
     this.cash = opts.cash || [];
     this.mesos = opts.mesos || 0;
+    this.nx = opts.nx || 0;
   }
 
   /** Clamped meso mutation — v83 caps at int32 max, never below 0 */
   gainMesos(amount: number) {
     const MESO_CAP = 2147483647;
     this.mesos = Math.max(0, Math.min(MESO_CAP, this.mesos + amount));
+  }
+
+  /** Clamped NX mutation — never below 0, capped like mesos */
+  gainNX(amount: number) {
+    const NX_CAP = 2147483647;
+    this.nx = Math.max(0, Math.min(NX_CAP, this.nx + amount));
   }
 
   async addToInventory(itemId: number | string, quantity: number, equipData?: any) {
@@ -90,6 +108,14 @@ class Inventory {
         // stack, so there is exactly one for a picked-up piece of gear
         const newItem = await Item.fromOpts({ itemId, quantity: 1, equipData });
         equipData = undefined;
+        // Cash-flagged equips (WZ info/cash) are costume covers and live in
+        // the CASH tab, like v83 — regular gear drops keep going to Equip
+        if (
+          mapleInventoryType === MapleInventoryType.EQUIP &&
+          newItem.isCashItem?.()
+        ) {
+          chosenType = this.cash;
+        }
         const slotMax = newItem.getSlotMax?.() ?? 100;
         newItem.quantity = Math.min(slotMax, remaining);
         remaining -= newItem.quantity;
@@ -129,6 +155,26 @@ class Inventory {
     const isEquip = Math.floor(itemId / 1000000) === 1;
     room += freeSlots * (isEquip ? 1 : 100);
     return room >= count;
+  }
+
+  /**
+   * Null one exact slot in a tab. Pet operations must use this instead of
+   * removeFromInventory — matching by itemId could hit the wrong same-species
+   * pet and destroy its closeness/name blob.
+   */
+  removeAt(tab: MapleInventoryType, slot: number): boolean {
+    const tabMap: Partial<Record<MapleInventoryType, Item[]>> = {
+      [MapleInventoryType.EQUIP]: this.equip,
+      [MapleInventoryType.USE]: this.use,
+      [MapleInventoryType.SETUP]: this.setup,
+      [MapleInventoryType.ETC]: this.etc,
+      [MapleInventoryType.CASH]: this.cash,
+    };
+    const items = tabMap[tab];
+    if (!items || !items[slot]) return false;
+    items[slot] = null as any;
+    (window as any).__mySocket?.requestSave?.();
+    return true;
   }
 
   removeFromInventory(itemId: number, quantity: number = 1): boolean {

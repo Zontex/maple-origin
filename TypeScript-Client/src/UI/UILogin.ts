@@ -345,6 +345,7 @@ UILogin.initialize = async function (canvas: GameCanvas) {
           (MyChar.inventory as any)[tab] = restored;
         }
         MyChar.inventory.mesos = charData.mesos ?? 0;
+        MyChar.inventory.nx = charData.nx ?? 0;
       }
 
       // Clear the previous character's quest log FIRST, and unconditionally —
@@ -379,10 +380,12 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         MyChar.skillManager.deserialize(charData.skills);
       }
 
-      // Apply hotkey bindings (skills + items)
-      if (charData.keymap?.length) {
+      // Apply hotkey bindings (skills + items). Unconditional: an empty
+      // keymap is a fresh character, and deserialize must still run to wipe
+      // whatever character was loaded before it this session.
+      {
         const UIHotkeyBar = (await import('./UIHotkeyBar')).default;
-        await UIHotkeyBar.deserialize(charData.keymap);
+        await UIHotkeyBar.deserialize(charData.keymap || []);
       }
 
       // Apply SP
@@ -400,6 +403,15 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       (MyChar as any)._startMapId = charData.mapId;
       (MyChar as any)._startPosX = charData.posX;
       (MyChar as any)._startPosY = charData.posY;
+
+      // Expired Cash Shop rentals go before the flip below, so the follow-up
+      // save persists the removal rather than a half-swept state
+      try {
+        const { sweepExpiredCashItems } = await import('../Shop/CashShopData');
+        await sweepExpiredCashItems(MyChar);
+      } catch (e) {
+        console.warn('[Login] expiry sweep failed', e);
+      }
 
       // Restore finished — saves are safe from here on
       (MyChar as any)._restoreComplete = true;

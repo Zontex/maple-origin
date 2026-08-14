@@ -27,10 +27,17 @@ const config: Config = {
   websocketUrl: import.meta.env.VITE_WEBSOCKET_URL,
 };
 
-export function enterBrowserFullscreen(): void {
-  const element: HTMLElement = document.documentElement;
-  if (element.requestFullscreen) {
-    element.requestFullscreen();
+/**
+ * Alt+Enter fullscreen toggle (wired in GameCanvas.listenKeyboard) — the
+ * binding v83's own SYSTEM OPTION art promises on its VIEWING MODE row.
+ * Uses the Fullscreen API, which hides all of the browser's UI — unlike
+ * macOS's green-button fullscreen, which can keep the toolbar on screen.
+ */
+export function toggleBrowserFullscreen(): void {
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  } else if (document.documentElement.requestFullscreen) {
+    document.documentElement.requestFullscreen().catch(() => {});
   }
 }
 

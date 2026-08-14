@@ -53,7 +53,11 @@ const SECTION_GAP = 7;
 const PAD_X = 10;
 const MAX_TRACKED = 5;
 
-// Balloon sits above the status bar (top edge y=529)
+// Balloon sits above the status bar (top edge y=529 at 800x600). The status
+// bar is a centered 800-wide island on wider screens (UIMap.startUIPosition),
+// so both anchors are 800x600-space values shifted by the island offset at
+// render time — hardcoding screen coordinates put the balloon mid-map at
+// 1280x720 instead of over the alert button.
 const BUBBLE_BOTTOM = 527;
 const BUBBLE_MS = 5000;    // auto-dismiss like GMS
 
@@ -102,11 +106,14 @@ const UIQuestAlarm = {
   balloonImg: null as HTMLImageElement | null,
   balloonIcon: null as HTMLImageElement | null,
 
-  // State
-  x: 582, // 800 - PANEL_W - 6
+  // State. x is an 800-wide-screen value; render() keeps the panel this far
+  // off the true right edge until the player drags it somewhere themselves.
+  x: 582,
   y: 40,  // below the buff icon row
   visible: true,
   collapsed: false,
+  _userMoved: false,
+  _anchorW: 800,
 
   // Quest-complete alarm rows (oldest shown first); age drives auto-dismiss
   completeQueue: [] as { questId: number; name: string; age: number }[],
@@ -173,6 +180,7 @@ const UIQuestAlarm = {
     const maxY = config.height - TITLE_H;
     this.x = Math.max(0, Math.min(maxX, Math.round(pos.x)));
     this.y = Math.max(0, Math.min(maxY, Math.round(pos.y)));
+    this._userMoved = true;
   },
 
   get questManager(): any {
@@ -282,6 +290,13 @@ const UIQuestAlarm = {
 
   render(canvas: GameCanvas) {
     if (!this.initialized) return;
+    // Follow the true right edge across resolution changes (initialize()
+    // runs before the saved resolution is applied) — but never fight a
+    // position the player chose by dragging.
+    if (!this._userMoved && this._anchorW !== config.width) {
+      this.x += config.width - this._anchorW;
+      this._anchorW = config.width;
+    }
     this._btMinRect = null;
     this._btCloseRect = null;
     this._btAutoRect = null;
@@ -439,9 +454,13 @@ const UIQuestAlarm = {
     if (!entry || !this.balloonImg) return;
 
     // Anchor by the tail tip, not the corner, so the balloon always points at
-    // the alert button regardless of its own width
-    const bx = BALLOON_TAIL_TARGET_X - BALLOON_TAIL_X;
-    const by = BUBBLE_BOTTOM - BALLOON_H;
+    // the alert button regardless of its own width. The tail target follows
+    // the status bar, which sits as a centered 800-wide island bottom-aligned
+    // on resolutions larger than 800x600.
+    const uiX = Math.floor((config.width - 800) / 2);
+    const uiY = config.height - 600;
+    const bx = BALLOON_TAIL_TARGET_X + uiX - BALLOON_TAIL_X;
+    const by = BUBBLE_BOTTOM + uiY - BALLOON_H;
 
     canvas.drawImage({ img: this.balloonImg, dx: bx, dy: by });
     if (this.balloonIcon) {

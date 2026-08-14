@@ -64,7 +64,8 @@ npm start                           # Serves client + server on :3001
 | Z | Pick up | Q | Quest Log |
 | Enter | Chat | K | Skills |
 | M | Minimap | Esc | Close menus |
-| F9 | Debug drag | | |
+| W | World Map | P | Party |
+| Alt+Enter | Fullscreen | F9 | Debug drag |
 
 ---
 
@@ -114,10 +115,27 @@ npm start                           # Serves client + server on :3001
 - Skill window (K) with SP allocation, skill hotkey bar with drag-and-drop assignment
 - Attack skills with WZ ball projectiles (Three Snails consumes tier-matched shells, v83 fixed damage), buffs, and skill sounds/effects
 
+### Cash Shop
+- Full-screen v83 Cash Shop from the SHOP button: 9 category tabs, item grid with pagination, Best Items rail (server-tallied top sellers), purchase confirm flow
+- NX currency persisted end-to-end (free +10,000 per Charge click)
+- Playable character preview: walk, jump, climb, and attack inside the preview stage with 1:1 game physics; try-on tray for cash clothes
+- Cash equips wear as costume covers over real gear (stats untouched), authentic Period-based rentals with expiry countdown and removal at login
+- Avatar megaphones (your character rides the banner), face-expression coupons
+
+### Pets
+- Buy live pets in the Cash Shop PET tab — up to 3 out at once in a follow train
+- Real-physics follow AI: walks footholds, hops ledges, rides your back while climbing, teleports with the warp effect when left behind
+- Feeding and fullness decay, closeness leveling to 30 with the authentic closeness table, level-up effect
+- Chat commands from PetDialog.wz ("sit", "iloveyou", ...) with success/fail reactions in real pet chat balloons and WZ name tags
+- Pet equipment panel in the Equipment window (PET EQUIP): cosmetic ribbons/hats rendered on the pet, Item Pouch / Meso Magnet auto-loot, Auto HP/MP potion pouches
+- Evolution (Baby Dragon/Robo lines with the Rock of Evolution), egg hatching, 90-day pet life ending as a doll
+- Pets persist across relogs/maps and are visible to other players (zero-bandwidth movement sync — remotes simulate the follow AI locally)
+
 ### Multiplayer
-- Real-time WebSocket sync: position, stance, animation, equipment
+- Real-time WebSocket sync: position, stance, animation, equipment, pets
 - Host-client mob AI with automatic failover
 - Shared item drops/pickups, reactor sync, chat balloons, level-up effects
+- Party system with invite/leave, HP-bar member list, and shared kill EXP
 - Death system with tombstone animation and town respawn
 
 ---
@@ -167,14 +185,13 @@ Porting [Cosmic](https://github.com/P0nk/Cosmic) (Java v83 emulator) to TypeScri
 
 See [CHANGELOG.md](CHANGELOG.md) for recent fixes. Major remaining work:
 
-- **Cash Shop**: Not implemented — blocks Yoona's Shopping Quiz quest chain (8020-8025) which requires purchasing Beginner's Shopping Guide
 - **Quest reward selection**: Quests with "choose one" rewards (e.g., quiz chain final reward: Blue Potion x30 OR Stolen Fence) don't present a choice UI yet
 - **Quiz quests**: `#L` selection codes in Say.img dialogue (530 quests) need full parse+render as clickable options with per-selection responses
 - **Job trial system**: Maple Island job instructors (Dances with Balrog, Athena Pierce, Grendel, etc.) offer job trial quests (1048-1053) that temporarily change job, teach trial skills, and warp to trial maps — requires temporary job change + trial map instances
 - **Skill coverage**: skill window, hotkey bar, and beginner/attack/buff skills work; full per-job skill coverage (mob skills, summons, party buffs) still in progress
 - **Quest system**: Fame reward bug (104 quests), item start requirements (488 quests)
 - **Scripts**: ~23 PQ/event NPC scripts remain non-functional pending the party/event-instance system (they run inside event maps that are unreachable without it); all other NPC, quest, and portal scripts execute crash-free via Java shims and chainable API stubs
-- **Missing features**: Party system, facial expressions, passive HP/MP regen, world map
+- **Missing features**: passive HP/MP regen, Cash Shop gifting/wishlist/packages, pet revival (Water of Life)
 
 ---
 

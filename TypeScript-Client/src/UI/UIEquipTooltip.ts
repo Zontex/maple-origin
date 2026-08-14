@@ -11,6 +11,7 @@ import GameCanvas from '../GameCanvas';
 import WZManager from '../wz-utils/WZManager';
 import { getEquipWzPath, EquipData } from '../Inventory/Item';
 import { getItemNameSync } from '../Quest/QuestData';
+import { formatRemaining } from '../Shop/CashShopData';
 import MyCharacter from '../MyCharacter';
 import { JOB_REQ_BITS } from '../Constants/Jobs';
 
@@ -284,7 +285,8 @@ const UIEquipTooltip = {
     const divY = jobY + jobH + 5;
     const textY = divY + 7;
     const lineH = 14;
-    const bottomLines = 1 + statLines.length + 1; // CATEGORY + stats + upgrades
+    const bottomLines =
+      1 + statLines.length + 1 + (equipData?.expireAt ? 1 : 0); // CATEGORY + stats + upgrades + rental
     const H = textY + bottomLines * lineH + 4 + FRAME_CAP;
 
     const canvasW = canvas.game?.width || 800;
@@ -430,6 +432,16 @@ const UIEquipTooltip = {
       drawSpriteLine(A.property[PROPERTY_INDEX[key]] || null, `${totals[key]}`, label);
     }
     drawSpriteLine(A.property[PROP_UPGRADES] || null, `${upgrades}`, 'NUMBER OF UPGRADES AVAILABLE');
+
+    // Cash Shop rental countdown — orange, like other cash-restriction text
+    if (equipData?.expireAt) {
+      canvas.drawText({
+        text: `Remaining: ${formatRemaining(equipData.expireAt)}`,
+        x: tx + ICON_X, y: ly,
+        color: '#FFAA00', fontSize: 11, fontWeight: 'bold',
+      });
+      ly += lineH;
+    }
 
     return true;
   },

@@ -1,3 +1,5 @@
+import { toggleBrowserFullscreen } from "./Config";
+
 class GameCanvas {
   scaleX;
   scaleY;
@@ -210,6 +212,17 @@ class GameCanvas {
   }
   listenKeyboard() {
     window.onkeydown = (e) => {
+      // Alt+Enter toggles browser fullscreen — the binding the SYSTEM OPTION
+      // art promises ("FULL SCREEN (PRESS ALT + ENTER TO CHANGE)"). Handled
+      // in the real keydown event rather than the poll loop: requestFullscreen
+      // needs the user-gesture activation, and it must work on the login
+      // screen and while an input has focus. The early return keeps the Enter
+      // out of pressedKeys, so the chat box does not open on the same press.
+      if (e.altKey && e.key === "Enter") {
+        e.preventDefault();
+        toggleBrowserFullscreen();
+        return;
+      }
       if (this.focusGame && !this.focusInput) {
         e.preventDefault();
         this.pressedKeys[e.keyCode] = true;

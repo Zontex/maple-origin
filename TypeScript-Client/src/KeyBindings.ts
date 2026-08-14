@@ -429,14 +429,26 @@ export function serializeFullKeymap(): KeymapEntry[] {
 }
 
 /**
- * Apply the character's saved keyboard bindings (bindType >= 3). A save that
- * carries any keyboard rows replaces the local set wholesale — the DB is the
- * per-character truth; a legacy save without them keeps the localStorage
- * bindings (they'll upload on the next save).
+ * Apply the character's saved keyboard bindings (bindType >= 3). The DB is
+ * the per-character truth and replaces the local set wholesale — including
+ * when the save carries NO keyboard rows: that is a fresh character, which
+ * starts from the v83 defaults. (This retires the old "legacy save keeps
+ * localStorage" grace: every save has uploaded its keymap for a while now,
+ * and the grace made a new character inherit the previous character's keys.)
  */
 export function applyKeyboardBindings(entries: KeymapEntry[]): void {
   const keyboard = (entries || []).filter((e) => e.bindType >= 3 && e.bindType <= 5);
-  if (keyboard.length === 0) return;
+  if (keyboard.length === 0) {
+    KeyBindings.bindings = { ...DEFAULT_BINDINGS };
+    KeyBindings.itemBindings = {};
+    KeyBindings.skillBindings = {};
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(KeyBindings.bindings));
+      localStorage.setItem(ITEM_STORAGE_KEY, '{}');
+      localStorage.setItem(SKILL_STORAGE_KEY, '{}');
+    } catch { /* cosmetic */ }
+    return;
+  }
 
   const bindings: Bindings = {};
   const items: ItemBindings = {};
