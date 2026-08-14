@@ -2,6 +2,12 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   clearScreen: false,
+  build: {
+    // The game ships as one ~3MB bundle (~390KB gzipped over the wire) by
+    // design — it loads once and runs for hours, so code-splitting buys
+    // nothing. Silence the content-website-oriented chunk-size warning.
+    chunkSizeWarningLimit: 4000,
+  },
   server: {
     host: true, // Listen on all interfaces (LAN access)
     // NOTE: deliberately no `headers` here. Vite applies server.headers from
