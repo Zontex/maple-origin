@@ -30,8 +30,14 @@ export function currentResolutionIndex(): number {
  */
 export function applyConfiguredResolution(canvas: GameCanvas | null) {
   const res = Settings.resolution;
-  const width = res?.width ?? config.originalWidth;
-  const height = res?.height ?? config.originalHeight;
+  // Touch devices with no saved preference default to widescreen 1280x720:
+  // phone displays are ~19.5:9, and 800x600's 4:3 letterboxes into a
+  // postage stamp. Still user-overridable in SYSTEM OPTION.
+  const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  const fallbackW = isTouch ? 1280 : config.originalWidth;
+  const fallbackH = isTouch ? 720 : config.originalHeight;
+  const width = res?.width ?? fallbackW;
+  const height = res?.height ?? fallbackH;
   config.width = width;
   config.height = height;
   canvas?.setInternalSize(width, height);

@@ -36,6 +36,7 @@ import CharInfoMenuSprite from "./UI/Menu/CharInfoMenuSprite";
 import PartyMenuSprite from "./UI/Menu/PartyMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
 import PetManager from "./Pet/PetManager";
+import TouchControls, { isTouchDevice as isTouchDeviceTC } from "./UI/TouchControls";
 import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
@@ -421,6 +422,14 @@ MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
   // runs at the classic 800x600; the saved resolution exists only in-game.
   applyConfiguredResolution(ClickManager.GameCanvas ?? null);
 
+  // On-screen controls for touch devices (joystick + jump/attack/loot),
+  // wired into GameCanvas so control touches never double as UI taps
+  const touchCanvas = ClickManager.GameCanvas ?? _canvas ?? null;
+  if (touchCanvas) {
+    touchCanvas._touchControls = TouchControls;
+    TouchControls.active = isTouchDeviceTC();
+  }
+
   // Use saved map override from character select if available
   if ((this as any)._startMapOverride) {
     map = (this as any)._startMapOverride;
@@ -577,6 +586,9 @@ MapStateInstance.doUpdate = function (
   camera: CameraInterface,
   canvas: GameCanvas
 ) {
+  // Touch controls inject virtual key state before anything polls input
+  TouchControls.update(canvas);
+
   // Update fade overlay
   if (fadeWaitForDoneLoading && MapleMap.doneLoading) {
     // Map finished loading — start revealing
@@ -1025,6 +1037,9 @@ MapStateInstance.doRender = function (
 
     // Party quest overlays: event timer clock, map-effect banner, clear effect
     HenesysPQ.render(canvas);
+
+    // On-screen joystick/buttons (touch devices only) — topmost
+    TouchControls.draw(canvas);
   }
 
   // Drag ghost icon — on top of all UI

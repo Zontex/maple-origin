@@ -185,36 +185,63 @@ class GameCanvas {
       e.preventDefault();
     });
 
-    // Touch input (mobile): taps map onto the same mouse state the whole
-    // UI polls. preventDefault kills the 300ms click delay, double-tap
-    // zoom, and the unreliable synthesized mouse events.
-    const touchPos = (t: Touch) => {
+    // Touch input (mobile), multi-touch aware. Each touch is first offered
+    // to the on-screen controls (joystick/buttons — see UI/TouchControls);
+    // unclaimed touches drive the same mouse state the whole UI polls, so
+    // taps click buttons/menus. preventDefault kills the 300ms click delay,
+    // double-tap zoom, and the unreliable synthesized mouse events.
+    const touchXY = (t: Touch) => {
       const rect = this.game.getBoundingClientRect();
       this.scaleX = rect.width / this.game.width;
       this.scaleY = rect.height / this.game.height;
-      this.mouseX = (t.clientX - rect.left) / this.scaleX;
-      this.mouseY = (t.clientY - rect.top) / this.scaleY;
+      return {
+        x: (t.clientX - rect.left) / this.scaleX,
+        y: (t.clientY - rect.top) / this.scaleY,
+      };
     };
+    let mouseTouchId: number | null = null;
     this.game.style.touchAction = "none";
     this.game.addEventListener("touchstart", (e: TouchEvent) => {
       e.preventDefault();
-      if (e.touches.length > 0) {
-        touchPos(e.touches[0]);
-        this.clicked = true;
-        this.wasClicked = true;
-        this.mouseDownX = this.mouseX;
-        this.mouseDownY = this.mouseY;
-        this.focusGame = true;
+      const TouchControls = this._touchControls;
+      for (const t of Array.from(e.changedTouches)) {
+        const { x, y } = touchXY(t);
+        if (TouchControls?.claimTouch(x, y, t.identifier)) continue;
+        if (mouseTouchId === null) {
+          mouseTouchId = t.identifier;
+          this.mouseX = x;
+          this.mouseY = y;
+          this.clicked = true;
+          this.wasClicked = true;
+          this.mouseDownX = x;
+          this.mouseDownY = y;
+          this.focusGame = true;
+        }
       }
     }, { passive: false });
     this.game.addEventListener("touchmove", (e: TouchEvent) => {
       e.preventDefault();
-      if (e.touches.length > 0) touchPos(e.touches[0]);
+      const TouchControls = this._touchControls;
+      for (const t of Array.from(e.changedTouches)) {
+        const { x, y } = touchXY(t);
+        if (TouchControls?.moveTouch(x, y, t.identifier)) continue;
+        if (t.identifier === mouseTouchId) {
+          this.mouseX = x;
+          this.mouseY = y;
+        }
+      }
     }, { passive: false });
     const touchEnd = (e: TouchEvent) => {
       e.preventDefault();
-      this.clicked = false;
-      this.wasMouseUp = true;
+      const TouchControls = this._touchControls;
+      for (const t of Array.from(e.changedTouches)) {
+        if (TouchControls?.endTouch(t.identifier)) continue;
+        if (t.identifier === mouseTouchId) {
+          mouseTouchId = null;
+          this.clicked = false;
+          this.wasMouseUp = true;
+        }
+      }
     };
     this.game.addEventListener("touchend", touchEnd, { passive: false });
     this.game.addEventListener("touchcancel", touchEnd, { passive: false });
@@ -271,6 +298,18 @@ class GameCanvas {
   }
   isKeyDown(key: string) {
     return !!this.pressedKeys[this.keys[key]] || !!this.pressedKeys[key];
+  }
+
+  // On-screen touch controls inject key state here so the entire input
+  // layer (movement/jump/attack polling isKeyDown) works unchanged
+  _touchControls: any = null;
+  setVirtualKey(key: string, down: boolean) {
+    const code = this.keys[key] ?? key;
+    if (down) {
+      this.pressedKeys[code] = true;
+    } else if (this.pressedKeys[code]) {
+      this.pressedKeys[code] = false;
+    }
   }
   resetMousewheel() {
     this.scrolledUp = false;
