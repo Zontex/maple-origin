@@ -27,6 +27,8 @@
 #include "../Notifications.h"
 
 #include "../../Net/Packets/GameplayPackets.h"
+#include "../../Net/MapleWeb.h"
+#include "../../Gameplay/Stage.h"
 #include "../../Net/Packets/InventoryPackets.h"
 #include "../../Net/Packets/MessagingPackets.h"
 #include "../../Audio/Audio.h"
@@ -1345,7 +1347,18 @@ namespace ms
 		switch (chattarget)
 		{
 		case CHT_ALL:
+#ifdef USE_MW_JSON
+			mw::send_chat(message);
+			// Local echo — the MapleWeb server relays to peers; show our own
+			// line and balloon like the browser client does
+			if (auto player_line = Stage::get().get_player().get_name() + ": " + message; true)
+			{
+				Stage::get().get_player().speak(player_line);
+				chat::log(player_line, chat::LineType::WHITE);
+			}
+#else
 			GeneralChatPacket(message, true).dispatch();
+#endif
 			break;
 		case CHT_BUDDY:
 			MultiChatPacket(MultiChatPacket::BUDDY, recipients, message).dispatch();

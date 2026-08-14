@@ -17,10 +17,12 @@
 #include "../Character/Inventory/InventoryType.h"
 
 #include "../Gameplay/Stage.h"
+#include "../Gameplay/Movement.h"
 #include "../Graphics/GraphicsGL.h"
 #include "../IO/UI.h"
 #include "../IO/Window.h"
 #include "../IO/UITypes/UICharSelect.h"
+#include "../IO/UITypes/UIChatBar.h"
 #include "../IO/UITypes/UILoginNotice.h"
 #include "../IO/UITypes/UILoginWait.h"
 
@@ -41,6 +43,126 @@ namespace ms::mw
 		}
 
 		int64_t g_last_heartbeat = 0;
+
+		// ------------------------------------------------------------------
+		// Presence state (Phase 2)
+
+		EquipSlot::Id equip_slot_from_browser(int32_t slot);
+
+		// Remote players are keyed by uuid string on the wire but int32 cid
+		// in the engine — allocate synthetic cids well above real DB ids
+		struct RemotePlayer
+		{
+			int32_t cid = 0;
+			int16_t last_x = 0;
+			int16_t last_y = 0;
+			std::string last_equip_key;
+		};
+		std::unordered_map<std::string, RemotePlayer> g_remotes;
+		int32_t g_next_remote_cid = 900000001;
+
+		// Cached from the select_character_result DTO — echoed verbatim in
+		// player_info so the browser renders our gear without an inventory walk
+		json g_my_equipped = json::array();
+		int32_t g_my_level = 1;
+		int32_t g_my_job = 0;
+		int32_t g_my_hp = 50;
+		int32_t g_my_maxhp = 50;
+		int32_t g_my_mapid = 0;
+		int32_t g_my_hair = 30030;
+		int32_t g_my_face = 20000;
+		int32_t g_my_skin = 0;
+
+		bool g_needs_registration = false;
+		int64_t g_last_update_sent = 0;
+		double g_sent_x = 0, g_sent_y = 0;
+		uint8_t g_sent_stancebyte = 255;
+
+		// Char::State + facing → browser stance string
+		std::string stance_to_browser(uint8_t statebyte)
+		{
+			uint8_t state = statebyte & ~1;
+			switch (state)
+			{
+				case 2: return "walk1";
+				case 4: return "stand1";
+				case 6: return "jump";
+				case 8: return "alert";
+				case 10: return "prone";
+				case 12: return "fly";     // swim — browser uses the fly stance
+				case 14: return "ladder";
+				case 16: return "rope";
+				case 18: return "dead";
+				case 20: return "sit";
+				default: return "stand1";
+			}
+		}
+
+		// Browser stance string → statebyte (flipped=true means facing right)
+		uint8_t browser_to_stancebyte(const std::string& stance, bool flipped)
+		{
+			uint8_t state = 4; // stand
+			if (stance.rfind("walk", 0) == 0) state = 2;
+			else if (stance.rfind("stand", 0) == 0) state = 4;
+			else if (stance == "jump") state = 6;
+			else if (stance == "alert") state = 8;
+			else if (stance.rfind("prone", 0) == 0) state = 10;
+			else if (stance == "fly") state = 12;
+			else if (stance == "ladder") state = 14;
+			else if (stance == "rope") state = 16;
+			else if (stance == "dead") state = 18;
+			else if (stance == "sit") state = 20;
+			// Attack stances (swing*/stab*/shoot*) render as stand in M1
+			return flipped ? state : state + 1;
+		}
+
+		LookEntry look_from_player_data(const json& p)
+		{
+			LookEntry look{};
+			look.female = false;
+			look.skin = static_cast<uint8_t>(p.value("skin", 0));
+			look.faceid = p.value("face", 20000);
+			look.hairid = p.value("hair", 30030);
+			if (p.contains("equipped") && p["equipped"].is_array() && !p["equipped"].empty())
+			{
+				for (const auto& eq : p["equipped"])
+				{
+					int32_t slot = eq.value("slot", -1);
+					int32_t item_id = eq.value("itemId", 0);
+					if (item_id <= 0)
+						continue;
+					EquipSlot::Id es = equip_slot_from_browser(slot >= 100 ? slot - 100 : slot);
+					if (es == EquipSlot::Id::NONE)
+						continue;
+					if (slot >= 100)
+						look.maskedequips[static_cast<int8_t>(es)] = item_id;
+					else
+						look.equips[static_cast<int8_t>(es)] = item_id;
+				}
+			}
+			else
+			{
+				// Browser fallback outfit for empty lists
+				look.equips[static_cast<int8_t>(EquipSlot::Id::TOP)] = 1040002;
+				look.equips[static_cast<int8_t>(EquipSlot::Id::BOTTOM)] = 1060002;
+				look.equips[static_cast<int8_t>(EquipSlot::Id::WEAPON)] = 1302000;
+			}
+			return look;
+		}
+
+		std::string equip_key_of(const json& p)
+		{
+			if (!p.contains("equipped") || !p["equipped"].is_array())
+				return "";
+			std::vector<std::string> parts;
+			for (const auto& eq : p["equipped"])
+				parts.push_back(std::to_string(eq.value("slot", 0)) + ":" +
+					std::to_string(eq.value("itemId", 0)));
+			std::sort(parts.begin(), parts.end());
+			std::string key;
+			for (const auto& s : parts) { key += s; key += ','; }
+			return key;
+		}
 
 		// Browser slot numbers (PROTOCOL.md / browser EquipMenuSprite) →
 		// HeavenClient EquipSlot ids, used to build the character look
@@ -336,6 +458,27 @@ namespace ms::mw
 			int32_t mapid = dto.value("mapId", 100000000);
 			g_state.in_game = true;
 
+			// Cache what player_info echoes to the browser peers
+			g_my_equipped = json::array();
+			if (dto.contains("equipped") && dto["equipped"].is_array())
+			{
+				for (const auto& eq : dto["equipped"])
+				{
+					int32_t item_id = eq.value("item_id", 0);
+					if (item_id > 0)
+						g_my_equipped.push_back({ {"slot", eq.value("slot", 0)}, {"itemId", item_id} });
+				}
+			}
+			g_my_level = dto.value("level", 1);
+			g_my_job = dto.contains("stats") ? dto["stats"].value("jobId", 0) : 0;
+			g_my_hp = dto.value("hp", 50);
+			g_my_maxhp = dto.value("maxHp", 50);
+			g_my_mapid = mapid;
+			g_my_hair = dto.value("hair", 30030);
+			g_my_face = dto.value("face", 20000);
+			g_my_skin = dto.value("skin", 0);
+			g_needs_registration = true;
+
 			// Fade into the field — same shape as SetFieldHandler::transition
 			float fadestep = 0.025f;
 			Window::get().fadeout(fadestep, [mapid]() {
@@ -363,6 +506,125 @@ namespace ms::mw
 			}
 			if (msg.contains("character"))
 				enter_game(msg["character"]);
+		}
+
+		// ------------------------------------------------------------------
+		// Presence handlers (Phase 2)
+
+		void remove_remote(const std::string& uuid);
+
+		void spawn_or_update_remote(const json& p)
+		{
+			const std::string uuid = p.value("id", std::string());
+			if (uuid.empty() || uuid == g_state.player_id)
+				return;
+			if (p.value("mapId", -1) != g_my_mapid)
+				return;
+
+			int16_t x = static_cast<int16_t>(p.value("x", 0.0));
+			int16_t y = static_cast<int16_t>(p.value("y", 0.0));
+			const std::string stance = p.value("stance", std::string("stand1"));
+			bool flipped = p.value("flipped", false);
+			uint8_t statebyte = browser_to_stancebyte(stance, flipped);
+
+			auto it = g_remotes.find(uuid);
+			if (it == g_remotes.end())
+			{
+				RemotePlayer remote;
+				remote.cid = g_next_remote_cid++;
+				remote.last_x = x;
+				remote.last_y = y;
+				remote.last_equip_key = equip_key_of(p);
+
+				LookEntry look = look_from_player_data(p);
+				uint8_t level = static_cast<uint8_t>(p.value("level", 1));
+				int16_t job = static_cast<int16_t>(p.value("job", 0));
+				std::string name = p.value("name", std::string("Player"));
+
+				Stage::get().get_chars().spawn(
+					CharSpawn(remote.cid, look, level, job, name, statebyte, { x, y }));
+				g_remotes.emplace(uuid, remote);
+				std::cout << "[MW] remote player joined: " << name << "\n";
+				return;
+			}
+
+			RemotePlayer& remote = it->second;
+
+			// Gear change: despawn and let this same update respawn with the
+			// new look (equip lists only ever arrive wholesale — PROTOCOL.md)
+			std::string ekey = equip_key_of(p);
+			if (!ekey.empty() && ekey != remote.last_equip_key)
+			{
+				remove_remote(uuid);
+				spawn_or_update_remote(p);
+				return;
+			}
+
+			std::vector<Movement> moves;
+			moves.emplace_back(Movement::Type::ABSOLUTE, 0, x, y,
+				remote.last_x, remote.last_y, 0, statebyte, 50);
+			Stage::get().get_chars().send_movement(remote.cid, moves);
+			remote.last_x = x;
+			remote.last_y = y;
+		}
+
+		void remove_remote(const std::string& uuid)
+		{
+			auto it = g_remotes.find(uuid);
+			if (it == g_remotes.end())
+				return;
+			Stage::get().get_chars().remove(it->second.cid);
+			g_remotes.erase(it);
+		}
+
+		void handle_player_list(const json& msg)
+		{
+			if (!msg.contains("players") || !msg["players"].is_array())
+				return;
+
+			// The list includes ourselves; treat it as the authoritative
+			// same-map roster
+			std::unordered_map<std::string, bool> seen;
+			for (const auto& p : msg["players"])
+			{
+				const std::string uuid = p.value("id", std::string());
+				if (uuid == g_state.player_id)
+					continue;
+				seen[uuid] = true;
+				spawn_or_update_remote(p);
+			}
+			std::vector<std::string> gone;
+			for (const auto& [uuid, remote] : g_remotes)
+				if (!seen.count(uuid))
+					gone.push_back(uuid);
+			for (const auto& uuid : gone)
+				remove_remote(uuid);
+		}
+
+		void handle_chat_message(const json& msg)
+		{
+			if (!msg.contains("message"))
+				return;
+			const json& m = msg["message"];
+			const std::string uuid = m.value("playerId", std::string());
+			if (uuid == g_state.player_id)
+				return; // server echoes our own chat back
+			if (m.value("mapId", -1) != g_my_mapid)
+				return;
+
+			std::string text = m.value("message", std::string());
+			auto it = g_remotes.find(uuid);
+			if (it != g_remotes.end())
+			{
+				if (auto character = Stage::get().get_character(it->second.cid))
+				{
+					std::string line = character->get_name() + ": " + text;
+					character->speak(line);
+					chat::log(line, chat::LineType::WHITE);
+					return;
+				}
+			}
+			chat::log(text, chat::LineType::WHITE);
 		}
 	}
 
@@ -416,10 +678,70 @@ namespace ms::mw
 		send({ {"type", "get_player_list"} });
 	}
 
-	// Phase 2 senders land with the presence work
-	void send_player_info() {}
-	void send_player_update() {}
-	void send_chat(const std::string&) {}
+	void send_player_info()
+	{
+		if (!g_state.in_game || g_my_mapid <= 0)
+			return;
+
+		Player& player = Stage::get().get_player();
+		Point<int16_t> pos = player.get_position();
+		uint8_t statebyte = player.mw_stancebyte();
+
+		json info = {
+			{"id", g_state.player_id.empty() ? "unregistered" : g_state.player_id},
+			{"x", pos.x()}, {"y", pos.y()},
+			{"stance", stance_to_browser(statebyte)},
+			{"frame", 0},
+			{"flipped", (statebyte & 1) == 0},
+			{"name", g_state.character_name},
+			{"hair", g_my_hair},
+			{"face", g_my_face},
+			{"skin", g_my_skin},
+			{"mapId", g_my_mapid},
+			{"level", g_my_level},
+			{"job", g_my_job},
+			{"hp", g_my_hp}, {"maxHp", g_my_maxhp},
+			{"attacking", false},
+			{"equipped", g_my_equipped},
+			{"pets", json::array()},
+		};
+		send({ {"type", "player_info"}, {"data", info} });
+		g_needs_registration = false;
+	}
+
+	void send_player_update()
+	{
+		if (!g_state.in_game || g_my_mapid <= 0)
+			return;
+
+		Player& player = Stage::get().get_player();
+		Point<int16_t> pos = player.get_position();
+		uint8_t statebyte = player.mw_stancebyte();
+
+		json update = {
+			{"x", pos.x()}, {"y", pos.y()},
+			{"stance", stance_to_browser(statebyte)},
+			{"frame", 0},
+			{"flipped", (statebyte & 1) == 0},
+			{"mapId", g_my_mapid},
+			{"attacking", false},
+			{"onGround", true},
+			{"vx", 0}, {"vy", 0},
+			{"equipped", g_my_equipped},
+		};
+		send({ {"type", "player_update"}, {"data", update} });
+	}
+
+	void send_chat(const std::string& message)
+	{
+		if (!g_state.in_game || message.empty())
+			return;
+		send({ {"type", "chat_message"}, {"data", {
+			{"playerId", g_state.player_id},
+			{"message", message},
+			{"mapId", g_my_mapid},
+		}} });
+	}
 
 	void forward(const std::string& text)
 	{
@@ -443,6 +765,30 @@ namespace ms::mw
 			else if (type == "character_list") handle_character_list(msg);
 			else if (type == "select_character_result") handle_select_character_result(msg);
 			else if (type == "reregister") send_player_info();
+			else if (type == "player_joined")
+			{
+				if (msg.contains("player")) spawn_or_update_remote(msg["player"]);
+			}
+			else if (type == "player_update")
+			{
+				if (msg.contains("player")) spawn_or_update_remote(msg["player"]);
+			}
+			else if (type == "player_list") handle_player_list(msg);
+			else if (type == "player_left") remove_remote(msg.value("id", std::string()));
+			else if (type == "chat_message") handle_chat_message(msg);
+			else if (type == "party_notice")
+				chat::log(msg.value("text", std::string()), chat::LineType::YELLOW);
+			else if (type == "mob_host_assign")
+				g_state.is_mob_host = msg.value("isHost", false);
+			else if (type == "mob_state_batch" || type == "mob_death" ||
+				type == "mob_respawn" || type == "item_drop" || type == "item_pickup" ||
+				type == "reactor_hit" || type == "reactor_respawn" ||
+				type == "player_level_up" || type == "player_hit_by_mob" ||
+				type == "megaphone" || type == "party_update" || type == "party_invite" ||
+				type == "best_items" || type == "save_character_result")
+			{
+				// Known but unhandled in M1 — arrive without spam
+			}
 			else if (type == "error")
 				std::cout << "[MW] server error: " << msg.value("message", std::string()) << "\n";
 			else
@@ -457,8 +803,42 @@ namespace ms::mw
 
 	void tick()
 	{
-		if (Session::get().is_connected())
-			send_heartbeat();
+		if (!Session::get().is_connected())
+			return;
+
+		send_heartbeat();
+
+		if (!g_state.in_game)
+			return;
+
+		// Deferred registration retry — unconditional, never gated on
+		// movement (PROTOCOL.md; the browser learned this the hard way)
+		if (g_needs_registration && !g_state.player_id.empty())
+		{
+			send_player_info();
+			send_get_player_list();
+		}
+
+		// Presence updates: 50ms self-throttle + change gate
+		int64_t now = now_ms();
+		if (now - g_last_update_sent < 50)
+			return;
+
+		Player& player = Stage::get().get_player();
+		Point<int16_t> pos = player.get_position();
+		uint8_t statebyte = player.mw_stancebyte();
+
+		bool pos_changed = std::abs(pos.x() - g_sent_x) > 1 || std::abs(pos.y() - g_sent_y) > 1;
+		bool state_changed = statebyte != g_sent_stancebyte;
+
+		if (pos_changed || state_changed)
+		{
+			send_player_update();
+			g_last_update_sent = now;
+			g_sent_x = pos.x();
+			g_sent_y = pos.y();
+			g_sent_stancebyte = statebyte;
+		}
 	}
 }
 #endif

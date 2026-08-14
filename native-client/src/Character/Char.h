@@ -101,6 +101,10 @@ namespace ms
 		// Set the guild mark parameters
 		void set_guild_mark(int16_t bg, int8_t bgcolor, int16_t logo, int8_t logocolor);
 
+		// MapleWeb: state + facing packed the way MovePlayerPacket sends it
+		// (even = facing right, +1 = facing left)
+		uint8_t mw_stancebyte() const { return facing_right ? state : state + 1; }
+
 		// Set if the character sprite is mirrored (true = facing right)
 		virtual void set_direction(bool flipped);
 		// Change the character's state
