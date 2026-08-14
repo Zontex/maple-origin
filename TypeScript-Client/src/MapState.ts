@@ -705,6 +705,10 @@ MapStateInstance.doUpdate = function (
         UISystemOption.isVisible || UIGameOption.isVisible ||
         UIChannelSelect.isVisible || UIKeyConfig.isVisible || UIWorldMap.isVisible;
 
+      // While a dialog has the screen, touch controls stop claiming (their
+      // touches would block the dialog's own buttons) and release holds
+      TouchControls.claimSuppressed = dialogOpen;
+
       if (!dialogOpen) {
         if (canvas.isKeyDown("up")) {
           MyCharacter.upClick();

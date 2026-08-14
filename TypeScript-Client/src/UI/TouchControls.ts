@@ -2,6 +2,7 @@ import GameCanvas from '../GameCanvas';
 import config from '../Config';
 import KeyBindings from '../KeyBindings';
 import UIHotkeyBar from './UIHotkeyBar';
+import DragableMenu from './Menu/DragableMenu';
 
 /**
  * MapleStory-M-style on-screen controls for touch devices.
@@ -38,6 +39,11 @@ const DIAGONAL_RATIO = 0.45;
 
 const TouchControls = {
   active: false,
+
+  /** Set by MapState while a full-screen dialog (world map, game menu,
+   *  NPC talk, shops...) is up — controls stop claiming touches so the
+   *  dialog's own buttons are tappable, and stop drawing. */
+  claimSuppressed: false,
 
   // Floating pad state
   _joyTouchId: null as number | null,
@@ -86,7 +92,12 @@ const TouchControls = {
   },
 
   claimTouch(x: number, y: number, id: number): boolean {
-    if (!this.active) return false;
+    if (!this.active || this.claimSuppressed) return false;
+
+    // A touch over an open window (inventory, quest log, ...) belongs to
+    // the window — otherwise a window overlapping the pad zone becomes
+    // untappable and taps on it walk the character instead
+    if (DragableMenu.anyHits(x, y)) return false;
 
     // Action buttons and skill slots first (they sit right of the pad zone)
     for (const b of this._buttons) {
@@ -176,6 +187,17 @@ const TouchControls = {
 
     if (!this.active) return;
 
+    if (this.claimSuppressed) {
+      // Dialog opened mid-hold: release everything so nothing sticks
+      this.resetTouches();
+      for (const name of ['left', 'right', 'up', 'down']) setKey(name, false);
+      for (const b of this._buttons) {
+        const keyName = KeyBindings.keyNameFor(b.action as any);
+        if (keyName) setKey(keyName, false);
+      }
+      return;
+    }
+
     let left = false, right = false, up = false, down = false;
     if (this._joyTouchId !== null) {
       const dx = this._joyDX;
@@ -205,7 +227,7 @@ const TouchControls = {
   },
 
   draw(canvas: GameCanvas) {
-    if (!this.active) return;
+    if (!this.active || this.claimSuppressed) return;
     const ctx = canvas.context;
     ctx.save();
 
