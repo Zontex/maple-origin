@@ -154,21 +154,27 @@ const TouchControls = {
     return handled;
   },
 
-  _virtualState: {} as Record<string, boolean>,
+  /** Drop every held control (fullscreen transitions, tab blur, and OS
+   *  gestures can cancel touches without touchend — anything held would
+   *  otherwise stick forever). */
+  resetTouches() {
+    this._joyTouchId = null;
+    this._joyDX = 0;
+    this._joyDY = 0;
+    for (const b of this._buttons) b.touchId = null;
+    for (const s of this._skillSlots) s.touchId = null;
+  },
 
-  /** Per-frame: control state → virtual keys. Edge-detected so held
-   *  physical keys are never stomped. Call before input polling. */
+  /** Per-frame: control state → virtual keys. Written AUTHORITATIVELY
+   *  every frame — no edge cache. Mobile browsers clear the key store
+   *  behind our backs (fullscreen enter, blur, URL-bar transitions), and
+   *  an edge cache desyncs from that and leaves controls dead until a
+   *  full release+repress. Touch devices have no physical keyboard to
+   *  conflict with; desktop has active=false. */
   update(canvas: GameCanvas) {
-    const setKey = (name: string, down: boolean) => {
-      if (this._virtualState[name] === down) return;
-      this._virtualState[name] = down;
-      canvas.setVirtualKey(name, down);
-    };
+    const setKey = (name: string, down: boolean) => canvas.setVirtualKey(name, down);
 
-    if (!this.active) {
-      for (const name of ['left', 'right', 'up', 'down']) setKey(name, false);
-      return;
-    }
+    if (!this.active) return;
 
     let left = false, right = false, up = false, down = false;
     if (this._joyTouchId !== null) {

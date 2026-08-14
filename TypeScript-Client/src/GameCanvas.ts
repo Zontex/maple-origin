@@ -263,6 +263,17 @@ class GameCanvas {
     };
     this.game.addEventListener("touchend", touchEnd, { passive: false });
     this.game.addEventListener("touchcancel", touchEnd, { passive: false });
+
+    // Fullscreen transitions, tab switches, and OS gestures can swallow
+    // touchend — clear all touch state so nothing is left stuck "held"
+    const clearTouchState = () => {
+      mouseTouchId = null;
+      this.clicked = false;
+      this._touchControls?.resetTouches?.();
+    };
+    window.addEventListener("blur", clearTouchState);
+    document.addEventListener("visibilitychange", clearTouchState);
+    document.addEventListener("fullscreenchange", clearTouchState);
     this.game.addEventListener("mouseout", () => {
       this.clicked = false;
       this.rightClicked = false;

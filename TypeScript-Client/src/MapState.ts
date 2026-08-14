@@ -591,7 +591,11 @@ MapStateInstance.doUpdate = function (
   camera: CameraInterface,
   canvas: GameCanvas
 ) {
-  // Touch controls inject virtual key state before anything polls input
+  // Touch controls inject virtual key state before anything polls input.
+  // Wiring re-asserted every frame — self-healing if any path skipped
+  // initialize or a hot reload dropped the reference.
+  canvas._touchControls = TouchControls;
+  TouchControls.active = isTouchDeviceTC();
   TouchControls.update(canvas);
 
   // Update fade overlay

@@ -35,13 +35,20 @@ const setupOrientationGuard = () => {
   // bar and system chrome, stops edge-swipe gesture theft, and makes the
   // orientation lock actually take. iOS Safari has no element fullscreen —
   // there, "Add to Home Screen" (PWA manifest) gives the same result.
+  // Once-only: re-requesting on every touch disrupted active touches
+  // (the transition cancels them), which read as frozen controls
   const goFullscreen = () => {
     const el: any = document.documentElement;
     const req = el.requestFullscreen ?? el.webkitRequestFullscreen;
     if (req && !document.fullscreenElement) {
       Promise.resolve(req.call(el, { navigationUI: "hide" }))
-        .then(() => (screen.orientation as any)?.lock?.("landscape").catch(() => {}))
+        .then(() => {
+          window.removeEventListener("touchend", goFullscreen);
+          return (screen.orientation as any)?.lock?.("landscape").catch(() => {});
+        })
         .catch(() => {});
+    } else if (document.fullscreenElement) {
+      window.removeEventListener("touchend", goFullscreen);
     }
   };
   window.addEventListener("touchend", goFullscreen, { passive: true });
