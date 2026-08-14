@@ -549,6 +549,9 @@ MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
       // Minimap click (world button)
       if (UIMiniMap.handleClick(cx, cy)) return;
 
+      // Touch devices: tapping a quickslot fires the bound skill/item
+      if (TouchControls.active && UIHotkeyBar.handleTap(cx, cy)) return;
+
       // Quest Helper widget — swallow clicks over it (handled via wasClicked)
       if (UIQuestAlarm.containsPoint(cx, cy)) return;
 

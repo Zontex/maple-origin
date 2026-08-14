@@ -415,6 +415,22 @@ const UIHotkeyBar = {
   },
 
   // Handle a drop from DragManager
+  /**
+   * Touch devices: tapping a quickslot fires it — the on-screen bar IS the
+   * skill/potion pad on mobile (desktop keeps keyboard-only semantics so a
+   * stray click can't drink a potion).
+   */
+  handleTap(x: number, y: number): boolean {
+    if (!this.isVisible) return false;
+    const slotIdx = this.getSlotAtMouse(x, y);
+    if (slotIdx < 0) return false;
+    const slot = this.slots[slotIdx];
+    if (!slot || slot.type === 'none' || slot.actionId == null) return true; // empty slot still swallows the tap
+    if (slot.type === 'item') this.activateItem(slot.actionId);
+    else if (slot.type === 'skill') void this.activateSkill(slot.actionId);
+    return true;
+  },
+
   async handleDrop(drop: { type: DragType; id: number; icon: HTMLImageElement | null; mouseX: number; mouseY: number }) {
     const slotIdx = this.getSlotAtMouse(drop.mouseX, drop.mouseY);
 

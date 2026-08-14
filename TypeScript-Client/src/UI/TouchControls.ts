@@ -32,8 +32,8 @@ interface VButton {
   touchId: number | null;
 }
 
-const JOY_RADIUS = 66;
-const JOY_NUB = 30;
+const JOY_RADIUS = 76;
+const JOY_NUB = 34;
 const JOY_DEADZONE = 0.28; // fraction of radius before a direction engages
 const DIAGONAL_RATIO = 0.5; // |dy/dx| beyond which the vertical also engages
 
@@ -45,26 +45,29 @@ const TouchControls = {
   _joyDX: 0,
   _joyDY: 0,
 
+  // MapleStory-M-style cluster: big ATK under the right thumb, JUMP inside
+  // it, LOOT above — all clear of the bottom HUD strip (status bar +
+  // quickslot art occupy roughly the bottom 90px)
   _buttons: [
     {
-      id: 'jump', label: 'JUMP', action: 'jump', radius: 42,
-      pos: () => ({ x: config.width - 74, y: config.height - 118 }),
+      id: 'attack', label: 'ATK', action: 'attack', radius: 50,
+      pos: () => ({ x: config.width - 88, y: config.height - 158 }),
       touchId: null,
     },
     {
-      id: 'attack', label: 'ATK', action: 'attack', radius: 34,
-      pos: () => ({ x: config.width - 164, y: config.height - 88 }),
+      id: 'jump', label: 'JUMP', action: 'jump', radius: 40,
+      pos: () => ({ x: config.width - 196, y: config.height - 120 }),
       touchId: null,
     },
     {
-      id: 'loot', label: 'LOOT', action: 'pickup', radius: 27,
-      pos: () => ({ x: config.width - 138, y: config.height - 176 }),
+      id: 'loot', label: 'LOOT', action: 'pickup', radius: 32,
+      pos: () => ({ x: config.width - 186, y: config.height - 226 }),
       touchId: null,
     },
   ] as VButton[],
 
   joyCenter() {
-    return { x: 104, y: config.height - 118 };
+    return { x: 118, y: config.height - 170 };
   },
 
   /**

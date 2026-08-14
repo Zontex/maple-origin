@@ -30,12 +30,21 @@ export function currentResolutionIndex(): number {
  */
 export function applyConfiguredResolution(canvas: GameCanvas | null) {
   const res = Settings.resolution;
-  // Touch devices with no saved preference default to widescreen 1280x720:
-  // phone displays are ~19.5:9, and 800x600's 4:3 letterboxes into a
-  // postage stamp. Still user-overridable in SYSTEM OPTION.
+  // Touch devices with no saved preference get an aspect-fit resolution:
+  // fixed 540px world height (closer than desktop 600 — phone screens are
+  // small), width matched to the actual screen aspect so the game covers
+  // the display edge-to-edge with no pillarboxing. ~1200x540 on a 20:9
+  // phone. Still user-overridable in SYSTEM OPTION.
   const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const fallbackW = isTouch ? 1280 : config.originalWidth;
-  const fallbackH = isTouch ? 720 : config.originalHeight;
+  let fallbackW = config.originalWidth;
+  let fallbackH = config.originalHeight;
+  if (isTouch) {
+    const long = Math.max(window.innerWidth, window.innerHeight);
+    const short = Math.min(window.innerWidth, window.innerHeight);
+    const aspect = short > 0 ? long / short : 16 / 9;
+    fallbackH = 540;
+    fallbackW = Math.min(1440, Math.max(900, Math.round((fallbackH * aspect) / 2) * 2));
+  }
   const width = res?.width ?? fallbackW;
   const height = res?.height ?? fallbackH;
   config.width = width;

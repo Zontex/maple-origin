@@ -246,6 +246,18 @@ class GameCanvas {
           mouseTouchId = null;
           this.clicked = false;
           this.wasMouseUp = true;
+          // preventDefault suppresses the browser's synthesized click, but
+          // the NPC/portal path listens for DOM 'click' — synthesize one
+          // for taps (not drags) so tapping an NPC talks to it
+          const dx = this.mouseX - this.mouseDownX;
+          const dy = this.mouseY - this.mouseDownY;
+          if (Math.hypot(dx, dy) < 12) {
+            this.game.dispatchEvent(new MouseEvent("click", {
+              clientX: t.clientX,
+              clientY: t.clientY,
+              bubbles: true,
+            }));
+          }
         }
       }
     };
