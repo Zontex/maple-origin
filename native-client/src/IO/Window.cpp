@@ -249,11 +249,16 @@ namespace ms
 		int fb_width, fb_height;
 		glfwGetFramebufferSize(glwnd, &fb_width, &fb_height);
 
-		// Stretch to fill entire screen — no black bars
+		// Stretch to fill entire screen — no black bars.
+		// Cursor mapping must use WINDOW coordinates, not framebuffer
+		// pixels: on Retina/HiDPI the framebuffer is 2x the window points
+		// GLFW reports cursor positions in, which halved every cursor move.
+		int win_width, win_height;
+		glfwGetWindowSize(glwnd, &win_width, &win_height);
 		s_vp_x = 0;
 		s_vp_y_top = 0;
-		s_vp_w = fb_width;
-		s_vp_h = fb_height;
+		s_vp_w = win_width > 0 ? win_width : fb_width;
+		s_vp_h = win_height > 0 ? win_height : fb_height;
 		glViewport(0, 0, fb_width, fb_height);
 		glMatrixMode(GL_PROJECTION);
 		glLoadIdentity();

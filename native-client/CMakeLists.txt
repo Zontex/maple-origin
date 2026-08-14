@@ -110,6 +110,7 @@ if(APPLE)
     target_compile_definitions(OpenStory PRIVATE
         GL_SILENCE_DEPRECATION
         MW_STUB_AUDIO     # BASS is Windows-only here; audio is a no-op for M1
+        MW_NO_HDSCALE     # 2x sprite upscaling thrashes the texture atlas
     )
 
     # MapleWeb JSON-over-WebSocket transport (replaces v83 TCP + MapleCrypto)

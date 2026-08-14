@@ -837,7 +837,8 @@ let customNpcCache: Record<string, any[]> | null = null;
 async function getCustomNpcs(mapId: string | number): Promise<any[]> {
   if (!customNpcCache) {
     try {
-      const resp = await fetch("/data/custom-npcs.json");
+      const { cachedFetch } = await import('./AssetDownloader');
+      const resp = await cachedFetch("/data/custom-npcs.json");
       const data = await resp.json();
       customNpcCache = {};
       for (const [id, list] of Object.entries(data)) {

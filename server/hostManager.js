@@ -19,11 +19,17 @@ function isLive(player) {
   );
 }
 
+// Clients that cannot run mob AI (the native client in M1) register with
+// noHost: true in their player_info and are never elected
+function canHost(player) {
+  return !!player?.info && !player.info.noHost;
+}
+
 function assignMapHost(mapId, newJoinerId) {
   mapId = Number(mapId);
 
   const liveCandidateExists = [...players.values()].some(
-    (p) => Number(p.mapId) === mapId && p.info && isLive(p)
+    (p) => Number(p.mapId) === mapId && canHost(p) && isLive(p)
   );
 
   // Check if current host is still valid
@@ -34,6 +40,7 @@ function assignMapHost(mapId, newJoinerId) {
       hostPlayer &&
       hostPlayer.ws.readyState === WebSocket.OPEN &&
       Number(hostPlayer.mapId) === mapId &&
+      canHost(hostPlayer) &&
       // A stale host keeps hostship only while no live player can take over
       (isLive(hostPlayer) || !liveCandidateExists);
     if (hostValid) {
@@ -57,7 +64,7 @@ function assignMapHost(mapId, newJoinerId) {
   // Find a new host — prefer players with a live game loop
   let newHost = null;
   for (const [id, player] of players.entries()) {
-    if (Number(player.mapId) === mapId && player.ws.readyState === WebSocket.OPEN && player.info) {
+    if (Number(player.mapId) === mapId && player.ws.readyState === WebSocket.OPEN && canHost(player)) {
       if (isLive(player)) {
         newHost = id;
         break;

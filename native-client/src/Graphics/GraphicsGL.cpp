@@ -828,6 +828,12 @@ namespace ms
 
 		// Reserve — and fill — HD_SCALE x the space, so the atlas rect that the
 		// quad samples carries the upscaled sprite.
+		// MW_NO_HDSCALE: the 2x upscale quarters effective atlas capacity and
+		// re-runs on every re-upload — on busy v83 maps the atlas overflows,
+		// clearinternal() fires mid-frame, and every sprite re-uploads each
+		// frame (visible as global flashing + severe slowdown). Stock 1x is
+		// also the authentic v83 look.
+#ifndef MW_NO_HDSCALE
 		if (static_cast<int>(width) * HD_SCALE < ATLASW
 			&& static_cast<int>(height) * HD_SCALE < ATLASH)
 		{
@@ -835,6 +841,7 @@ namespace ms
 			width = static_cast<GLshort>(srcw * HD_SCALE);
 			height = static_cast<GLshort>(srch * HD_SCALE);
 		}
+#endif
 
 		Leftover value = Leftover(x, y, width, height);
 

@@ -25,6 +25,12 @@ const startGame = async () => {
     height: config.height,
     color: "#000000",
   });
+  // First run (production/Capacitor): download the full asset set into
+  // Cache Storage with a progress screen, then everything below serves
+  // cache-first. Instant no-op once downloaded; skipped in dev.
+  const { default: AssetDownloader } = await import("./AssetDownloader");
+  await AssetDownloader.ensure(canvas);
+
   StateManager.initialize();
   ClickManager.initialize(canvas);
   WZManager.initialize();

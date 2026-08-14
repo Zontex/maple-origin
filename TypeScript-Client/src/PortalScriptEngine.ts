@@ -1,4 +1,5 @@
 import { QuestState } from './Quest/QuestData';
+import { cachedFetch } from './AssetDownloader';
 import { createScriptJavaShim, makeSafeScriptApi } from './NpcScriptEngine';
 import { fadeToBlack } from './MapState';
 import TransportationManager from './Transport/TransportationManager';
@@ -11,7 +12,7 @@ export default class PortalScriptEngine {
   async loadScript(scriptName: string): Promise<string | null> {
     if (this.scriptCache.has(scriptName)) return this.scriptCache.get(scriptName)!;
     try {
-      const resp = await fetch(`/scripts/portal/${scriptName}.js`);
+      const resp = await cachedFetch(`/scripts/portal/${scriptName}.js`);
       if (!resp.ok) return null;
       const text = await resp.text();
       this.scriptCache.set(scriptName, text);

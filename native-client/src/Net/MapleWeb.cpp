@@ -56,6 +56,31 @@ namespace ms::mw
 		EquipSlot::Id equip_slot_from_browser(int32_t slot);
 		void load_and_spawn_map_mobs(int32_t mapid);
 
+		// The engine expects the keymap from a server packet (KeymapHandler)
+		// that our protocol doesn't have — feed it the v83 defaults instead
+		// (mirrors UIKeyConfig::basic_keys; KeyConfig::Key codes).
+		void apply_default_keymap()
+		{
+			struct { uint8_t key; uint8_t type; int32_t action; } defaults[] = {
+				{ 1,  4, 28 },   // ESC → main menu
+				{ 16, 4, 8 },    // Q → quest log
+				{ 17, 4, 5 },    // W → world map
+				{ 18, 4, 0 },    // E → equipment
+				{ 23, 4, 1 },    // I → items
+				{ 25, 4, 19 },   // P → party
+				{ 31, 4, 2 },    // S → stats
+				{ 37, 4, 3 },    // K → skills
+				{ 50, 4, 7 },    // M → minimap
+				{ 43, 4, 9 },    // BACKSLASH → key bindings
+				{ 44, 5, 50 },   // Z → pick up
+				{ 45, 5, 51 },   // X → sit
+				{ 29, 5, 52 },   // LEFT_CONTROL → attack
+				{ 56, 5, 53 },   // LEFT_ALT → jump
+			};
+			for (const auto& d : defaults)
+				UI::get().add_keymapping(d.key, d.type, d.action);
+		}
+
 		// Remote players are keyed by uuid string on the wire but int32 cid
 		// in the engine — allocate synthetic cids well above real DB ids
 		struct RemotePlayer
@@ -372,6 +397,10 @@ namespace ms::mw
 
 		void enter_game(const json& dto)
 		{
+			// Repeated Start clicks re-send select_character; enter once
+			if (g_state.in_game)
+				return;
+
 			CharEntry entry = char_entry_from_dto(dto);
 			g_state.character_id = entry.id;
 			g_state.character_name = entry.stats.name;
@@ -463,6 +492,7 @@ namespace ms::mw
 			player.recalc_stats(true);
 
 			int32_t mapid = dto.value("mapId", 100000000);
+			(void)mapid;
 			g_state.in_game = true;
 
 			// Cache what player_info echoes to the browser peers
@@ -502,6 +532,17 @@ namespace ms::mw
 			GraphicsGL::get().lock();
 			Stage::get().clear();
 			Timer::get().start();
+
+			// Without this the login UI state stays active behind the fade —
+			// black screen, and Start keeps re-firing (SetFieldHandler:161)
+			Sound(Sound::Name::GAMESTART).play();
+			UI::get().change_state(UI::State::GAME);
+
+			// The keymap normally arrives in a server packet we never send —
+			// apply the client's own v83 defaults (UIKeyConfig::basic_keys)
+			// so attack/jump/pickup and the menu keys work. Type ids:
+			// 4 = MENU, 5 = ACTION, 7 = FACE (KeyType::Id).
+			apply_default_keymap();
 
 			std::cout << "[MW] entering map " << mapid << " as " << g_state.character_name << "\n";
 		}
@@ -872,6 +913,8 @@ namespace ms::mw
 			{"attacking", false},
 			{"equipped", g_my_equipped},
 			{"pets", json::array()},
+			// M1 native runs no mob AI — never elect us as mob host
+			{"noHost", true},
 		};
 		send({ {"type", "player_info"}, {"data", info} });
 		g_needs_registration = false;
@@ -909,6 +952,43 @@ namespace ms::mw
 			{"message", message},
 			{"mapId", g_my_mapid},
 		}} });
+	}
+
+	void change_map(int32_t mapid)
+	{
+		static bool changing = false;
+		if (!g_state.in_game || mapid <= 0 || changing)
+			return;
+		changing = true;
+
+		g_my_mapid = mapid;
+		// Stage::clear wipes the engine-side objects; drop our registries too
+		g_remotes.clear();
+		g_mob_defs.clear();
+		g_mob_last.clear();
+
+		float fadestep = 0.025f;
+		Window::get().fadeout(fadestep, [mapid]() {
+			GraphicsGL::get().clear();
+			Stage::get().load(mapid, 0);
+			UI::get().enable();
+			Timer::get().start();
+			GraphicsGL::get().unlock();
+			Stage::get().transfer_player();
+			load_and_spawn_map_mobs(mapid);
+			changing = false;
+		});
+		GraphicsGL::get().lock();
+		Stage::get().clear();
+		Timer::get().start();
+
+		// Announce the move — the server derives leave/join/host handoff
+		// from the mapId change in the next player_update
+		g_sent_stancebyte = 255;
+		send_player_update();
+		send_get_player_list();
+
+		std::cout << "[MW] portal warp to map " << mapid << "\n";
 	}
 
 	void forward(const std::string& text)

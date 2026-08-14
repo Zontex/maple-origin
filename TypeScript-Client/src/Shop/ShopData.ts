@@ -1,4 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
+import { cachedFetch } from '../AssetDownloader';
 import MapleInventory from '../Constants/Inventory/MapleInventory';
 
 export interface ShopItem {
@@ -17,7 +18,7 @@ let shopDataCache: Map<number, ShopInfo> | null = null;
 export async function getShopInfo(shopId: number): Promise<ShopInfo | null> {
   if (!shopDataCache) {
     try {
-      const resp = await fetch('/data/shops.json');
+      const resp = await cachedFetch('/data/shops.json');
       const data = await resp.json();
       shopDataCache = new Map();
       for (const [id, info] of Object.entries(data)) {

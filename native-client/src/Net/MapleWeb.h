@@ -53,6 +53,10 @@ namespace ms::mw
 	void send_player_update();   // change-gated + 50ms self-throttle
 	void send_chat(const std::string& message);
 
+	// Client-driven map change (portals) — loads the map locally and lets
+	// the server derive join/leave from the next player_update's mapId
+	void change_map(int32_t mapid);
+
 	// Dispatch one received JSON text frame (called from Session::read)
 	void forward(const std::string& text);
 

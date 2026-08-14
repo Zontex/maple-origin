@@ -1,4 +1,5 @@
 import { npcNames, mobNames, QuestState, ensureItemNames, ensureMapNames, getMapNameSync, collapseBlankLines } from './Quest/QuestData';
+import { cachedFetch } from './AssetDownloader';
 import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
 import ShopUI from './UI/ShopUI';
@@ -227,7 +228,7 @@ export default class NpcScriptEngine {
   async loadScript(npcId: number): Promise<string | null> {
     if (this.scriptCache.has(npcId)) return this.scriptCache.get(npcId)!;
     try {
-      const resp = await fetch(`/scripts/npc/${npcId}.js`);
+      const resp = await cachedFetch(`/scripts/npc/${npcId}.js`);
       if (!resp.ok) return null;
       const text = await resp.text();
       this.scriptCache.set(npcId, text);

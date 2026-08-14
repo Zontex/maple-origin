@@ -1,4 +1,5 @@
 import QuestData, { npcNames, mobNames, ensureItemNames, getItemNameSync } from './QuestData';
+import { cachedFetch } from '../AssetDownloader';
 import { QuestState } from './QuestData';
 import { fadeToBlack } from '../MapState';
 import { makeSafeScriptApi, createScriptJavaShim } from '../NpcScriptEngine';
@@ -70,7 +71,7 @@ export default class QuestScriptEngine {
   async loadScript(questId: number): Promise<string | null> {
     if (this.scriptCache.has(questId)) return this.scriptCache.get(questId)!;
     try {
-      const resp = await fetch(`/scripts/quest/${questId}.js`);
+      const resp = await cachedFetch(`/scripts/quest/${questId}.js`);
       if (!resp.ok) return null;
       const text = await resp.text();
       this.scriptCache.set(questId, text);

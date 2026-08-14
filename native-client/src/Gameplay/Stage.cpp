@@ -17,6 +17,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 #include "Stage.h"
 
+#include "../Net/MapleWeb.h"
+
 #include "MapleTVBroadcast.h"
 #include "HiredMerchants.h"
 #include "MiniRooms.h"
@@ -308,6 +310,15 @@ namespace ms
 		}
 		else if (warpinfo.valid)
 		{
+#ifdef USE_MW_JSON
+			// Map changes are client-driven on the MapleWeb protocol —
+			// warp locally; the server derives leave/join from the next
+			// player_update's mapId (see mw::change_map)
+			CharStats& stats = Stage::get().get_player().get_stats();
+			stats.set_mapid(warpinfo.mapid);
+			Sound(Sound::Name::PORTAL).play();
+			mw::change_map(warpinfo.mapid);
+#else
 			ChangeMapPacket(false, -1, warpinfo.name, false).dispatch();
 
 			CharStats& stats = Stage::get().get_player().get_stats();
@@ -315,6 +326,7 @@ namespace ms
 			stats.set_mapid(warpinfo.mapid);
 
 			Sound(Sound::Name::PORTAL).play();
+#endif
 		}
 	}
 

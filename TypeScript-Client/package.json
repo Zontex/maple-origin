@@ -4,8 +4,10 @@
   "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "serve": "vite preview"
+    "build": "vite build",
+    "serve": "vite preview",
+    "prebuild": "node ../tools/build-asset-manifest.js",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^4.2.3",

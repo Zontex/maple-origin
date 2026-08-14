@@ -68,7 +68,10 @@ const WZManager: WZManager = {
       return;
     }
 
-    const json = await fetch(`wz_client/${filename}.json`).then((res) =>
+    // Cache-first: served from the first-run asset download when present
+    // (production/Capacitor), plain network in dev
+    const { cachedFetch } = await import('../AssetDownloader');
+    const json = await cachedFetch(`wz_client/${filename}.json`).then((res) =>
       res.json()
     );
 
