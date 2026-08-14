@@ -18,13 +18,106 @@ const CACHE_PREFIX = 'maple-assets-';
 const VERSION_KEY = 'maple:assets-version';
 const CONCURRENCY = 12;
 
-let activeCache: Cache | null = null;
+/**
+ * Storage backends. Cache Storage is preferred but only exists in secure
+ * contexts (https / localhost) — a phone on http://<lan-ip> doesn't have
+ * it, so IndexedDB (available on insecure origins) is the fallback. A
+ * Capacitor build is a secure context and uses Cache Storage.
+ */
+interface AssetStore {
+  keys(): Promise<Set<string>>;
+  get(path: string): Promise<Response | null>;
+  put(path: string, res: Response): Promise<void>;
+  dropOthers(): Promise<void>; // remove data from older versions
+}
+
+let activeStore: AssetStore | null = null;
+
+class CacheStore implements AssetStore {
+  constructor(private cache: Cache, private cacheName: string) {}
+  static async open(version: string): Promise<CacheStore> {
+    const name = CACHE_PREFIX + version;
+    return new CacheStore(await caches.open(name), name);
+  }
+  async keys() {
+    const out = new Set<string>();
+    for (const req of await this.cache.keys()) {
+      const u = new URL(req.url);
+      out.add(decodeURIComponent(u.pathname).replace(/^\//, ''));
+    }
+    return out;
+  }
+  async get(path: string) {
+    return (await this.cache.match(path)) ?? null;
+  }
+  async put(path: string, res: Response) {
+    await this.cache.put(path, res);
+  }
+  async dropOthers() {
+    for (const name of await caches.keys()) {
+      if (name.startsWith(CACHE_PREFIX) && name !== this.cacheName) {
+        await caches.delete(name);
+      }
+    }
+  }
+}
+
+class IDBStore implements AssetStore {
+  constructor(private db: IDBDatabase, private version: string) {}
+  static open(version: string): Promise<IDBStore> {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('maple-assets', 1);
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore('files');
+      };
+      req.onsuccess = () => resolve(new IDBStore(req.result, version));
+      req.onerror = () => reject(req.error);
+    });
+  }
+  private tx(mode: IDBTransactionMode) {
+    return this.db.transaction('files', mode).objectStore('files');
+  }
+  private req<T>(r: IDBRequest<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+  private key(path: string) {
+    return `${this.version}|${path}`;
+  }
+  async keys() {
+    const all = (await this.req(this.tx('readonly').getAllKeys())) as string[];
+    const prefix = `${this.version}|`;
+    const out = new Set<string>();
+    for (const k of all) if (k.startsWith(prefix)) out.add(k.slice(prefix.length));
+    return out;
+  }
+  async get(path: string) {
+    // Normalize absolute paths ("/scripts/x.js") to manifest-relative
+    const rel = path.replace(/^\//, '');
+    const entry: any = await this.req(this.tx('readonly').get(this.key(rel)));
+    if (!entry) return null;
+    return new Response(entry.body, { headers: { 'Content-Type': entry.type || 'application/octet-stream' } });
+  }
+  async put(path: string, res: Response) {
+    const body = await res.blob();
+    const type = res.headers.get('Content-Type') || '';
+    await this.req(this.tx('readwrite').put({ body, type }, this.key(path)));
+  }
+  async dropOthers() {
+    const all = (await this.req(this.tx('readonly').getAllKeys())) as string[];
+    const prefix = `${this.version}|`;
+    const stale = all.filter((k) => !k.startsWith(prefix));
+    for (const k of stale) await this.req(this.tx('readwrite').delete(k));
+  }
+}
 
 /** Cache-first fetch for game data. Falls back to the network (dev, or a
  *  file missing from an older manifest). */
 export async function cachedFetch(url: string): Promise<Response> {
-  if (activeCache) {
-    const hit = await activeCache.match(url);
+  if (activeStore) {
+    const hit = await activeStore.get(url.replace(/^\//, ''));
     if (hit) return hit;
   }
   return fetch(url);
@@ -45,7 +138,6 @@ const AssetDownloader = {
     const isDev = (import.meta as any).env?.DEV === true;
     const forced = localStorage.getItem('maple:forcePreload') === '1';
     if (isDev && !forced) return;
-    if (!('caches' in window)) return; // very old browser — stream from network
 
     let manifest: Manifest;
     try {
@@ -56,9 +148,18 @@ const AssetDownloader = {
       return;
     }
 
-    const cacheName = CACHE_PREFIX + manifest.version;
-    const cache = await caches.open(cacheName);
-    activeCache = cache;
+    // Cache Storage in secure contexts; IndexedDB elsewhere (phone on
+    // plain http LAN). Neither available → stream from network.
+    let store: AssetStore;
+    try {
+      store = 'caches' in window
+        ? await CacheStore.open(manifest.version)
+        : await IDBStore.open(manifest.version);
+    } catch (e) {
+      console.warn('[Assets] no local storage backend, streaming from network', e);
+      return;
+    }
+    activeStore = store;
 
     if (localStorage.getItem(VERSION_KEY) === manifest.version) {
       return; // already fully downloaded
@@ -68,11 +169,7 @@ const AssetDownloader = {
     try { await navigator.storage?.persist?.(); } catch { /* best effort */ }
 
     // Resume support: only fetch what's missing
-    const have = new Set<string>();
-    for (const req of await cache.keys()) {
-      const u = new URL(req.url);
-      have.add(decodeURIComponent(u.pathname).replace(/^\//, ''));
-    }
+    const have = await store.keys();
 
     const todo = manifest.files.filter((f) => !have.has(f.p));
     let doneBytes = manifest.files.reduce(
@@ -129,7 +226,7 @@ const AssetDownloader = {
           try {
             const res = await fetch(url);
             if (res.ok) {
-              await cache.put(url, res);
+              await store.put(url, res);
             } else {
               failed++;
             }
@@ -146,12 +243,7 @@ const AssetDownloader = {
 
       if (failed === 0) {
         localStorage.setItem(VERSION_KEY, manifest.version);
-        // Drop caches from older versions
-        for (const name of await caches.keys()) {
-          if (name.startsWith(CACHE_PREFIX) && name !== cacheName) {
-            await caches.delete(name);
-          }
-        }
+        await store.dropOthers();
       } else {
         console.warn(`[Assets] ${failed} files failed to download — will retry missing files next launch`);
       }

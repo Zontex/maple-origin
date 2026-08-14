@@ -184,6 +184,40 @@ class GameCanvas {
     this.game.addEventListener("contextmenu", (e) => {
       e.preventDefault();
     });
+
+    // Touch input (mobile): taps map onto the same mouse state the whole
+    // UI polls. preventDefault kills the 300ms click delay, double-tap
+    // zoom, and the unreliable synthesized mouse events.
+    const touchPos = (t: Touch) => {
+      const rect = this.game.getBoundingClientRect();
+      this.scaleX = rect.width / this.game.width;
+      this.scaleY = rect.height / this.game.height;
+      this.mouseX = (t.clientX - rect.left) / this.scaleX;
+      this.mouseY = (t.clientY - rect.top) / this.scaleY;
+    };
+    this.game.style.touchAction = "none";
+    this.game.addEventListener("touchstart", (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length > 0) {
+        touchPos(e.touches[0]);
+        this.clicked = true;
+        this.wasClicked = true;
+        this.mouseDownX = this.mouseX;
+        this.mouseDownY = this.mouseY;
+        this.focusGame = true;
+      }
+    }, { passive: false });
+    this.game.addEventListener("touchmove", (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length > 0) touchPos(e.touches[0]);
+    }, { passive: false });
+    const touchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+      this.clicked = false;
+      this.wasMouseUp = true;
+    };
+    this.game.addEventListener("touchend", touchEnd, { passive: false });
+    this.game.addEventListener("touchcancel", touchEnd, { passive: false });
     this.game.addEventListener("mouseout", () => {
       this.clicked = false;
       this.rightClicked = false;
