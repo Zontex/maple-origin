@@ -18,6 +18,12 @@
 
 #include "../Gameplay/Stage.h"
 #include "../Gameplay/Movement.h"
+#include "../Gameplay/Spawn.h"
+
+#ifdef USE_NX
+#include <nlnx/nx.hpp>
+#include <nlnx/node.hpp>
+#endif
 #include "../Graphics/GraphicsGL.h"
 #include "../IO/UI.h"
 #include "../IO/Window.h"
@@ -48,6 +54,7 @@ namespace ms::mw
 		// Presence state (Phase 2)
 
 		EquipSlot::Id equip_slot_from_browser(int32_t slot);
+		void load_and_spawn_map_mobs(int32_t mapid);
 
 		// Remote players are keyed by uuid string on the wire but int32 cid
 		// in the engine — allocate synthetic cids well above real DB ids
@@ -488,6 +495,9 @@ namespace ms::mw
 				Timer::get().start();
 				GraphicsGL::get().unlock();
 				Stage::get().transfer_player();
+				// Mobs spawn locally with deterministic oIds (mode 0 = wait
+				// for the mob host's state batches)
+				load_and_spawn_map_mobs(mapid);
 			});
 			GraphicsGL::get().lock();
 			Stage::get().clear();
@@ -506,6 +516,164 @@ namespace ms::mw
 			}
 			if (msg.contains("character"))
 				enter_game(msg["character"]);
+		}
+
+		// ------------------------------------------------------------------
+		// Mobs, non-host (Phase 3)
+
+		struct MobDef
+		{
+			int32_t id = 0;
+			int16_t x = 0;
+			int16_t y = 0;
+			uint16_t fh = 0;
+		};
+		std::unordered_map<int32_t, MobDef> g_mob_defs;   // oId → spawn def
+		std::unordered_map<int32_t, Point<int16_t>> g_mob_last; // oId → last pos
+
+		// Browser mob stance strings → Mob::Stance byte (+1 = facing left)
+		uint8_t mob_stancebyte(const std::string& stance, bool flipped)
+		{
+			uint8_t base = 4; // stand
+			if (stance.rfind("move", 0) == 0 || stance.rfind("walk", 0) == 0 ||
+				stance == "fly")
+				base = 2;
+			else if (stance == "jump")
+				base = 6;
+			else if (stance.rfind("hit", 0) == 0)
+				base = 8;
+			else if (stance.rfind("die", 0) == 0)
+				base = 10;
+			return flipped ? base : base + 1;
+		}
+
+		// Deterministic oIds: 0-based index over the map's WZ `life` children
+		// with type=="m", in FILE order. NX iterates children NAME-sorted
+		// ("0","1","10","2"...), which would scramble ids on maps with ≥10
+		// life entries — walk numeric names explicitly instead (life children
+		// are contiguous "0".."N"). Boss-table spawns (browser BossSpawns.ts)
+		// are appended after the WZ list; M1 skips boss maps.
+		void load_and_spawn_map_mobs(int32_t mapid)
+		{
+			g_mob_defs.clear();
+			g_mob_last.clear();
+
+			std::string strid = std::to_string(mapid);
+			strid.insert(0, 9 - strid.size(), '0');
+			std::string prefix = std::to_string(mapid / 100000000);
+			nl::node src = nl::nx::map["Map"]["Map" + prefix][strid + ".img"];
+			nl::node life = src["life"];
+			if (!life)
+				return;
+
+			int32_t oid = 0;
+			for (int32_t i = 0; ; i++)
+			{
+				nl::node n = life[std::to_string(i)];
+				if (!n)
+					break;
+				std::string type = n["type"].get_string();
+				if (type != "m")
+					continue;
+
+				MobDef def;
+				// WZ stores life ids as strings on some maps, ints on others
+				nl::node idn = n["id"];
+				def.id = static_cast<int32_t>(idn.get_integer(0));
+				if (def.id == 0)
+				{
+					try { def.id = std::stoi(idn.get_string()); }
+					catch (const std::exception&) { continue; }
+				}
+				def.x = static_cast<int16_t>(n["x"].get_integer());
+				nl::node cy = n["cy"];
+				def.y = static_cast<int16_t>(cy ? cy.get_integer() : n["y"].get_integer());
+				def.fh = static_cast<uint16_t>(n["fh"].get_integer());
+
+				int32_t this_oid = oid++;
+				g_mob_defs[this_oid] = def;
+				g_mob_last[this_oid] = { def.x, def.y };
+
+				// mode 0 = not controlled: no local AI, position comes from
+				// mob_state_batch (the mob-host contract's non-host side)
+				Stage::get().get_mobs().spawn(
+					MobSpawn(this_oid, def.id, 0, 5, def.fh, false, -1, { def.x, def.y }));
+			}
+			std::cout << "[MW] spawned " << oid << " mobs for map " << mapid << "\n";
+		}
+
+		void handle_mob_state_batch(const json& msg)
+		{
+			if (!msg.contains("data"))
+				return;
+			const json& data = msg["data"];
+			if (data.value("mapId", -1) != g_my_mapid || g_state.is_mob_host)
+				return;
+			if (!data.contains("mobs") || !data["mobs"].is_array())
+				return;
+
+			for (const auto& m : data["mobs"])
+			{
+				int32_t oid = m.value("oId", -1);
+				if (oid < 0 || !g_mob_defs.count(oid))
+					continue;
+
+				if (m.value("dying", false) || m.value("hp", 1) <= 0)
+				{
+					Stage::get().get_mobs().remove(oid, 1);
+					continue;
+				}
+
+				int16_t x = static_cast<int16_t>(m.value("x", 0.0));
+				int16_t y = static_cast<int16_t>(m.value("y", 0.0));
+				uint8_t stancebyte = mob_stancebyte(
+					m.value("stance", std::string("stand")), m.value("flipped", false));
+
+				Point<int16_t> last = g_mob_last.count(oid) ? g_mob_last[oid] : Point<int16_t>(x, y);
+				std::vector<Movement> moves;
+				moves.emplace_back(Movement::Type::ABSOLUTE, 0, x, y,
+					last.x(), last.y(), 0, stancebyte, 66);
+				Stage::get().get_mobs().send_movement(oid, last, std::move(moves));
+				g_mob_last[oid] = { x, y };
+
+				int32_t hp = m.value("hp", 0);
+				int32_t maxhp = m.value("maxHp", 0);
+				if (maxhp > 0 && hp < maxhp)
+				{
+					int8_t pct = static_cast<int8_t>(std::max(1, hp * 100 / maxhp));
+					Stage::get().get_mobs().send_mobhp(oid, pct,
+						static_cast<uint16_t>(g_my_level));
+				}
+			}
+		}
+
+		void handle_mob_death(const json& msg)
+		{
+			if (!msg.contains("data"))
+				return;
+			const json& data = msg["data"];
+			if (data.value("mapId", -1) != g_my_mapid)
+				return;
+			int32_t oid = data.value("oId", -1);
+			if (oid >= 0)
+				Stage::get().get_mobs().remove(oid, 1);
+		}
+
+		void handle_mob_respawn(const json& msg)
+		{
+			if (!msg.contains("data"))
+				return;
+			const json& data = msg["data"];
+			if (data.value("mapId", -1) != g_my_mapid)
+				return;
+			int32_t oid = data.value("oId", -1);
+			auto it = g_mob_defs.find(oid);
+			if (it == g_mob_defs.end())
+				return;
+			const MobDef& def = it->second;
+			g_mob_last[oid] = { def.x, def.y };
+			Stage::get().get_mobs().spawn(
+				MobSpawn(oid, def.id, 0, 5, def.fh, true, -1, { def.x, def.y }));
 		}
 
 		// ------------------------------------------------------------------
@@ -780,8 +948,10 @@ namespace ms::mw
 				chat::log(msg.value("text", std::string()), chat::LineType::YELLOW);
 			else if (type == "mob_host_assign")
 				g_state.is_mob_host = msg.value("isHost", false);
-			else if (type == "mob_state_batch" || type == "mob_death" ||
-				type == "mob_respawn" || type == "item_drop" || type == "item_pickup" ||
+			else if (type == "mob_state_batch") handle_mob_state_batch(msg);
+			else if (type == "mob_death") handle_mob_death(msg);
+			else if (type == "mob_respawn") handle_mob_respawn(msg);
+			else if (type == "item_drop" || type == "item_pickup" ||
 				type == "reactor_hit" || type == "reactor_respawn" ||
 				type == "player_level_up" || type == "player_hit_by_mob" ||
 				type == "megaphone" || type == "party_update" || type == "party_invite" ||
