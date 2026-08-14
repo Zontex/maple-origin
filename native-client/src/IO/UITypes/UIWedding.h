@@ -1,0 +1,68 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#pragma once
+
+#include "../UIElement.h"
+
+#include "../../Graphics/Texture.h"
+#include "../../Graphics/Text.h"
+
+namespace ms
+{
+	class UIWedding : public UIElement
+	{
+	public:
+		static constexpr Type TYPE = UIElement::Type::WEDDING;
+		static constexpr bool FOCUSED = false;
+		static constexpr bool TOGGLED = false;
+
+		UIWedding();
+
+		void draw(float inter) const override;
+		void update() override;
+
+		void send_key(int32_t keycode, bool pressed, bool escape) override;
+
+		UIElement::Type get_type() const override;
+
+		// Called from packet handlers
+		void set_invitation(int8_t type, const std::string& groom, const std::string& bride);
+		void set_countdown(int32_t seconds);
+
+	protected:
+		Button::State button_pressed(uint16_t buttonid) override;
+
+	private:
+		enum Buttons : uint16_t
+		{
+			BT_OK
+		};
+
+		Texture cathedral_tex;
+		Texture vegas_tex;
+		Texture stopwatch_tex;
+
+		int8_t wedding_type;  // 0=Cathedral, 1=Vegas
+		std::string groom_name;
+		std::string bride_name;
+		int32_t countdown;
+
+		mutable Text names_label;
+		mutable Text countdown_label;
+	};
+}

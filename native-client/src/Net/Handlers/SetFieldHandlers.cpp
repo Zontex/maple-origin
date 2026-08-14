@@ -1,0 +1,163 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#include "SetFieldHandlers.h"
+
+#include "Helpers/CharacterParser.h"
+#include "Helpers/LoginParser.h"
+
+#include "../Packets/GameplayPackets.h"
+
+#include "../../Configuration.h"
+
+#include "../../Gameplay/Stage.h"
+#include "../../IO/UI.h"
+#include "../../IO/Window.h"
+
+#include "../../Character/Inventory/InventoryType.h"
+#include "../../Character/Look/EquipSlot.h"
+#include "../../Character/MapleStat.h"
+#include "../../IO/UITypes/UICharSelect.h"
+
+namespace ms
+{
+	void SetFieldHandler::transition(int32_t mapid, uint8_t portalid) const
+	{
+		float fadestep = 0.025f;
+
+		Window::get().fadeout(
+			fadestep,
+			[mapid, portalid]()
+			{
+				GraphicsGL::get().clear();
+
+				Stage::get().load(mapid, portalid);
+
+				UI::get().enable();
+				Timer::get().start();
+				GraphicsGL::get().unlock();
+
+				Stage::get().transfer_player();
+			});
+
+		GraphicsGL::get().lock();
+		Stage::get().clear();
+		Timer::get().start();
+	}
+
+	void SetFieldHandler::handle(InPacket& recv) const
+	{
+		int16_t res_w = Setting<Width>::get().load();
+		int16_t res_h = Setting<Height>::get().load();
+
+		// Scale the render so the logical view stays ~1280 wide at any
+		// resolution. Without this a large window (e.g. 4K) gives a huge
+		// logical view and every sprite looks tiny.
+		float ui_scale = res_w / 1280.0f;
+		if (ui_scale < 1.0f) ui_scale = 1.0f;
+		if (ui_scale > 4.0f) ui_scale = 4.0f;
+
+		Constants::Constants::get().set_ui_scale(ui_scale);
+		Constants::Constants::get().set_viewwidth(res_w);
+		Constants::Constants::get().set_viewheight(res_h);
+
+		int32_t channel = recv.read_int();
+		int8_t mode1 = recv.read_byte();
+		int8_t mode2 = recv.read_byte();
+
+		if (mode1 == 0 && mode2 == 0)
+			change_map(recv, channel);
+		else
+			set_field(recv);
+	}
+
+	void SetFieldHandler::change_map(InPacket& recv, int32_t) const
+	{
+		recv.skip(3);
+
+		int32_t mapid = recv.read_int();
+		int8_t portalid = recv.read_byte();
+
+		transition(mapid, portalid);
+	}
+
+	void SetFieldHandler::set_field(InPacket& recv) const
+	{
+		recv.skip(23);
+
+		int32_t cid = recv.read_int();
+
+		uint8_t skin;
+		int32_t faceid;
+		int32_t hairid;
+		StatsEntry statsentry = LoginParser::parse_stats(recv, false, &skin, &faceid, &hairid);
+
+		// Build minimal look entry with skin/face/hair
+		LookEntry look;
+		look.female = statsentry.female;
+		look.skin = skin;
+		look.faceid = faceid;
+		look.hairid = hairid;
+
+		// Create CharEntry and load the player
+		CharEntry playerentry = { statsentry, look, cid };
+		Stage::get().loadplayer(playerentry);
+
+		Player& player = Stage::get().get_player();
+
+		recv.read_byte(); // 'buddycap'
+
+		if (recv.read_bool())
+			recv.read_string(); // 'linkedname'
+
+		CharacterParser::parse_inventory(recv, player.get_inventory());
+
+		// Update the player's visual look from equipped items in inventory
+		for (auto eqslot : EquipSlot::values)
+		{
+			if (int32_t itemid = player.get_inventory().get_item_id(InventoryType::Id::EQUIPPED, eqslot))
+				player.change_equip(eqslot);
+		}
+
+		CharacterParser::parse_skillbook(recv, player.get_skills());
+		CharacterParser::parse_cooldowns(recv, player);
+		CharacterParser::parse_questlog(recv, player.get_quests());
+		CharacterParser::parse_minigame(recv);
+		CharacterParser::parse_ring1(recv);
+		CharacterParser::parse_ring2(recv);
+		CharacterParser::parse_ring3(recv);
+		CharacterParser::parse_teleportrock(recv, player.get_teleportrock());
+		CharacterParser::parse_monsterbook(recv, player.get_monsterbook());
+		CharacterParser::parse_nyinfo(recv);
+		CharacterParser::parse_areainfo(recv);
+
+		player.recalc_stats(true);
+
+		// PlayerUpdatePacket (opcode 223) is not dispatched: Cosmic has no
+		// PLAYER_UPDATE recv opcode — 223 is PARTY_SEARCH_UPDATE there, so
+		// sending it unregistered the player from party search on login.
+
+		uint8_t portalid = player.get_stats().get_portal();
+		int32_t mapid = player.get_stats().get_mapid();
+
+		transition(mapid, portalid);
+
+		Sound(Sound::Name::GAMESTART).play();
+
+		UI::get().change_state(UI::State::GAME);
+	}
+}

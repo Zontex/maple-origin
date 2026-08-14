@@ -1,0 +1,619 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#include "UISoftKey.h"
+
+#include "../Components/AreaButton.h"
+
+#include "../UI.h"
+
+#include "../Components/MapleButton.h"
+#include "../UIScale.h"
+
+#include "../../Audio/Audio.h"
+#include "../../Util/Misc.h"
+
+#ifdef USE_NX
+#include <nlnx/nx.hpp>
+#endif
+
+namespace ms
+{
+	UISoftKey::UISoftKey(OkCallback ok_callback, CancelCallback cancel_callback, std::string tooltip_text, Point<int16_t> tooltip_pos) : UIElement(UIScale::at(104, 140), Point<int16_t>(0, 0)), ok_callback(ok_callback), cancel_callback(cancel_callback), tooltip_pos(tooltip_pos), highCase(false), dragged(false)
+	{
+		nl::node SoftKey = nl::nx::ui["Login.img"]["Common"]["SoftKey"];
+		nl::node backgrnd = SoftKey["backgrnd"];
+		// Drag handle = the title/input area only; the tab strip starts at
+		// y=70 and must stay clickable.
+		dragarea = Point<int16_t>(140, 65);
+
+		sprites.emplace_back(backgrnd);
+
+		// Also add other background layers
+		sprites.emplace_back(SoftKey["backgrnd2"]);
+		sprites.emplace_back(SoftKey["backgrnd3"]);
+
+		// Cancel and OK below the number grid
+		buttons[Buttons::BtCancel] = std::make_unique<MapleButton>(SoftKey["BtCancel"], Point<int16_t>(8, 245));
+		buttons[Buttons::BtOK] = std::make_unique<MapleButton>(SoftKey["BtOK"], Point<int16_t>(75, 245));
+
+#pragma region BtNum
+		// Clean 3-column grid: 1-9 in rows 1-3, then 0 + Del in row 4
+		std::string numKeys[10] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" };
+
+		for (uint16_t i = 0; i < 10; i++)
+		{
+			row1keys[i] = numKeys[i];
+			buttons[Buttons::BtNum0 + i] = std::make_unique<MapleButton>(SoftKey["BtNum"][numKeys[i]], keypos(i, 0));
+		}
+
+		// Mark remaining slots as blank
+		for (uint16_t i = 10; i < ROW_MAX; i++)
+			row1keys[i] = "Blank";
+
+		// Place Del button next to 0 in row 4
+		// BtDel has a large NX origin (~51,199) so we use raw position to compensate
+		buttons[Buttons::BtDel] = std::make_unique<MapleButton>(SoftKey["BtDel"], Point<int16_t>(-3, 8));
+
+		// The three pad tabs (digits / abc / ABC). The tab bitmaps carry baked
+		// origins that self-place them at +12/+52/+92, +70 from the dialog.
+		for (uint16_t t = 0; t < 3; t++)
+		{
+			tab_normal[t] = SoftKey["Tab"]["normal"][t];
+			tab_selected[t] = SoftKey["Tab"]["selected"][t];
+			buttons[Buttons::BtTabNum + t] = std::make_unique<AreaButton>(
+				Point<int16_t>(static_cast<int16_t>(12 + 40 * t), 70), Point<int16_t>(39, 17));
+		}
+
+		// Letter keys share the digit grid; the multi-letter caps (abc, def, ...)
+		// enter letters phone-style: tap cycles through the cap's letters.
+		for (uint16_t i = 0; i < 10; i++)
+		{
+			buttons[Buttons::BtLetter0 + i] = std::make_unique<MapleButton>(
+				SoftKey[highCase ? "BtHighCase" : "BtLowCase"][std::to_string(i)], keypos(i, 0));
+			buttons[Buttons::BtLetter0 + i]->set_active(false);
+		}
+#pragma endregion
+#pragma endregion
+
+#pragma region BtLowCase / BtHighCase
+#pragma region Row 2
+		std::string row2KeysMap[ROW2_KEYS];
+
+		row2KeysMap[0] = get_key_map_index("Q");
+		row2KeysMap[1] = get_key_map_index("W");
+		row2KeysMap[2] = get_key_map_index("E");
+		row2KeysMap[3] = get_key_map_index("R");
+		row2KeysMap[4] = get_key_map_index("T");
+		row2KeysMap[5] = get_key_map_index("Y");
+		row2KeysMap[6] = get_key_map_index("U");
+		row2KeysMap[7] = get_key_map_index("I");
+		row2KeysMap[8] = get_key_map_index("O");
+		row2KeysMap[9] = get_key_map_index("P");
+
+		uint16_t row2r1 = random.next_int(ROW_MAX);
+		uint16_t row2r2 = random.next_int(ROW_MAX);
+
+		while (row2r1 == row2r2)
+			row2r2 = random.next_int(ROW_MAX);
+
+		row2keys[row2r1] = "Blank";
+		row2keys[row2r2] = "Blank";
+
+		uint16_t keyIndex = 0;
+
+		for (std::string& key : row2keys)
+		{
+			if (key != "Blank" && keyIndex < ROW2_KEYS)
+			{
+				key = row2KeysMap[keyIndex];
+				keyIndex++;
+			}
+		}
+
+		// v83 NX SoftKey only has 10 letter buttons that don't fit the 140x280 keyboard
+		// Letter case buttons are not created — PIC uses numbers only in this layout
+		// The key arrays are still populated for case_pressed() to work if ever needed
+		uint16_t caseKeyIndex = 0;
+		(void)caseKeyIndex;
+#pragma endregion
+
+		// Input field is (0,0)-relative; it's drawn at `position + textfield_pos`
+		// each frame so the masked PIC shows INSIDE the SoftKey's top input box
+		// (and follows the dialog when dragged) — not at a fixed screen point.
+		textfield = Textfield(Text::Font::A11M, Text::Alignment::LEFT, Color::Name::EMPEROR, Rectangle<int16_t>(Point<int16_t>(0, 0), Point<int16_t>(117, 20)), MAX_TEXT_LEN);
+		textfield.set_cryptchar('*');
+
+		textfield.set_enter_callback(
+			[&](std::string)
+			{
+				button_pressed(Buttons::BtOK);
+			}
+		);
+
+		textfield.set_key_callback(
+			KeyAction::Id::ESCAPE,
+			[&]() {
+				button_pressed(Buttons::BtCancel);
+			}
+		);
+
+		textfield.set_text_callback(
+			[&]()
+			{
+				clear_tooltip();
+				show_text("and the numbers and letters can only be entered using a mouse.", 175, true, 1);
+			}
+		);
+
+		// offset of the input box from the dialog's top-left (tune vs a screenshot)
+		textfield_pos = Point<int16_t>(16, 44);
+
+		show_text(tooltip_text);
+
+		dimension = Texture(backgrnd).get_dimensions();
+	}
+
+	UISoftKey::UISoftKey(OkCallback ok_callback, CancelCallback cancel_callback, std::string tooltip_text) : UISoftKey(ok_callback, cancel_callback, tooltip_text, Point<int16_t>(0, 0)) {}
+	UISoftKey::UISoftKey(OkCallback ok_callback, CancelCallback cancel_callback) : UISoftKey(ok_callback, cancel_callback, "") {}
+	UISoftKey::UISoftKey(OkCallback ok_callback) : UISoftKey(ok_callback, []() {}) {}
+
+	void UISoftKey::draw(float inter) const
+	{
+		UIElement::draw(inter);
+
+		for (uint16_t i = 0; i < CASE_KEYS; i++)
+		{
+			const Button* btn = BtCaseKeys[i][highCase].get();
+			if (btn)
+				btn->draw(position);
+		}
+
+		for (uint16_t t = 0; t < 3; t++)
+		{
+			const Texture& tex = (t == pad_tab) ? tab_selected[t] : tab_normal[t];
+			tex.draw(DrawArgument(position));
+		}
+
+		textfield.draw(position + textfield_pos, Point<int16_t>(1, 0));
+
+		if (tooltip)
+			tooltip->draw(position + Point<int16_t>(419, 50) + tooltip_pos);
+	}
+
+	void UISoftKey::update()
+	{
+		UIElement::update();
+
+		if (multitap_timer > 0)
+			multitap_timer -= Constants::TIMESTEP;
+
+		textfield.update(position + textfield_pos);
+		textfield.set_state(Textfield::State::FOCUSED);
+
+		if (tooltip)
+		{
+			if (tooltip_timestep > 0)
+				tooltip_timestep -= Constants::TIMESTEP;
+			else
+				clear_tooltip();
+		}
+	}
+
+	void UISoftKey::deactivate()
+	{
+		UI::get().remove(UIElement::Type::SOFTKEYBOARD);
+	}
+
+	Cursor::State UISoftKey::send_cursor(bool clicked, Point<int16_t> cursorpos)
+	{
+		if (clicked)
+		{
+			if (dragged)
+			{
+				position = cursorpos - cursoroffset;
+				return Cursor::State::CLICKING;
+			}
+			else
+			{
+				auto bounds = Rectangle<int16_t>(position, position + dragarea);
+				if (bounds.contains(cursorpos))
+				{
+					cursoroffset = cursorpos - position;
+					dragged = true;
+					return Cursor::State::CLICKING;
+				}
+			}
+		}
+		else
+		{
+			// Cursor movement in the login flow reports "not clicked" even while
+			// the button is held, which would kill the drag instantly. Keep
+			// dragging as long as the mouse is actually still down.
+			if (dragged)
+			{
+				if (UI::get().is_mouse_held())
+				{
+					position = cursorpos - cursoroffset;
+					return Cursor::State::CLICKING;
+				}
+
+				dragged = false;
+			}
+		}
+
+		if (Cursor::State new_state = textfield.send_cursor(cursorpos, clicked))
+			return new_state;
+
+		for (uint16_t i = 0; i < CASE_KEYS; i++)
+		{
+			auto& btn = BtCaseKeys[i][highCase];
+
+			if (!btn)
+				continue;
+
+			if (btn->is_active() && btn->bounds(position).contains(cursorpos))
+			{
+				if (btn->get_state() == Button::State::NORMAL)
+				{
+					Sound(Sound::Name::BUTTONOVER).play();
+
+					btn->set_state(Button::State::MOUSEOVER);
+					return Cursor::State::CANCLICK;
+				}
+				else if (btn->get_state() == Button::State::MOUSEOVER)
+				{
+					if (clicked)
+					{
+						Sound(Sound::Name::BUTTONCLICK).play();
+
+						btn->set_state(case_pressed(i));
+
+						return Cursor::State::IDLE;
+					}
+					else
+					{
+						return Cursor::State::CANCLICK;
+					}
+				}
+			}
+			else if (btn->get_state() == Button::State::MOUSEOVER)
+			{
+				btn->set_state(Button::State::NORMAL);
+			}
+		}
+
+		return UIElement::send_cursor(clicked, cursorpos);
+	}
+
+	void UISoftKey::send_key(int32_t keycode, bool pressed, bool escape)
+	{
+		if (pressed)
+		{
+			if (escape)
+				button_pressed(Buttons::BtCancel);
+			else if (keycode == KeyAction::Id::RETURN)
+				button_pressed(Buttons::BtOK);
+		}
+	}
+
+	UIElement::Type UISoftKey::get_type() const
+	{
+		return TYPE;
+	}
+
+	Button::State UISoftKey::button_pressed(uint16_t buttonid)
+	{
+		std::string pic = textfield.get_text();
+		size_t size = pic.size();
+
+		if (buttonid == Buttons::BtCancel)
+		{
+			deactivate();
+
+			if (cancel_callback)
+				cancel_callback();
+
+			return Button::State::NORMAL;
+		}
+		else if (buttonid == Buttons::BtDel)
+		{
+			if (size > 0)
+			{
+				pic.pop_back();
+				textfield.change_text(pic);
+			}
+
+			return Button::State::NORMAL;
+		}
+		else if (buttonid == Buttons::BtOK)
+		{
+			if (size >= MIN_TEXT_LEN)
+			{
+				if (check_pic())
+				{
+					deactivate();
+
+					if (ok_callback)
+						ok_callback(pic);
+				}
+			}
+			else
+			{
+				clear_tooltip();
+				show_text("The PIC needs to be at least 6 characters long.");
+			}
+
+			return Button::State::NORMAL;
+		}
+		else if (buttonid == Buttons::BtShift)
+		{
+			highCase = !highCase;
+
+			return Button::State::NORMAL;
+		}
+		else if (buttonid >= Buttons::BtTabNum && buttonid <= Buttons::BtTabHigh)
+		{
+			uint16_t newtab = buttonid - Buttons::BtTabNum;
+
+			if (newtab != pad_tab)
+			{
+				pad_tab = newtab;
+				highCase = (pad_tab == 2);
+				multitap_key = 0xFFFF;
+				multitap_timer = 0;
+
+				// swap which key set is live on the shared grid
+				nl::node SoftKey = nl::nx::ui["Login.img"]["Common"]["SoftKey"];
+				for (uint16_t i = 0; i < 10; i++)
+				{
+					buttons[Buttons::BtNum0 + i]->set_active(pad_tab == 0);
+
+					if (pad_tab != 0)
+						buttons[Buttons::BtLetter0 + i] = std::make_unique<MapleButton>(
+							SoftKey[pad_tab == 2 ? "BtHighCase" : "BtLowCase"][std::to_string(i)],
+							keypos(i, 0));
+
+					buttons[Buttons::BtLetter0 + i]->set_active(pad_tab != 0);
+				}
+
+				buttons[Buttons::BtDel]->set_active(pad_tab == 0);
+			}
+
+			return Button::State::NORMAL;
+		}
+		else if (buttonid >= Buttons::BtLetter0 && buttonid < Buttons::BtNum0)
+		{
+			// multi-letter caps (abc / def / ...): tapping the same cap again
+			// within the window cycles its letters, phone style
+			static const std::string groups[10] = {
+				"abc", "def", "ghi", "jkl", "mno", "pqr", "stu", "vwx", "yz", ""
+			};
+
+			uint16_t idx = buttonid - Buttons::BtLetter0;
+			std::string group = groups[idx];
+
+			if (group.empty())
+				return Button::State::NORMAL;
+
+			if (pad_tab == 2)
+				for (auto& ch : group)
+					ch = static_cast<char>(::toupper(ch));
+
+			std::string cur = textfield.get_text();
+
+			if (multitap_timer > 0 && multitap_key == idx && !cur.empty())
+			{
+				multitap_pos = (multitap_pos + 1) % group.size();
+				cur.back() = group[multitap_pos];
+				textfield.change_text(cur);
+			}
+			else
+			{
+				multitap_pos = 0;
+				append_key(std::string(1, group[0]));
+			}
+
+			multitap_key = idx;
+			multitap_timer = 900;
+
+			return Button::State::NORMAL;
+		}
+		else if (buttonid >= Buttons::BtNum0)
+		{
+			std::string key = row1keys[buttonid - Buttons::BtNum0];
+
+			if (key != "Blank")
+				append_key(key);
+
+			return Button::State::NORMAL;
+		}
+		else
+		{
+			return Button::State::DISABLED;
+		}
+	}
+
+	void UISoftKey::show_text(std::string text, uint16_t maxwidth, bool formatted, int16_t line_adj)
+	{
+		tetooltip.set_text(text, maxwidth, formatted, line_adj);
+
+		if (!text.empty())
+		{
+			tooltip = tetooltip;
+			tooltip_timestep = 7 * 1000;
+		}
+	}
+
+	void UISoftKey::clear_tooltip()
+	{
+		tooltip_pos = Point<int16_t>(0, 0);
+		tetooltip.set_text("");
+		tooltip = Optional<Tooltip>();
+	}
+
+	void UISoftKey::append_key(std::string key)
+	{
+		std::string pic = textfield.get_text();
+		size_t size = pic.size();
+
+		if (size < MAX_TEXT_LEN)
+		{
+			pic.append(key);
+			textfield.change_text(pic);
+		}
+	}
+
+	Point<int16_t> UISoftKey::keypos(uint16_t index, uint16_t row) const
+	{
+		// Background is 140x280. Buttons are 40x35.
+		// 3-column grid layout
+		static constexpr int16_t COLS = 3;
+		static constexpr int16_t COL_W = 44;  // 40px button + 4px gap
+		static constexpr int16_t ROW_H = 37;  // 35px button + 2px gap
+		static constexpr int16_t X0 = 8;
+		static constexpr int16_t Y0 = 95;
+
+		int16_t col = index % COLS;
+		int16_t sub_row = index / COLS;
+
+		// row 0 = numbers (12 slots = 4 rows, y: 8-119)
+		// row 1-3 = letters (hidden below, y: 156+)
+		int16_t base_y = Y0 + row * 4 * ROW_H;
+
+		return Point<int16_t>(X0 + col * COL_W, base_y + sub_row * ROW_H);
+	}
+
+	Button::State UISoftKey::case_pressed(uint16_t buttonid)
+	{
+		// Row 2
+		if (buttonid >= 0 && buttonid < ROW_MAX)
+		{
+			std::string string_index = row2keys[buttonid];
+
+			if (string_index != "Blank")
+			{
+				uint16_t index = std::stoi(string_index);
+				std::string key = get_key_from_index(index);
+
+				append_key(key);
+			}
+
+			return Button::State::NORMAL;
+		}
+		// Row 3
+		else if (buttonid >= ROW_MAX && buttonid < ROW_MAX * 2)
+		{
+			std::string string_index = row3keys[buttonid - ROW_MAX];
+
+			if (string_index != "Blank")
+			{
+				uint16_t index = std::stoi(string_index);
+				std::string key = get_key_from_index(index);
+
+				append_key(key);
+			}
+
+			return Button::State::NORMAL;
+		}
+		// Row 4
+		else if (buttonid >= ROW_MAX * 2 && buttonid < ROW_MAX * 2 + ROW4_MAX)
+		{
+			std::string string_index = row4keys[buttonid - ROW_MAX * 2];
+
+			if (string_index != "Blank")
+			{
+				uint16_t index = std::stoi(string_index);
+				std::string key = get_key_from_index(index);
+
+				append_key(key);
+			}
+
+			return Button::State::NORMAL;
+		}
+
+		return Button::State::DISABLED;
+	}
+
+	std::string UISoftKey::get_key_map_index(std::string key)
+	{
+		for (auto map : KeyMap)
+			if (map.second == key)
+				return std::to_string(map.first);
+
+		return "Blank";
+	}
+
+	std::string UISoftKey::get_key_from_index(uint16_t index)
+	{
+		auto iter = KeyMap.find(index);
+
+		if (iter != KeyMap.end())
+		{
+			std::string key = KeyMap.at(index);
+
+			return highCase ? key : string_format::tolower(key);
+		}
+
+		return "Blank";
+	}
+
+	bool UISoftKey::check_pic()
+	{
+		const char* pStr = textfield.get_text().c_str();
+
+		if (pStr == NULL)
+			return false;
+
+		int count = 0;
+		char m = ' ';
+		bool reptitive = false;
+
+		while (*pStr)
+		{
+			if (*pStr == m)
+			{
+				count++;
+			}
+			else
+			{
+				count = 0;
+				m = *pStr;
+			}
+
+			if (count > 2)
+			{
+				reptitive = true;
+				break;
+			}
+
+			pStr++;
+		}
+
+		if (reptitive)
+		{
+			clear_tooltip();
+			show_text("Your 2nd password cannot contain three of the same character in a row.", 220, true, 1);
+
+			return false;
+		}
+
+		// No category requirement — numbers-only PIC is allowed
+
+		return true;
+	}
+}

@@ -1,0 +1,110 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#include "MapEffect.h"
+
+#include "../../Constants.h"
+
+#ifdef USE_NX
+#include <nlnx/nx.hpp>
+#endif
+
+namespace ms
+{
+	MapEffect::MapEffect(std::string path) : active(false)
+	{
+		nl::node resolved;
+
+		// Weather/effect paths like "Map/MapHelper.img/weather/snow" start with "Map/"
+		// Strip the "Map/" prefix and resolve from the map NX root
+		if (path.substr(0, 4) == "Map/")
+			resolved = nl::nx::map.resolve(path.substr(4));
+		else
+			resolved = nl::nx::map["Effect.img"].resolve(path);
+
+		effect = resolved;
+
+		int16_t width = Constants::Constants::get().get_viewwidth();
+
+		position = Point<int16_t>(width / 2, 250);
+	}
+
+	MapEffect::MapEffect() {}
+
+	void MapEffect::draw() const
+	{
+		if (!active)
+			effect.draw(position, 1.0f);
+	}
+
+	void MapEffect::update()
+	{
+		if (!active)
+			active = effect.update(6);
+	}
+
+	void MapPointEffects::add(nl::node src, Point<int16_t> position, int8_t layer, bool flip)
+	{
+		if (!src)
+			return;
+
+		Entry e;
+		e.animation = Animation(src);
+		e.position = position;
+		e.layer = layer;
+		e.flip = flip;
+
+		entries.push_back(std::move(e));
+	}
+
+	void MapPointEffects::add(const std::string& path, Point<int16_t> position,
+		int8_t layer, bool flip)
+	{
+		add(nl::nx::effect.resolve(path), position, layer, flip);
+	}
+
+	void MapPointEffects::draw(int8_t layer, double viewx, double viewy, float alpha) const
+	{
+		for (const Entry& e : entries)
+		{
+			if (e.layer != layer)
+				continue;
+
+			Point<int16_t> absp(
+				static_cast<int16_t>(e.position.x() + viewx),
+				static_cast<int16_t>(e.position.y() + viewy));
+
+			e.animation.draw(DrawArgument(absp, e.flip), alpha);
+		}
+	}
+
+	void MapPointEffects::update()
+	{
+		// Animation::update() reports true on the frame the cycle completes, which
+		// is exactly when a one-shot is done.
+		for (size_t i = entries.size(); i-- > 0; )
+		{
+			if (entries[i].animation.update())
+				entries.erase(entries.begin() + i);
+		}
+	}
+
+	void MapPointEffects::clear()
+	{
+		entries.clear();
+	}
+}

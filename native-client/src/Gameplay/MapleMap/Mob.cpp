@@ -1,0 +1,885 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#include "Mob.h"
+
+#include "../../Util/Misc.h"
+
+#include "../../Net/Packets/GameplayPackets.h"
+
+#ifdef USE_NX
+#include <nlnx/nx.hpp>
+#endif
+
+namespace ms
+{
+	Mob::Mob(int32_t oi, int32_t mid, int8_t mode, int8_t st, uint16_t fh, bool newspawn, int8_t tm, Point<int16_t> position) : MapObject(oi)
+	{
+		std::string strid = string_format::extend_id(mid, 7);
+		nl::node src = nl::nx::mob[strid + ".img"];
+
+		nl::node info = src["info"];
+
+		level = info["level"];
+		watk = info["PADamage"];
+		matk = info["MADamage"];
+		wdef = info["PDDamage"];
+		mdef = info["MDDamage"];
+		accuracy = info["acc"];
+		avoid = info["eva"];
+		knockback = info["pushed"];
+		speed = info["speed"];
+		flyspeed = info["flySpeed"];
+		touchdamage = info["bodyAttack"].get_bool();
+		undead = info["undead"].get_bool();
+		noflip = info["noFlip"].get_bool();
+		// info/ai = 1 marks a server-generated mob. The generator always draws
+		// them facing right, opposite the vanilla left-facing convention —
+		// invert their draw mirror so they walk the way they point
+		facesright = info["ai"].get_bool();
+		notattack = info["notAttack"].get_bool();
+		boss = info["boss"].get_bool();
+		canjump = src["jump"].size() > 0;
+		canfly = src["fly"].size() > 0;
+		canmove = src["move"].size() > 0 || canfly;
+
+		if (canfly)
+		{
+			animations[Stance::STAND] = src["fly"];
+			animations[Stance::MOVE] = src["fly"];
+		}
+		else
+		{
+			animations[Stance::STAND] = src["stand"];
+			animations[Stance::MOVE] = src["move"];
+		}
+
+		animations[Stance::JUMP] = src["jump"];
+		animations[Stance::HIT] = src["hit1"];
+		animations[Stance::DIE] = src["die1"];
+
+		name = (std::string)nl::nx::string["Mob.img"][std::to_string(mid)]["name"];
+
+		nl::node sndsrc = nl::nx::sound["Mob.img"][strid];
+
+		hitsound = sndsrc["Damage"];
+		diesound = sndsrc["Die"];
+
+		speed += 100;
+		speed *= 0.001f;
+
+		flyspeed += 100;
+		flyspeed *= 0.0005f;
+
+		if (canfly)
+			phobj.type = PhysicsObject::Type::FLYING;
+
+		id = mid;
+		team = tm;
+		set_position(position);
+		set_control(mode);
+		phobj.fhid = fh;
+		phobj.set_flag(PhysicsObject::Flag::TURNATEDGES);
+
+		hppercent = 0;
+		dying = false;
+		dead = false;
+		fading = false;
+		stunned = false;
+		frozen = false;
+		poisoned = false;
+		sealed = false;
+		doomed = false;
+		shadowed = false;
+		set_stance(st);
+		flydirection = STRAIGHT;
+		counter = 0;
+
+		namelabel = Text(Text::Font::A13M, Text::Alignment::CENTER, Color::Name::WHITE, Text::Background::NAMETAG, name);
+
+		if (newspawn)
+		{
+			fadein = true;
+			opacity.set(0.0f);
+		}
+		else
+		{
+			fadein = false;
+			opacity.set(1.0f);
+		}
+
+		if (control && stance == Stance::STAND)
+			next_move();
+	}
+
+	void Mob::set_stance(uint8_t stancebyte)
+	{
+		flip = (stancebyte % 2) == 0;
+
+		if (!flip)
+			stancebyte -= 1;
+
+		if (stancebyte < Stance::MOVE)
+			stancebyte = Stance::MOVE;
+		// Upper clamp too: a garbage/large stance byte off the wire would
+		// otherwise index past the known stances. set_stance(Stance) still
+		// falls back if this specific mob lacks the stance.
+		if (stancebyte > Stance::DIE)
+			stancebyte = Stance::STAND;
+
+		set_stance(static_cast<Stance>(stancebyte));
+	}
+
+	void Mob::set_stance(Stance newstance)
+	{
+		if (stance == newstance)
+			return;
+
+		// Not every v83 mob has every stance (many lack jump/hit/etc.).
+		// Entering a stance with no animation would make animations.at(stance)
+		// throw std::out_of_range and crash the client — increasingly likely
+		// as more varied mobs appear. Fall back to a stance the mob does have.
+		if (!animations.count(newstance))
+		{
+			if (animations.count(Stance::STAND))
+				newstance = Stance::STAND;
+			else if (!animations.empty())
+				newstance = animations.begin()->first;
+			else
+				return; // no animations at all — nothing safe to show
+
+			if (stance == newstance)
+				return;
+		}
+
+		stance = newstance;
+		animations.at(stance).reset();
+	}
+
+	int8_t Mob::update(const Physics& physics)
+	{
+		if (!active)
+			return phobj.fhlayer;
+
+		bool aniend = animations.at(stance).update();
+
+		if (aniend && stance == Stance::DIE)
+			dead = true;
+
+		if (fading)
+		{
+			opacity -= 0.025f;
+
+			if (opacity.last() < 0.025f)
+			{
+				opacity.set(0.0f);
+				fading = false;
+				dead = true;
+			}
+		}
+		else if (fadein)
+		{
+			opacity += 0.025f;
+
+			if (opacity.last() > 0.975f)
+			{
+				opacity.set(1.0f);
+				fadein = false;
+			}
+		}
+
+		if (dead)
+		{
+			deactivate();
+
+			return -1;
+		}
+
+		effects.update();
+		showhp.update();
+
+		if (!dying)
+		{
+			// Stunned/frozen/webbed mobs can't move
+			if (stunned || frozen || shadowed)
+			{
+				phobj.hforce = 0;
+				phobj.vforce = 0;
+				physics.move_object(phobj);
+
+				return phobj.fhlayer;
+			}
+
+			if (!canfly)
+			{
+				if (phobj.is_flag_not_set(PhysicsObject::Flag::TURNATEDGES))
+				{
+					flip = !flip;
+					phobj.set_flag(PhysicsObject::Flag::TURNATEDGES);
+
+					if (stance == Stance::HIT)
+						set_stance(Stance::STAND);
+				}
+			}
+
+			// Only self-propel mobs WE control. For mobs another client (or
+			// the server) controls, the authoritative position arrives via
+			// send_movement, which snaps us exactly there. If we ALSO walked
+			// them locally they would dead-reckon past the real position and
+			// drift — leaving them rendered where they aren't. So non-
+			// controlled mobs just hold the last snapped position and play
+			// their walk animation in place until the next update.
+			if (control)
+			{
+				switch (stance)
+				{
+				case Stance::MOVE:
+					if (canfly)
+					{
+						phobj.hforce = flip ? flyspeed : -flyspeed;
+
+						switch (flydirection)
+						{
+						case FlyDirection::UPWARDS:
+							phobj.vforce = -flyspeed;
+							break;
+						case FlyDirection::DOWNWARDS:
+							phobj.vforce = flyspeed;
+							break;
+						}
+					}
+					else
+					{
+						phobj.hforce = flip ? speed : -speed;
+					}
+
+					break;
+				case Stance::HIT:
+					if (canmove)
+					{
+						double KBFORCE = phobj.onground ? 0.2 : 0.1;
+						phobj.hforce = flip ? -KBFORCE : KBFORCE;
+					}
+
+					break;
+				case Stance::JUMP:
+					phobj.vforce = -5.0;
+					break;
+				}
+			}
+
+			physics.move_object(phobj);
+
+			if (control)
+			{
+				counter++;
+
+				// Claim the mob the moment we take control, then keep the
+				// server updated as it moves. This mirrors how a normal
+				// client drives its controlled mobs and stops the server
+				// from killing+respawning a mob we control but never report.
+				if (!control_acked)
+				{
+					update_movement(0);
+					control_acked = true;
+				}
+				else if (((phobj.hspeed != 0.0) || (phobj.vspeed != 0.0))
+					&& phobj.onground && (counter % 16) == 0)
+				{
+					update_movement(1);
+				}
+
+				bool next;
+
+				switch (stance)
+				{
+				case Stance::HIT:
+					next = counter > 200;
+					break;
+				case Stance::JUMP:
+					next = phobj.onground;
+					break;
+				default:
+					next = aniend && counter > 200;
+					break;
+				}
+
+				if (next)
+				{
+					next_move();
+					update_movement();
+					counter = 0;
+				}
+			}
+		}
+		else
+		{
+			phobj.normalize();
+			physics.get_fht().update_fh(phobj);
+		}
+
+		return phobj.fhlayer;
+	}
+
+	void Mob::next_move()
+	{
+		if (canmove)
+		{
+			switch (stance)
+			{
+			case Stance::HIT:
+			case Stance::STAND:
+				set_stance(Stance::MOVE);
+				flip = randomizer.next_bool();
+				break;
+			case Stance::MOVE:
+			case Stance::JUMP:
+				if (canjump && phobj.onground && randomizer.below(0.25f))
+				{
+					set_stance(Stance::JUMP);
+				}
+				else
+				{
+					switch (randomizer.next_int(3))
+					{
+					case 0:
+						set_stance(Stance::STAND);
+						break;
+					case 1:
+						set_stance(Stance::MOVE);
+						flip = false;
+						break;
+					case 2:
+						set_stance(Stance::MOVE);
+						flip = true;
+						break;
+					}
+				}
+
+				break;
+			}
+
+			if (stance == Stance::MOVE && canfly)
+				flydirection = randomizer.next_enum(FlyDirection::NUM_DIRECTIONS);
+		}
+		else
+		{
+			set_stance(Stance::STAND);
+		}
+	}
+
+	void Mob::update_movement(int8_t nibble)
+	{
+		// Only the controlling client is allowed to report a mob's movement.
+		// calculate_damage() calls this after every hit, including on mobs we
+		// don't control — sending our (stale) idea of their position to the
+		// server, which then relays it to everyone as an authoritative move.
+		// That is exactly the "server suddenly says the mob is elsewhere"
+		// teleport. Non-controllers stay silent.
+		if (!control)
+			return;
+
+		// `nibble` (pNibbles) != 0 tells the server this move can NOT be
+		// followed by a mob skill. Frequent position-only reports pass 1 so
+		// they don't repeatedly prompt the server to roll a skill/teleport
+		// for the mob (which made skilled mobs blink around). The real
+		// move-change report passes 0 to keep normal skill behaviour.
+		MoveMobPacket(
+			oid, 1, nibble, 0, 0, 0, 0, 0,
+			get_position(),
+			Movement(phobj, value_of(stance, flip))
+		).dispatch();
+	}
+
+	void Mob::draw_minimap(Point<int16_t> position, float scale, float alpha) const
+	{
+		if (dead || !active)
+			return;
+
+		auto it = animations.find(stance);
+		if (it == animations.end())
+			return;
+
+		bool f = mirrored();
+
+		// Scale the sprite about `position` (the mob's feet on the minimap),
+		// mirroring the world draw's flip handling.
+		DrawArgument arg(position, position, Point<int16_t>(0, 0),
+			f ? -scale : scale, scale, 1.0f, 0.0f);
+
+		it->second.draw(arg, alpha);
+	}
+
+	void Mob::draw(double viewx, double viewy, float alpha) const
+	{
+		Point<int16_t> absp = phobj.get_absolute(viewx, viewy, alpha);
+		Point<int16_t> headpos = get_head_position(absp);
+
+		effects.drawbelow(absp, alpha);
+
+		if (!dead)
+		{
+			float interopc = opacity.get(alpha);
+
+			if (frozen)
+			{
+				// Blue tint for frozen mobs
+				Color freeze_color(0.5f, 0.7f, 1.0f, interopc);
+				animations.at(stance).draw(DrawArgument(absp, mirrored(), Point<int16_t>(0, 0)), alpha);
+				// Draw with blue overlay
+				DrawArgument freeze_arg(absp, Point<int16_t>(0, 0), Point<int16_t>(0, 0),
+					mirrored() ? -1.0f : 1.0f, 1.0f, freeze_color, 0.0f);
+				animations.at(stance).draw(freeze_arg, alpha);
+			}
+			else if (poisoned)
+			{
+				// Green tint for poisoned mobs
+				Color poison_color(0.5f, 1.0f, 0.5f, interopc);
+				DrawArgument poison_arg(absp, Point<int16_t>(0, 0), Point<int16_t>(0, 0),
+					mirrored() ? -1.0f : 1.0f, 1.0f, poison_color, 0.0f);
+				animations.at(stance).draw(poison_arg, alpha);
+			}
+			else if (stunned)
+			{
+				// Yellow tint for stunned mobs
+				Color stun_color(1.0f, 1.0f, 0.5f, interopc);
+				DrawArgument stun_arg(absp, Point<int16_t>(0, 0), Point<int16_t>(0, 0),
+					mirrored() ? -1.0f : 1.0f, 1.0f, stun_color, 0.0f);
+				animations.at(stance).draw(stun_arg, alpha);
+			}
+			else
+			{
+				animations.at(stance).draw(DrawArgument(absp, mirrored(), interopc), alpha);
+			}
+
+			if (showhp)
+			{
+				namelabel.draw(absp);
+
+				if (!dying && hppercent > 0)
+					hpbar.draw(headpos, hppercent);
+			}
+		}
+
+		effects.drawabove(absp, alpha);
+	}
+
+	void Mob::set_control(int8_t mode)
+	{
+		bool had_control = control;
+		control = mode > 0;
+		aggro = mode == 2;
+
+		// On newly gaining control, arrange to immediately claim the mob
+		// (see Mob::update). A normal client drives a mob the instant it
+		// controls it; delaying let this server kill+respawn it.
+		if (control && !had_control)
+			control_acked = false;
+	}
+
+	void Mob::send_movement(Point<int16_t> start, std::vector<Movement>&& in_movements)
+	{
+		if (control)
+			return;
+
+		movements = std::forward<decltype(in_movements)>(in_movements);
+
+		if (movements.empty())
+			return;
+
+		const Movement& lastmove = movements.back();
+
+		uint8_t laststance = lastmove.newstate;
+		set_stance(laststance);
+
+		phobj.set_x(lastmove.xpos);
+		phobj.set_y(lastmove.ypos);
+		if (lastmove.fh != 0)
+			phobj.fhid = lastmove.fh;
+
+		// Clear carried-over velocity when snapping to the server's
+		// authoritative position. Otherwise Mob::update keeps integrating
+		// the previous packet's speed and the mob drifts away from where
+		// the server actually placed it between updates — so a foreign
+		// player appears to attack empty space where the mob "should" be.
+		phobj.hspeed = 0.0;
+		phobj.vspeed = 0.0;
+	}
+
+	Point<int16_t> Mob::get_head_position(Point<int16_t> position) const
+	{
+		Point<int16_t> head = animations.at(stance).get_head();
+
+		position.shift_x(mirrored() ? -head.x() : head.x());
+		position.shift_y(head.y());
+
+		return position;
+	}
+
+	void Mob::kill(int8_t animation)
+	{
+		switch (animation)
+		{
+		case 0:
+			deactivate();
+			break;
+		case 1:
+			dying = true;
+
+			apply_death();
+			break;
+		case 2:
+			fading = true;
+			dying = true;
+			break;
+		}
+	}
+
+	void Mob::revive()
+	{
+		dying = false;
+		dead = false;
+		fading = false;
+		fadein = false;
+		opacity.set(1.0f);
+		control_acked = false;
+
+		if (stance == Stance::DIE)
+			set_stance(Stance::STAND);
+
+		makeactive();
+	}
+
+	void Mob::server_reposition(Point<int16_t> position, int8_t stancebyte)
+	{
+		set_position(position);
+		set_stance(static_cast<uint8_t>(stancebyte));
+
+		// Drop any carried velocity so local physics doesn't immediately
+		// integrate the mob away from the authoritative position.
+		phobj.hspeed = 0.0;
+		phobj.vspeed = 0.0;
+	}
+
+	bool Mob::is_controlled() const
+	{
+		return control;
+	}
+
+	void Mob::show_hp(int8_t percent, uint16_t playerlevel)
+	{
+		// Colour the name by danger: how far the mob's level is above the
+		// player's. Red = much higher, yellow = higher, white = at/below.
+		int16_t leveldelta = level - playerlevel;
+
+		if (leveldelta >= 20)
+			namelabel.change_color(Color::Name::RED);
+		else if (leveldelta >= 5)
+			namelabel.change_color(Color::Name::YELLOW);
+		else
+			namelabel.change_color(Color::Name::WHITE);
+
+		if (percent > 100)
+			percent = 100;
+		else if (percent < 0)
+			percent = 0;
+
+		hppercent = percent;
+		showhp.set_for(2000);
+	}
+
+	void Mob::show_effect(const Animation& animation, int8_t pos, int8_t z, bool f)
+	{
+		if (!active)
+			return;
+
+		Point<int16_t> shift;
+
+		switch (pos)
+		{
+		case 0:
+			shift = get_head_position(Point<int16_t>());
+			break;
+		case 1:
+			break;
+		case 2:
+			break;
+		case 3:
+			break;
+		case 4:
+			break;
+		}
+
+		effects.add(animation, DrawArgument(shift, f), z);
+	}
+
+	float Mob::calculate_hitchance(int16_t leveldelta, int32_t player_accuracy) const
+	{
+		float faccuracy = static_cast<float>(player_accuracy);
+		float hitchance = faccuracy / (((1.84f + 0.07f * leveldelta) * avoid) + 1.0f);
+
+		if (hitchance < 0.01f)
+			hitchance = 0.01f;
+
+		return hitchance;
+	}
+
+	double Mob::calculate_mindamage(int16_t leveldelta, double damage, bool magic) const
+	{
+		double mindamage =
+			magic ?
+			damage - (1 + 0.01 * leveldelta) * mdef * 0.6 :
+			damage * (1 - 0.01 * leveldelta) - wdef * 0.6;
+
+		return mindamage < 1.0 ? 1.0 : mindamage;
+	}
+
+	double Mob::calculate_maxdamage(int16_t leveldelta, double damage, bool magic) const
+	{
+		double maxdamage =
+			magic ?
+			damage - (1 + 0.01 * leveldelta) * mdef * 0.5 :
+			damage * (1 - 0.01 * leveldelta) - wdef * 0.5;
+
+		return maxdamage < 1.0 ? 1.0 : maxdamage;
+	}
+
+	std::vector<std::pair<int32_t, bool>> Mob::calculate_damage(const Attack& attack)
+	{
+		double mindamage;
+		double maxdamage;
+		float hitchance;
+		float critical;
+		int16_t leveldelta = level - attack.playerlevel;
+
+		if (leveldelta < 0)
+			leveldelta = 0;
+
+		Attack::DamageType damagetype = attack.damagetype;
+
+		switch (damagetype)
+		{
+		case Attack::DamageType::DMG_WEAPON:
+		case Attack::DamageType::DMG_MAGIC:
+			mindamage = calculate_mindamage(leveldelta, attack.mindamage, damagetype == Attack::DamageType::DMG_MAGIC);
+			maxdamage = calculate_maxdamage(leveldelta, attack.maxdamage, damagetype == Attack::DamageType::DMG_MAGIC);
+			hitchance = calculate_hitchance(leveldelta, attack.accuracy);
+			critical = attack.critical;
+			break;
+		case Attack::DamageType::DMG_FIXED:
+			mindamage = attack.fixdamage;
+			maxdamage = attack.fixdamage;
+			hitchance = 1.0f;
+			critical = 0.0f;
+			break;
+		}
+
+		std::vector<std::pair<int32_t, bool>> result(attack.hitcount);
+
+		std::generate(
+			result.begin(), result.end(),
+			[&]()
+			{
+				return next_damage(mindamage, maxdamage, hitchance, critical);
+			}
+		);
+
+		update_movement();
+
+		return result;
+	}
+
+	std::pair<int32_t, bool> Mob::next_damage(double mindamage, double maxdamage, float hitchance, float critical) const
+	{
+		bool hit = randomizer.below(hitchance);
+
+		if (!hit)
+			return std::pair<int32_t, bool>(0, false);
+
+		constexpr double DAMAGECAP = 999999.0;
+
+		double damage = randomizer.next_real(mindamage, maxdamage);
+		bool iscritical = randomizer.below(critical);
+
+		if (iscritical)
+			damage *= 1.5;
+
+		if (damage < 1)
+			damage = 1;
+		else if (damage > DAMAGECAP)
+			damage = DAMAGECAP;
+
+		auto intdamage = static_cast<int32_t>(damage);
+
+		return std::pair<int32_t, bool>(intdamage, iscritical);
+	}
+
+	void Mob::apply_damage(int32_t damage, bool toleft)
+	{
+		hitsound.play(get_position());
+
+		if (dying && stance != Stance::DIE)
+		{
+			apply_death();
+		}
+		else if (control && is_alive() && damage >= knockback)
+		{
+			flip = toleft;
+			counter = 170;
+			set_stance(Stance::HIT);
+
+			update_movement();
+		}
+	}
+
+	MobAttack Mob::create_touch_attack() const
+	{
+		if (!touchdamage)
+			return MobAttack();
+
+		int32_t minattack = static_cast<int32_t>(watk * 0.8f);
+		int32_t maxattack = watk;
+		int32_t attack = randomizer.next_int(minattack, maxattack);
+
+		return MobAttack(attack, get_position(), id, oid);
+	}
+
+	void Mob::apply_death()
+	{
+		set_stance(Stance::DIE);
+		diesound.play(get_position());
+		dying = true;
+	}
+
+	bool Mob::is_alive() const
+	{
+		return active && !dying;
+	}
+
+	bool Mob::is_boss() const
+	{
+		return boss;
+	}
+
+	const std::string& Mob::get_name() const
+	{
+		return name;
+	}
+
+	bool Mob::is_in_range(const Rectangle<int16_t>& range) const
+	{
+		if (!active)
+			return false;
+
+		Rectangle<int16_t> bounds = animations.at(stance).get_bounds();
+		bounds.shift(get_position());
+
+		return range.overlaps(bounds);
+	}
+
+	void Mob::apply_status(int32_t status_mask, int32_t first_mask, const std::vector<std::pair<int32_t, MobStatusEntry>>& new_statuses)
+	{
+		for (auto& [flag, entry] : new_statuses)
+			statuses[flag] = entry;
+
+		int32_t combined = status_mask | first_mask;
+
+		if (combined & MobStatus::STUN)
+			stunned = true;
+
+		if (combined & MobStatus::FREEZE)
+			frozen = true;
+
+		if (combined & MobStatus::POISON)
+			poisoned = true;
+
+		if (combined & MobStatus::SEAL)
+			sealed = true;
+
+		if (combined & MobStatus::DOOM)
+			doomed = true;
+
+		if (combined & MobStatus::SHADOW_WEB)
+			shadowed = true;
+
+		// Stun and freeze stop mob movement
+		if (stunned || frozen || shadowed)
+			set_stance(Stance::STAND);
+	}
+
+	void Mob::cancel_status(int32_t status_mask, int32_t first_mask)
+	{
+		int32_t combined = status_mask | first_mask;
+
+		if (combined & MobStatus::STUN)
+		{
+			stunned = false;
+			statuses.erase(MobStatus::STUN);
+		}
+
+		if (combined & MobStatus::FREEZE)
+		{
+			frozen = false;
+			statuses.erase(MobStatus::FREEZE);
+		}
+
+		if (combined & MobStatus::POISON)
+		{
+			poisoned = false;
+			statuses.erase(MobStatus::POISON);
+		}
+
+		if (combined & MobStatus::SEAL)
+		{
+			sealed = false;
+			statuses.erase(MobStatus::SEAL);
+		}
+
+		if (combined & MobStatus::DOOM)
+		{
+			doomed = false;
+			statuses.erase(MobStatus::DOOM);
+		}
+
+		if (combined & MobStatus::SHADOW_WEB)
+		{
+			shadowed = false;
+			statuses.erase(MobStatus::SHADOW_WEB);
+		}
+
+		// Remove stat-modifying statuses
+		for (int32_t flag : {
+			MobStatus::WATK, MobStatus::WDEF, MobStatus::MATK, MobStatus::MDEF,
+			MobStatus::ACC, MobStatus::AVOID, MobStatus::SPEED,
+			MobStatus::SHOWDOWN, MobStatus::WEAPON_ATTACK_UP, MobStatus::WEAPON_DEFENSE_UP,
+			MobStatus::MAGIC_ATTACK_UP, MobStatus::MAGIC_DEFENSE_UP,
+			MobStatus::WEAPON_IMMUNITY, MobStatus::MAGIC_IMMUNITY, MobStatus::HARD_SKIN,
+			MobStatus::NINJA_AMBUSH, MobStatus::VENOMOUS_WEAPON, MobStatus::BLIND,
+			MobStatus::SEAL_SKILL, MobStatus::INERTMOB })
+		{
+			if (combined & flag)
+				statuses.erase(flag);
+		}
+	}
+
+	Point<int16_t> Mob::get_head_position() const
+	{
+		Point<int16_t> position = get_position();
+
+		return get_head_position(position);
+	}
+}

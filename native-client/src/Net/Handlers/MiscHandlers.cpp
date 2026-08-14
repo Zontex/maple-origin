@@ -1,0 +1,558 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#include "MiscHandlers.h"
+#include "../../Data/ItemData.h"
+#include "../../Gameplay/Stage.h"
+#include "../../Gameplay/MapleMap/Npc.h"
+#include "../../IO/KeyConfig.h"
+#include "../../IO/UI.h"
+#include "../../IO/UITypes/UIChatBar.h"
+#include "../../IO/UITypes/UIStatusMessenger.h"
+#include "../../IO/UITypes/UINotice.h"
+#include "../../Configuration.h"
+#include "../Packets/NpcInteractionPackets.h"
+
+#include <array>
+#include <vector>
+
+namespace ms
+{
+	void NpcActionHandler::handle(InPacket& recv) const
+	{
+		// v83 NPC_ACTION: int oid, then remaining bytes are action data.
+		// The server periodically sends this to animate NPCs on the map.
+		if (recv.length() < 4)
+			return;
+
+		int32_t oid = recv.read_int();
+
+		// Capture every action byte the server sent — we mirror the
+		// payload byte-for-byte in the outbound NPC_ACTION echo so
+		// the wire-level handshake matches v83 GMS exactly.
+		std::vector<int8_t> action_bytes;
+		action_bytes.reserve(recv.length());
+		while (recv.available())
+			action_bytes.push_back(recv.read_byte());
+
+		// Apply the first action byte (if any) to the NPC's local
+		// stance. Subsequent bytes carry positional data we don't
+		// render but still echo back unchanged.
+		if (auto npcs = Stage::get().get_npcs().get_npcs())
+		{
+			if (auto obj = npcs->get(oid))
+			{
+				auto* npc = static_cast<Npc*>(obj.get());
+				if (!action_bytes.empty())
+				{
+					switch (action_bytes[0])
+					{
+					case 0: npc->set_stance("stand"); break;
+					case 1: npc->set_stance("move");  break;
+					case 2: npc->set_stance("say");   break;
+					default: npc->set_stance("stand"); break;
+					}
+				}
+			}
+		}
+
+		// Echo of inbound NPC_ACTION bytes is intentionally NOT sent.
+		// Cosmic / HeavenMS ignore the outbound NPC_ACTION packet
+		// entirely, and dispatching one per server animation tick was
+		// flooding the outbound socket — the server saw a Connection
+		// reset shortly after each NPC was clicked. The wire-parity
+		// note in Packets/NpcInteractionPackets.h kept the packet
+		// class around for future use; we just don't emit it.
+	}
+
+	void YellowTipHandler::handle(InPacket& recv) const
+	{
+		if (!recv.available())
+			return;
+
+		std::string message = recv.read_string();
+
+		// Show yellow text notification at bottom of screen (like quest updates)
+		chat::log(message, chat::LineType::YELLOW);
+	}
+
+	void BroadcastMsgHandler::handle(InPacket& recv) const
+	{
+		int8_t type = recv.read_byte();
+		std::string message = recv.read_string();
+
+		// GM notices, event announcements
+		chat::log(message, chat::LineType::YELLOW);
+	}
+
+	void AdminResultHandler::handle(InPacket& recv) const
+	{
+		// The server only sends admin/GM command results to GMs, so receiving
+		// one confirms this account is a GM — give the character the GM name
+		// plate (the login admin flag is unreliable on this server).
+		Stage::get().get_player().apply_nametag_style(true);
+
+		if (!recv.available())
+			return;
+
+		int8_t type = recv.read_byte();
+
+		if (recv.available())
+		{
+			int8_t mode = recv.read_byte();
+
+			// type 0x10 = GM hide toggle, mode 1 = hidden, mode 0 = visible
+			if (type == 0x10)
+				Stage::get().get_player().set_hidden(mode == 1);
+		}
+	}
+
+	void SetNpcScriptableHandler::handle(InPacket& recv) const
+	{
+		// Marks NPCs as scriptable (quest NPCs, event NPCs, etc.)
+		// Format: byte count, then for each: int npcid, string name, int start, int end
+		if (!recv.available())
+			return;
+
+		int8_t count = recv.read_byte();
+
+		// NPCs the server marks scriptable at runtime. NX data alone cannot know
+		// about custom NPCs with no `script` node, so without applying this they
+		// never get a chat icon and read as non-interactive.
+		MapObjects* npcs = Stage::get().get_npcs().get_npcs();
+
+		for (int8_t i = 0; i < count && recv.available(); i++)
+		{
+			int32_t npcid = recv.read_int();
+			std::string npc_name = recv.read_string();
+			recv.read_int(); // start time (0)
+			recv.read_int(); // end time (MAX_INT)
+
+			(void)npc_name;
+
+			if (npcs == nullptr)
+				continue;
+
+			// The packet carries the NPC *id*, not the map object id, so every
+			// spawned copy of that NPC on this map has to be marked.
+			for (auto& mmo : *npcs)
+			{
+				if (Npc* npc = static_cast<Npc*>(mmo.second.get()))
+					if (npc->get_npcid() == npcid)
+						npc->set_scripted(true);
+			}
+		}
+	}
+
+	void SessionValueHandler::handle(InPacket& recv) const
+	{
+		if (!recv.available())
+			return;
+
+		std::string label = recv.read_string();
+		std::string value = recv.available() ? recv.read_string() : std::string();
+
+		if (label == "energy")
+		{
+			int32_t amount = 0;
+
+			// value is a decimal string
+			try { amount = std::stoi(value); }
+			catch (...) { return; }
+
+			Stage::get().set_energy(amount);
+			return;
+		}
+
+		chat::log("[" + label + "] " + value, chat::LineType::YELLOW);
+	}
+
+	void IncubatorResultHandler::handle(InPacket& recv) const
+	{
+		chat::log("[Incubator] The incubator finished.", chat::LineType::YELLOW);
+	}
+
+	namespace
+	{
+		void handle_cancel_result(InPacket& recv, const char* what)
+		{
+			if (!recv.available())
+				return;
+
+			bool success = recv.read_bool();
+
+			if (success)
+			{
+				chat::log(std::string("[") + what + "] Your request was cancelled.",
+					chat::LineType::YELLOW);
+				return;
+			}
+
+			int8_t reason = recv.available() ? recv.read_byte() : 0;
+
+			chat::log(std::string("[") + what + "] The cancellation failed"
+				+ (reason ? " (reason " + std::to_string(static_cast<int>(reason)) + ")" : "")
+				+ ".", chat::LineType::RED);
+		}
+	}
+
+	void CancelNameChangeHandler::handle(InPacket& recv) const
+	{
+		handle_cancel_result(recv, "Name Change");
+	}
+
+	void CancelWorldTransferHandler::handle(InPacket& recv) const
+	{
+		handle_cancel_result(recv, "World Transfer");
+	}
+
+	void MapleLifeResultHandler::handle(InPacket& recv) const
+	{
+		if (recv.length() < 4)
+			return;
+
+		int32_t mode = recv.read_int();
+
+		if (mode == 2)
+			chat::log("[MapleLife] That name cannot be used.", chat::LineType::RED);
+	}
+
+	void MapleLifeErrorHandler::handle(InPacket& recv) const
+	{
+		if (recv.length() < 5)
+			return;
+
+		recv.read_byte();
+		int32_t code = recv.read_int();
+
+		chat::log("[MapleLife] Error " + std::to_string(code) + ".", chat::LineType::RED);
+	}
+
+	void AutoHpPotHandler::handle(InPacket& recv) const
+	{
+		// Auto HP potion — server tells client which potion to auto-use
+		if (!recv.available())
+			return;
+
+		int32_t itemid = recv.read_int();
+
+		// Store in configuration for auto-use during gameplay
+		Configuration::get().set_auto_hp_pot(itemid);
+	}
+
+	void AutoMpPotHandler::handle(InPacket& recv) const
+	{
+		// Auto MP potion — server tells client which potion to auto-use
+		if (!recv.available())
+			return;
+
+		int32_t itemid = recv.read_int();
+
+		// Store in configuration for auto-use during gameplay
+		Configuration::get().set_auto_mp_pot(itemid);
+	}
+
+	void QuickSlotInitHandler::handle(InPacket& recv) const
+	{
+		if (!recv.available())
+			return;
+
+		// bool = custom layout follows; false means the client should keep
+		// its default quickslot keys (Cosmic QuickslotBinding::encode).
+		bool init = recv.read_bool();
+
+		if (!init)
+			return;
+
+		// Eight maple keycodes, one per quickslot cell, sent as ints.
+		std::array<uint8_t, Keyboard::NUM_QUICKSLOT_KEYS> keys =
+			UI::get().get_keyboard().get_quickslot_keys();
+
+		for (size_t i = 0; i < keys.size(); i++)
+		{
+			if (!recv.available())
+				return;
+
+			int32_t key = recv.read_int();
+
+			if (key > 0 && key < KeyConfig::Key::LENGTH)
+				keys[i] = static_cast<uint8_t>(key);
+		}
+
+		// Store the layout the same way local key changes are kept.
+		UI::get().get_keyboard().set_quickslot_keys(keys);
+	}
+
+	void ClaimStatusChangedHandler::handle(InPacket& recv) const
+	{
+		// Enable/disable report button — just consume, no UI action needed
+		if (recv.available())
+			recv.read_byte(); // 1 = enabled
+	}
+
+	void SueCharacterResultHandler::handle(InPacket& recv) const
+	{
+		if (!recv.available())
+			return;
+
+		int8_t mode = recv.read_byte();
+
+		std::string message;
+		switch (mode)
+		{
+		case 0: message = "You have successfully reported the user."; break;
+		case 1: message = "Unable to locate the user."; break;
+		case 2: message = "You may only report users 10 times a day."; break;
+		case 3: message = "You have been reported to the GMs by a user."; break;
+		default: message = "Your report request did not go through."; break;
+		}
+
+		UI::get().emplace<UIOk>(message, [](bool) {});
+	}
+
+	void SpouseChatHandler::handle(InPacket& recv) const
+	{
+		int8_t mode = recv.read_byte(); // 5 = spouse, 4 = engaged
+		std::string name;
+
+		if (mode == 5)
+			name = recv.read_string();
+
+		int8_t submode = recv.read_byte();
+		std::string text = recv.read_string();
+
+		std::string prefix = (mode == 5) ? "[Spouse] " : "[Fiance] ";
+		std::string line = prefix + name + ": " + text;
+
+		chat::log(line, chat::LineType::RED);
+	}
+
+	void BlockedMapHandler::handle(InPacket& recv) const
+	{
+		int8_t type = recv.read_byte();
+
+		std::string messages[] = {
+			"",
+			"Equipment limitations prevent entry.",
+			"One-handed weapon required.",
+			"Level requirement not met.",
+			"Skill requirement not met.",
+			"Ground force map.",
+			"Party members only.",
+			"Cash Shop is currently unavailable."
+		};
+
+		std::string msg = (type >= 1 && type <= 7) ? messages[type] : "Cannot enter this map.";
+
+		if (auto messenger = UI::get().get_element<UIStatusMessenger>())
+			messenger->show_status(Color::Name::RED, msg);
+	}
+
+	void BlockedServerHandler::handle(InPacket& recv) const
+	{
+		int8_t type = recv.read_byte();
+
+		std::string messages[] = {
+			"",
+			"Cannot change channel right now.",
+			"Cannot access Cash Shop right now.",
+			"Trading shop is unavailable.",
+			"Trading shop user limit reached.",
+			"Level requirement for trading shop not met."
+		};
+
+		std::string msg = (type >= 1 && type <= 5) ? messages[type] : "Action is currently blocked.";
+
+		if (auto messenger = UI::get().get_element<UIStatusMessenger>())
+			messenger->show_status(Color::Name::RED, msg);
+	}
+
+	void SetExtraPendantSlotHandler::handle(InPacket& recv) const
+	{
+		if (!recv.available())
+			return;
+
+		bool enabled = recv.read_bool();
+
+		Configuration::get().set_extra_pendant_slot(enabled);
+
+		if (auto messenger = UI::get().get_element<UIStatusMessenger>())
+		{
+			if (enabled)
+				messenger->show_status(Color::Name::WHITE, "Extra pendant slot has been activated.");
+			else
+				messenger->show_status(Color::Name::WHITE, "Extra pendant slot has been deactivated.");
+		}
+	}
+
+	void SkillLearnItemResultHandler::handle(InPacket& recv) const
+	{
+		int32_t cid = recv.read_int();
+		recv.read_byte(); // 1
+		int32_t skill_id = recv.read_int();
+		int32_t max_level = recv.read_int();
+		bool can_use = recv.read_byte() != 0;
+		bool success = recv.read_byte() != 0;
+
+		if (auto messenger = UI::get().get_element<UIStatusMessenger>())
+		{
+			if (success)
+				messenger->show_status(Color::Name::WHITE, "Skill book used successfully!");
+			else
+				messenger->show_status(Color::Name::RED, "Skill book usage failed.");
+		}
+	}
+
+	// Resolve an item name for maker result messages, falling back to the
+	// raw id if the item is unknown to the NX data.
+	static std::string maker_item_name(int32_t itemid)
+	{
+		const ItemData& idata = ItemData::get(itemid);
+
+		return idata.is_valid() ? idata.get_name() : ("Item " + std::to_string(itemid));
+	}
+
+	void MakerResultHandler::handle(InPacket& recv) const
+	{
+		int32_t result = recv.read_int(); // 0 = success, 1 = fail
+		int32_t mode = recv.read_int();   // 1/2 = craft, 3 = crystal, 4 = desynth
+
+		auto messenger = UI::get().get_element<UIStatusMessenger>();
+
+		if (mode == 1 || mode == 2)
+		{
+			bool failed = recv.read_bool();
+
+			int32_t item_made = 0;
+			int32_t count = 0;
+
+			if (!failed)
+			{
+				item_made = recv.read_int();
+				count = recv.read_int();
+			}
+
+			int32_t num_consumed = recv.read_int();
+
+			for (int32_t i = 0; i < num_consumed; i++)
+			{
+				recv.read_int(); // item id
+				recv.read_int(); // quantity
+			}
+
+			int32_t num_gems = recv.read_int();
+
+			for (int32_t i = 0; i < num_gems; i++)
+				recv.read_int(); // gem id
+
+			int8_t has_catalyst = recv.read_byte();
+
+			if (has_catalyst)
+				recv.read_int(); // catalyst id
+
+			recv.read_int(); // mesos cost
+
+			std::string msg = failed
+				? "Item creation failed."
+				: "Created: " + maker_item_name(item_made) + " x" + std::to_string(count);
+
+			if (messenger)
+				messenger->show_status(failed ? Color::Name::RED : Color::Name::WHITE, msg);
+		}
+		else if (mode == 3) // Monster Crystal
+		{
+			int32_t item_gained = recv.read_int();
+			int32_t item_lost = recv.read_int();
+
+			if (messenger)
+				messenger->show_status(Color::Name::WHITE, "Created: " + maker_item_name(item_gained) + " (used " + maker_item_name(item_lost) + ")");
+		}
+		else if (mode == 4) // Desynth
+		{
+			int32_t item_id = recv.read_int(); // item disassembled
+			int32_t num_gained = recv.read_int();
+
+			std::string gained;
+
+			for (int32_t i = 0; i < num_gained; i++)
+			{
+				int32_t gain_id = recv.read_int();
+				int32_t quantity = recv.read_int();
+
+				if (i > 0)
+					gained += ", ";
+
+				gained += maker_item_name(gain_id) + " x" + std::to_string(quantity);
+			}
+
+			recv.read_int(); // mesos
+
+			if (gained.empty())
+				gained = "nothing";
+
+			if (messenger)
+				messenger->show_status(Color::Name::WHITE, "Disassembled " + maker_item_name(item_id) + ": " + gained);
+		}
+	}
+
+	void CatchMonsterHandler::handle(InPacket& recv) const
+	{
+		// v83: int moboid, byte success
+		// Result of attempting to catch a monster (e.g. Monster Rider quest)
+		if (recv.length() < 4)
+			return;
+
+		int32_t mob_oid = recv.read_int();
+		int8_t success = recv.available() ? recv.read_byte() : 0;
+
+		auto messenger = UI::get().get_element<UIStatusMessenger>();
+
+		if (success == 1)
+		{
+			if (messenger)
+				messenger->show_status(Color::Name::WHITE, "You have successfully caught the monster!");
+		}
+		else
+		{
+			if (messenger)
+				messenger->show_status(Color::Name::RED, "Failed to catch the monster.");
+		}
+	}
+
+	void CatchMonsterWithItemHandler::handle(InPacket& recv) const
+	{
+		int32_t mob_oid = recv.read_int();
+		int32_t item_id = recv.read_int();
+		int8_t success = recv.read_byte();
+
+		if (auto messenger = UI::get().get_element<UIStatusMessenger>())
+		{
+			if (success)
+				messenger->show_status(Color::Name::WHITE, "Monster captured!");
+			else
+				messenger->show_status(Color::Name::RED, "Failed to capture the monster.");
+		}
+	}
+
+	void NewYearCardHandler::handle(InPacket& recv) const
+	{
+		int8_t mode = recv.read_byte();
+
+		// Complex multi-mode packet — card data, errors, broadcasts
+		chat::log("[NewYearCard] Card update (mode=" + std::to_string(mode) + ")", chat::LineType::YELLOW);
+	}
+}

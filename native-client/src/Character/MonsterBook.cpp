@@ -1,0 +1,98 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#include "MonsterBook.h"
+
+namespace ms
+{
+	MonsterBook::MonsterBook()
+	{
+		cover = 0;
+	}
+
+	void MonsterBook::set_cover(int32_t cov)
+	{
+		cover = cov;
+	}
+
+	void MonsterBook::add_card(int32_t card, int8_t level)
+	{
+		cards[card] = level;
+	}
+
+	int32_t MonsterBook::get_cover() const
+	{
+		return cover;
+	}
+
+	int8_t MonsterBook::get_card_level(int32_t cardid) const
+	{
+		auto iter = cards.find(cardid);
+		return (iter != cards.end()) ? iter->second : 0;
+	}
+
+	const std::map<int32_t, int8_t>& MonsterBook::get_cards() const
+	{
+		return cards;
+	}
+
+	int16_t MonsterBook::get_total_cards() const
+	{
+		return static_cast<int16_t>(cards.size());
+	}
+
+	int32_t MonsterBook::get_book_level() const
+	{
+		int32_t collection_exp = static_cast<int32_t>(cards.size());
+		int32_t level = 0;
+		int32_t exp_to_next = 1;
+
+		while (collection_exp >= exp_to_next)
+		{
+			level++;
+			exp_to_next += level * 10;
+		}
+
+		return level;
+	}
+
+	int32_t MonsterBook::get_normal_cards() const
+	{
+		int32_t count = 0;
+
+		for (auto& [cardid, level] : cards)
+		{
+			if (cardid / 1000 < 2388)
+				count++;
+		}
+
+		return count;
+	}
+
+	int32_t MonsterBook::get_special_cards() const
+	{
+		int32_t count = 0;
+
+		for (auto& [cardid, level] : cards)
+		{
+			if (cardid / 1000 >= 2388)
+				count++;
+		}
+
+		return count;
+	}
+}

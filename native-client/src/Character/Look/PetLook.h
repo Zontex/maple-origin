@@ -1,0 +1,111 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#pragma once
+
+#include "../../IO/Components/ChatBalloon.h"
+
+#include "../../Graphics/Animation.h"
+#include "../../Graphics/Text.h"
+#include "../../Template/EnumMap.h"
+
+#include "../../Gameplay/Physics/Physics.h"
+
+#ifdef USE_NX
+#include <nlnx/node.hpp>
+#endif
+
+namespace ms
+{
+	class PetLook
+	{
+	public:
+		enum Stance : uint8_t
+		{
+			MOVE,
+			STAND,
+			JUMP,
+			ALERT,
+			PRONE,
+			FLY,
+			HANG,
+			WARP,
+			LENGTH
+		};
+
+		static Stance stancebyvalue(uint8_t value)
+		{
+			uint8_t valueh = value / 2;
+
+			return valueh >= LENGTH ? STAND : static_cast<Stance>(valueh);
+		}
+
+		PetLook(int32_t iid, std::string name, int32_t uniqueid, Point<int16_t> pos, uint8_t stance, int32_t fhid);
+		PetLook();
+
+		void draw(double viewx, double viewy, float alpha) const;
+		void update(const Physics& physics, Point<int16_t> charpos);
+
+		void set_position(int16_t xpos, int16_t ypos);
+		void set_loot_target(Point<int16_t> pos);
+		void clear_loot_target();
+		void set_stance(Stance stance);
+		void set_stance(uint8_t stancebyte);
+
+		int32_t get_itemid() const;
+		int32_t get_uniqueid() const
+		{
+			return uniqueid;
+		}
+
+		bool has_loot_target = false;
+		Point<int16_t> loot_target;
+
+		Point<int16_t> get_position() const
+		{
+			return phobj.get_position();
+		}
+
+		Stance get_stance() const;
+
+		void speak(const std::string& text);
+		void set_name(const std::string& name);
+
+		// Play a command/feed reaction, then fall back to STAND.
+		void play_command(Stance stance);
+		// Play the pet's real reaction art: the interact/food entry names the
+		// animation node to play via its "act" string. False if the pet's data
+		// has no matching act, so the caller can fall back to a stance.
+		bool play_interaction(bool feed, uint8_t index, bool success);
+
+	private:
+		int32_t itemid;
+		std::string name;
+		int32_t uniqueid;
+		Stance stance;
+		bool flip;
+
+		nl::node src;
+		Animation oneshot;
+		bool oneshot_active = false;
+		EnumMap<Stance, Animation> animations;
+		PhysicsObject phobj;
+		Text namelabel;
+		ChatBalloon balloon;
+		int16_t command_timer = 0;
+	};
+}

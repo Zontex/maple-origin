@@ -1,0 +1,896 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#pragma once
+
+#include "Template/Singleton.h"
+#include "Template/TypeMap.h"
+#include "Util/Misc.h"
+
+namespace ms
+{
+	// Manages the 'Settings' file which contains configurations set by user behavior
+	class Configuration : public Singleton<Configuration>
+	{
+	public:
+		// Add the settings which will be used and load them
+		Configuration();
+		// Save
+		~Configuration();
+
+		// Load all settings
+		// If something is missing, set the default value.
+		// Can be used for reloading
+		void load();
+		// Save the current settings 
+		void save() const;
+		// Get private member SHOW_FPS
+		bool get_show_fps() const;
+		// Get private member SHOW_PACKETS
+		bool get_show_packets() const;
+		// Get private member AUTO_LOGIN
+		bool get_auto_login() const;
+		// Get the account to login with
+		std::string get_auto_acc();
+		// Get the password to login with
+		std::string get_auto_pass();
+		// Get the pic to login with
+		std::string get_auto_pic();
+		// Get the character id to login with
+		int32_t get_auto_cid();
+		// Get private member TITLE
+		std::string get_title() const;
+		// Get private member VERSION
+		std::string get_version() const;
+		// Get private member LoginMusic
+		std::string get_login_music() const;
+		// Get private member JOINLINK
+		std::string get_joinlink() const;
+		// Get private member WEBSITE
+		std::string get_website() const;
+		// Get private member FINDID
+		std::string get_findid() const;
+		// Get private member FINDPASS
+		std::string get_findpass() const;
+		// Get private member RESETPIC
+		std::string get_resetpic() const;
+		// Get private member CHARGENX
+		std::string get_chargenx() const;
+		// Set private member MACS
+		void set_macs(char* macs);
+		// Set private member HWID
+		void set_hwid(char* hwid, char* volumeSerialNumber);
+		// Set private member MAXWIDTH
+		void set_max_width(int16_t max_width);
+		// Set private member MAXHEIGHT
+		void set_max_height(int16_t max_height);
+		// Get private member MACS
+		std::string get_macs();
+		// Get private member HWID
+		std::string get_hwid();
+		// Get the Hard Drive Volume Serial Number
+		std::string get_vol_serial_num();
+		// Get the max width allowed
+		int16_t get_max_width();
+		// Get the max height allowed
+		int16_t get_max_height();
+		// Get the shop's "Right-click to sell item" boolean
+		bool get_rightclicksell();
+		// Set the shop's "Right-click to sell item" boolean
+		void set_rightclicksell(bool value);
+		// Whether to show the weekly maple star in Maple Chat
+		bool get_show_weekly();
+		// Set whether to show the weekly maple star in Maple Chat
+		void set_show_weekly(bool value);
+		// Whether to show the start screen
+		bool get_start_shown();
+		// Set whether to show the start screen
+		void set_start_shown(bool value);
+		// Get the character's selected world
+		uint8_t get_worldid();
+		// Set the character's selected world
+		void set_worldid(uint8_t id);
+		// Get the character's selected channel
+		uint8_t get_channelid();
+		// Set the character's selected channel
+		void set_channelid(uint8_t id);
+		// Check if the current account is an admin account
+		bool get_admin();
+		// Check whether the current account is an admin account
+		void set_admin(bool value);
+
+		// Auto potion settings
+		void set_auto_hp_pot(int32_t itemid) { auto_hp_pot = itemid; }
+		void set_auto_mp_pot(int32_t itemid) { auto_mp_pot = itemid; }
+		int32_t get_auto_hp_pot() const { return auto_hp_pot; }
+		int32_t get_auto_mp_pot() const { return auto_mp_pot; }
+
+		// Extra pendant slot
+		void set_extra_pendant_slot(bool enabled) { extra_pendant_slot = enabled; }
+
+		// Base class for an entry in the settings file
+		class Entry
+		{
+		protected:
+			Entry(const char* n, const char* v) : name(n), value(v) {}
+
+			std::string name;
+			std::string value;
+
+		private:
+			friend class Configuration;
+
+			std::string to_string() const
+			{
+				return name + " = " + value;
+			}
+		};
+
+		// Setting which converts to a boolean
+		class BoolEntry : public Entry
+		{
+		public:
+			void save(bool b);
+			bool load() const;
+
+		protected:
+			using Entry::Entry;
+		};
+
+		// Setting which uses the raw string
+		class StringEntry : public Entry
+		{
+		public:
+			void save(std::string str);
+			std::string load() const;
+
+		protected:
+			using Entry::Entry;
+		};
+
+		// Setting which converts to a Point<int16_t>
+		class PointEntry : public Entry
+		{
+		public:
+			void save(Point<int16_t> p);
+			Point<int16_t> load() const;
+
+		protected:
+			using Entry::Entry;
+		};
+
+		// Setting which converts to an integer type
+		template <class T>
+		class IntegerEntry : public Entry
+		{
+		public:
+			void save(T num)
+			{
+				value = std::to_string(num);
+			}
+
+			T load() const
+			{
+				return string_conversion::or_zero<T>(value);
+			}
+
+		protected:
+			using Entry::Entry;
+		};
+
+		// Setting which converts to a byte
+		class ByteEntry : public IntegerEntry<uint8_t>
+		{
+		protected:
+			using IntegerEntry::IntegerEntry;
+		};
+
+		// Setting which converts to a short
+		class ShortEntry : public IntegerEntry<uint16_t>
+		{
+		protected:
+			using IntegerEntry::IntegerEntry;
+		};
+
+		// Setting which converts to an int
+		class IntEntry : public IntegerEntry<uint32_t>
+		{
+		protected:
+			using IntegerEntry::IntegerEntry;
+		};
+
+		// Setting which converts to a long
+		class LongEntry : public IntegerEntry<uint64_t>
+		{
+		protected:
+			using IntegerEntry::IntegerEntry;
+		};
+
+	private:
+		template <typename T>
+		friend struct Setting;
+
+		const char* FILENAME = "Settings";
+		const char* TITLE = "OpenStory";
+		const char* VERSION = "83";
+		const char* LoginMusic = "BgmUI.img/Title";
+		const char* JOINLINK = "https://www.nexon.com/account/en/create";
+		const char* WEBSITE = "http://maplestory.nexon.net/";
+		const char* FINDID = "https://www.nexon.com/account/en/login";
+		const char* FINDPASS = "https://www.nexon.com/account/en/reset-password";
+		const char* RESETPIC = "https://www.nexon.com/account/en/login";
+		const char* CHARGENX = "https://billing.nexon.net/PurchaseNX";
+		const bool SHOW_FPS = false;
+		const bool SHOW_PACKETS = false;
+		const bool AUTO_LOGIN = false;
+		const std::string auto_acc = "";
+		const std::string auto_pass = "";
+		const std::string auto_pic = "";
+		const int32_t auto_cid = 0;
+		bool rightclicksell = false;
+		bool show_weekly = true;
+		bool start_shown = false;
+		std::string MACS;
+		std::string HWID;
+		int16_t MAXWIDTH;
+		int16_t MAXHEIGHT;
+		std::string VolumeSerialNumber;
+		uint8_t worldid;
+		uint8_t channelid;
+		bool admin;
+		int32_t auto_hp_pot = 0;
+		int32_t auto_mp_pot = 0;
+		bool extra_pendant_slot = false;
+		TypeMap<Entry> settings;
+	};
+
+	// IP Address which the client will connect to
+	struct ServerIP : public Configuration::StringEntry
+	{
+		ServerIP() : StringEntry("ServerIP", "72.60.176.12") {}
+	};
+
+	// Port which the client will connect to
+	struct ServerPort : public Configuration::StringEntry
+	{
+		ServerPort() : StringEntry("ServerPort", "8484") {}
+	};
+
+	// Whether to start in full screen mode
+	struct Fullscreen : public Configuration::BoolEntry
+	{
+		Fullscreen() : BoolEntry("Fullscreen", "false") {}
+	};
+
+	// The width of the screen
+	struct Width : public Configuration::ShortEntry
+	{
+		Width() : ShortEntry("Width", "1920") {}
+	};
+
+	// The height of the screen
+	struct Height : public Configuration::ShortEntry
+	{
+		Height() : ShortEntry("Height", "1080") {}
+	};
+
+	// Whether to use VSync
+	struct VSync : public Configuration::BoolEntry
+	{
+		VSync() : BoolEntry("VSync", "true") {}
+	};
+
+	// The normal font which will be used.
+	// Names in EmbeddedFonts.h resolve to fonts compiled into the binary;
+	// anything else is treated as a file path.
+	struct FontPathNormal : public Configuration::StringEntry
+	{
+		FontPathNormal() : StringEntry("FontPathNormal", "ROBOTO_REGULAR") {}
+	};
+
+	// The bold font which will be used
+	struct FontPathBold : public Configuration::StringEntry
+	{
+		FontPathBold() : StringEntry("FontPathBold", "ROBOTO_BOLD") {}
+	};
+
+	// Hebrew fallback. Roboto contains no Hebrew glyphs, so without this
+	// Hebrew renders as missing-glyph boxes. Baked in, so it always works.
+	struct FontPathHebrew : public Configuration::StringEntry
+	{
+		FontPathHebrew() : StringEntry("FontPathHebrew", "NOTO_HEBREW") {}
+	};
+
+	// Optional color-emoji font for announcements/chat. Left empty to disable.
+	struct FontPathEmoji : public Configuration::StringEntry
+	{
+		FontPathEmoji() : StringEntry("FontPathEmoji", "C:/Windows/Fonts/seguiemj.ttf") {}
+	};
+
+	// CJK (Korean/Japanese/Chinese) fallback font for quest names, NPC names,
+	// and chat. Used when the primary font lacks a glyph. Left empty to disable.
+	struct FontPathCJK : public Configuration::StringEntry
+	{
+		FontPathCJK() : StringEntry("FontPathCJK", "C:/Windows/Fonts/malgun.ttf") {}
+	};
+
+	// Music Volume
+	// Number from 0 to 100
+	struct BGMVolume : public Configuration::ByteEntry
+	{
+		BGMVolume() : ByteEntry("BGMVolume", "50") {}
+	};
+
+	// Sound Volume
+	// Number from 0 to 100
+	struct SFXVolume : public Configuration::ByteEntry
+	{
+		SFXVolume() : ByteEntry("SFXVolume", "50") {}
+	};
+
+	// Whether to save the last used account name
+	struct SaveLogin : public Configuration::BoolEntry
+	{
+		SaveLogin() : BoolEntry("SaveLogin", "false") {}
+	};
+
+	// The last used account name
+	struct DefaultAccount : public Configuration::StringEntry
+	{
+		DefaultAccount() : StringEntry("Account", "") {}
+	};
+
+	// The last used password
+	struct DefaultPassword : public Configuration::StringEntry
+	{
+		DefaultPassword() : StringEntry("Password", "") {}
+	};
+
+	// The last used world
+	struct DefaultWorld : public Configuration::ByteEntry
+	{
+		DefaultWorld() : ByteEntry("World", "0") {}
+	};
+
+	// The last used channel
+	struct DefaultChannel : public Configuration::ByteEntry
+	{
+		DefaultChannel() : ByteEntry("Channel", "0") {}
+	};
+
+	// The last used region
+	struct DefaultRegion : public Configuration::ByteEntry
+	{
+		DefaultRegion() : ByteEntry("Region", "5") {}
+	};
+
+	// The last used character
+	struct DefaultCharacter : public Configuration::ByteEntry
+	{
+		DefaultCharacter() : ByteEntry("Character", "0") {}
+	};
+
+	// Whether to show UIChatBar
+	struct Chatopen : public Configuration::BoolEntry
+	{
+		Chatopen() : BoolEntry("Chatopen", "false") {}
+	};
+
+	// The default position of UIStatsInfo
+	struct PosSTATS : public Configuration::PointEntry
+	{
+		PosSTATS() : PointEntry("PosSTATS", "(72,72)") {}
+	};
+
+	// The default position of UIEquipInventory
+	struct PosEQINV : public Configuration::PointEntry
+	{
+		PosEQINV() : PointEntry("PosEQINV", "(250,160)") {}
+	};
+
+	// The default position of UIItemInventory
+	struct PosINV : public Configuration::PointEntry
+	{
+		PosINV() : PointEntry("PosINV", "(300,160)") {}
+	};
+
+	// The default position of UISkillBook
+	struct PosSKILL : public Configuration::PointEntry
+	{
+		PosSKILL() : PointEntry("PosSKILL", "(96,96)") {}
+	};
+
+	// The default position of UIQuestLog
+	struct PosQUEST : public Configuration::PointEntry
+	{
+		PosQUEST() : PointEntry("PosQUEST", "(300,160)") {}
+	};
+
+	// The default position of UIQuestHelper
+	struct PosQUESTHELPER : public Configuration::PointEntry
+	{
+		PosQUESTHELPER() : PointEntry("PosQUESTHELPER", "(560,100)") {}
+	};
+
+	// The default position of UIPartyHUD
+	struct PosPARTYHUD : public Configuration::PointEntry
+	{
+		PosPARTYHUD() : PointEntry("PosPARTYHUD", "(560,320)") {}
+	};
+
+	// The default position of UIWorldMap
+	struct PosMAP : public Configuration::PointEntry
+	{
+		PosMAP() : PointEntry("PosMAP", "(100,35)") {}
+	};
+
+	// The default position of UIUserList
+	struct PosUSERLIST : public Configuration::PointEntry
+	{
+		PosUSERLIST() : PointEntry("PosUSERLIST", "(104, 104)") {}
+	};
+
+	// The default position of UIChatBar
+	struct PosCHAT : public Configuration::PointEntry
+	{
+		PosCHAT() : PointEntry("PosCHAT", "(0, 1052)") {}
+	};
+
+	// The default position of UIMiniMap
+	struct PosMINIMAP : public Configuration::PointEntry
+	{
+		PosMINIMAP() : PointEntry("PosMINIMAP", "(0, 0)") {}
+	};
+
+	// The default position of UIShop
+	struct PosSHOP : public Configuration::PointEntry
+	{
+		PosSHOP() : PointEntry("PosSHOP", "(146, 48)") {}
+	};
+
+	// The default position of UINotice
+	struct PosNOTICE : public Configuration::PointEntry
+	{
+		PosNOTICE() : PointEntry("PosNOTICE", "(266, 240)") {}
+	};
+
+	// The default position of UIChat and UIRank
+	struct PosMAPLECHAT : public Configuration::PointEntry
+	{
+		PosMAPLECHAT() : PointEntry("PosMAPLECHAT", "(50, 46)") {}
+	};
+
+	// The default position of UIChannel
+	struct PosCHANNEL : public Configuration::PointEntry
+	{
+		PosCHANNEL() : PointEntry("PosCHANNEL", "(215, 100)") {}
+	};
+
+	// The default position of UIJoypad
+	struct PosJOYPAD : public Configuration::PointEntry
+	{
+		PosJOYPAD() : PointEntry("PosJOYPAD", "(312, 134)") {}
+	};
+
+	// The default position of UIEvent
+	struct PosEVENT : public Configuration::PointEntry
+	{
+		PosEVENT() : PointEntry("PosEVENT", "(99, 100)") {}
+	};
+
+	// The default position of UIKeyConfig
+	struct PosKEYCONFIG : public Configuration::PointEntry
+	{
+		PosKEYCONFIG() : PointEntry("PosKEYCONFIG", "(65, 10)") {}
+	};
+
+	// The default position of UIOptionMenu
+	struct PosOPTIONMENU : public Configuration::PointEntry
+	{
+		PosOPTIONMENU() : PointEntry("PosUSERLIST", "(170, -1)") {}
+	};
+
+	// The default position of UICharInfo
+	struct PosCHARINFO : public Configuration::PointEntry
+	{
+		PosCHARINFO() : PointEntry("PosCHARINFO", "(264, 264)") {}
+	};
+
+	// The default position of UIBuddyList
+	struct PosBUDDYLIST : public Configuration::PointEntry
+	{
+		PosBUDDYLIST() : PointEntry("PosBUDDYLIST", "(120, 120)") {}
+	};
+
+	// The default position of UIAddBuddy (the add-buddy popup). Default
+	// (0,0) is a sentinel — UIAddBuddy treats (0,0) as "use the spawn
+	// position the caller passed" so it lands flush to the right of the
+	// user-list panel on first open. Drag-end overwrites this with the
+	// real coords so subsequent opens remember the user's placement.
+	struct PosADDBUDDY : public Configuration::PointEntry
+	{
+		PosADDBUDDY() : PointEntry("PosADDBUDDY", "(0, 0)") {}
+	};
+
+	// The default position of UIBuddyGroup (the manage-groups popup).
+	struct PosBUDDYGROUP : public Configuration::PointEntry
+	{
+		PosBUDDYGROUP() : PointEntry("PosBUDDYGROUP", "(0, 0)") {}
+	};
+
+	// The default position of UIPartySettings (PopupSettings dialog).
+	struct PosPARTYSETTINGS : public Configuration::PointEntry
+	{
+		PosPARTYSETTINGS() : PointEntry("PosPARTYSETTINGS", "(420, 200)") {}
+	};
+
+	// The default position of UIPartyInvite (PopupInvite dialog).
+	struct PosPARTYINVITE : public Configuration::PointEntry
+	{
+		PosPARTYINVITE() : PointEntry("PosPARTYINVITE", "(420, 100)") {}
+	};
+
+	// The default position of UIPartyHelper (the small Quest-Helper-
+	// style side panel listing party member names).
+	struct PosPARTYHELPER : public Configuration::PointEntry
+	{
+		PosPARTYHELPER() : PointEntry("PosPARTYHELPER", "(680,100)") {}
+	};
+
+	// The default position of UIStorage
+	struct PosSTORAGE : public Configuration::PointEntry
+	{
+		PosSTORAGE() : PointEntry("PosSTORAGE", "(100, 48)") {}
+	};
+
+	// The default position of UITrade
+	struct PosTRADE : public Configuration::PointEntry
+	{
+		PosTRADE() : PointEntry("PosTRADE", "(200, 100)") {}
+	};
+
+	// The default position of UIGuild
+	struct PosGUILD : public Configuration::PointEntry
+	{
+		PosGUILD() : PointEntry("PosGUILD", "(200, 80)") {}
+	};
+
+	// The default position of UIGuildBBS
+	struct PosGUILDBBS : public Configuration::PointEntry
+	{
+		PosGUILDBBS() : PointEntry("PosGUILDBBS", "(220, 100)") {}
+	};
+
+	// The default position of UIGuildMark
+	struct PosGUILDMARK : public Configuration::PointEntry
+	{
+		PosGUILDMARK() : PointEntry("PosGUILDMARK", "(300, 150)") {}
+	};
+
+	// The default position of UIMessenger
+	struct PosMESSENGER : public Configuration::PointEntry
+	{
+		PosMESSENGER() : PointEntry("PosMESSENGER", "(200, 100)") {}
+	};
+
+	// The default position of UIPersonalShop
+	struct PosPERSONALSHOP : public Configuration::PointEntry
+	{
+		PosPERSONALSHOP() : PointEntry("PosPERSONALSHOP", "(150, 80)") {}
+	};
+
+	// The default position of UIHiredMerchant
+	struct PosHIREDMERCHANT : public Configuration::PointEntry
+	{
+		PosHIREDMERCHANT() : PointEntry("PosHIREDMERCHANT", "(150, 80)") {}
+	};
+
+	// The default position of UIMinigame
+	struct PosMINIGAME : public Configuration::PointEntry
+	{
+		PosMINIGAME() : PointEntry("PosMINIGAME", "(200, 100)") {}
+	};
+
+	// The default position of UIMonsterBook
+	struct PosMONSTERBOOK : public Configuration::PointEntry
+	{
+		PosMONSTERBOOK() : PointEntry("PosMONSTERBOOK", "(100, 50)") {}
+	};
+
+	// The default position of UIMonsterBattle
+	struct PosMONSTERBATTLE : public Configuration::PointEntry
+	{
+		PosMONSTERBATTLE() : PointEntry("PosMONSTERBATTLE", "(120, 60)") {}
+	};
+
+	// The default position of UIMonsterLife
+	struct PosMONSTERLIFE : public Configuration::PointEntry
+	{
+		PosMONSTERLIFE() : PointEntry("PosMONSTERLIFE", "(140, 40)") {}
+	};
+
+	// The default position of UIPartySearch
+	struct PosPARTYSEARCH : public Configuration::PointEntry
+	{
+		PosPARTYSEARCH() : PointEntry("PosPARTYSEARCH", "(200, 100)") {}
+	};
+
+	// The default position of UIRanking
+	struct PosRANKING : public Configuration::PointEntry
+	{
+		PosRANKING() : PointEntry("PosRANKING", "(100, 50)") {}
+	};
+
+	// The default position of UISkillMacro
+	struct PosSKILLMACRO : public Configuration::PointEntry
+	{
+		PosSKILLMACRO() : PointEntry("PosSKILLMACRO", "(200, 150)") {}
+	};
+
+	// The default position of UIFamily
+	struct PosFAMILY : public Configuration::PointEntry
+	{
+		PosFAMILY() : PointEntry("PosFAMILY", "(200, 100)") {}
+	};
+
+	// The default position of UIFamilyTree
+	struct PosFAMILYTREE : public Configuration::PointEntry
+	{
+		PosFAMILYTREE() : PointEntry("PosFAMILYTREE", "(100, 50)") {}
+	};
+
+	// The default position of UISystemOption
+	struct PosSYSTEMOPTION : public Configuration::PointEntry
+	{
+		PosSYSTEMOPTION() : PointEntry("PosSYSTEMOPTION", "(200, 100)") {}
+	};
+
+
+	// The default position of UIChatWindow
+	struct PosCHATWINDOW : public Configuration::PointEntry
+	{
+		PosCHATWINDOW() : PointEntry("PosCHATWINDOW", "(300, 200)") {}
+	};
+
+	// The default position of UIFarmChat
+	struct PosFARMCHAT : public Configuration::PointEntry
+	{
+		PosFARMCHAT() : PointEntry("PosFARMCHAT", "(200, 100)") {}
+	};
+
+	// The default position of UIMapleChat
+	struct PosMAPLECHAT1 : public Configuration::PointEntry
+	{
+		PosMAPLECHAT1() : PointEntry("PosMAPLECHAT1", "(100, 100)") {}
+	};
+
+	// The default position of UISocialChat
+	struct PosSOCIALCHAT : public Configuration::PointEntry
+	{
+		PosSOCIALCHAT() : PointEntry("PosSOCIALCHAT", "(200, 100)") {}
+	};
+
+	// The default position of UIAlliance
+	struct PosALLIANCE : public Configuration::PointEntry
+	{
+		PosALLIANCE() : PointEntry("PosALLIANCE", "(200, 80)") {}
+	};
+
+	// The default position of UIOwl
+	struct PosOWL : public Configuration::PointEntry
+	{
+		PosOWL() : PointEntry("PosOWL", "(250, 120)") {}
+	};
+
+	// The default position of UIWhisper
+	struct PosWHISPER : public Configuration::PointEntry
+	{
+		PosWHISPER() : PointEntry("PosWHISPER", "(300, 200)") {}
+	};
+
+	// The default position of UIReport
+	struct PosREPORT : public Configuration::PointEntry
+	{
+		PosREPORT() : PointEntry("PosREPORT", "(300, 200)") {}
+	};
+
+	// The default position of UIMapleTV compose window
+	struct PosMAPLETV : public Configuration::PointEntry
+	{
+		PosMAPLETV() : PointEntry("PosMAPLETV", "(400, 80)") {}
+	};
+
+	// The default position of UIMegaphone compose window
+	struct PosMEGAPHONE : public Configuration::PointEntry
+	{
+		PosMEGAPHONE() : PointEntry("PosMEGAPHONE", "(320, 200)") {}
+	};
+
+	// The default position of UIItemMegaphone compose window
+	struct PosITEMMEGAPHONE : public Configuration::PointEntry
+	{
+		PosITEMMEGAPHONE() : PointEntry("PosITEMMEGAPHONE", "(360, 160)") {}
+	};
+
+	// The default position of UIAvatarMegaphone compose window
+	struct PosAVATARMEGAPHONE : public Configuration::PointEntry
+	{
+		PosAVATARMEGAPHONE() : PointEntry("PosAVATARMEGAPHONE", "(350, 180)") {}
+	};
+
+	// The default type of UIMiniMap
+	struct MiniMapType : public Configuration::ByteEntry
+	{
+		MiniMapType() : ByteEntry("MiniMapType", "0") {}
+	};
+
+	// Whether to use a simple version of UIMiniMap
+	struct MiniMapSimpleMode : public Configuration::BoolEntry
+	{
+		MiniMapSimpleMode() : BoolEntry("MiniMapSimpleMode", "false") {}
+	};
+
+	// Whether to use default helpers for UIMiniMap
+	struct MiniMapDefaultHelpers : public Configuration::BoolEntry
+	{
+		MiniMapDefaultHelpers() : BoolEntry("MiniMapDefaultHelpers", "false") {}
+	};
+
+	// Whether screen shake effects are enabled
+	struct ScreenShake : public Configuration::BoolEntry
+	{
+		ScreenShake() : BoolEntry("ScreenShake", "true") {}
+	};
+
+	// Graphics quality slider (0-100)
+	struct GraphicsQuality : public Configuration::ByteEntry
+	{
+		GraphicsQuality() : ByteEntry("GraphicsQuality", "50") {}
+	};
+
+	// Effects quality slider (0-100)
+	struct EffectsQuality : public Configuration::ByteEntry
+	{
+		EffectsQuality() : ByteEntry("EffectsQuality", "50") {}
+	};
+
+	// Mouse speed slider (0-100)
+	struct MouseSpeed : public Configuration::ByteEntry
+	{
+		MouseSpeed() : ByteEntry("MouseSpeed", "50") {}
+	};
+
+	// Frame-rate cap in FPS. 0 = uncapped.
+	struct FPSCap : public Configuration::ByteEntry
+	{
+		FPSCap() : ByteEntry("FPSCap", "120") {}
+	};
+
+	// Show the on-screen FPS counter (top-right, yellow).
+	struct ShowFPS : public Configuration::BoolEntry
+	{
+		ShowFPS() : BoolEntry("ShowFPS", "false") {}
+	};
+
+	// Directory where F12 screenshots are written (created if missing).
+	struct ScreenshotFolder : public Configuration::StringEntry
+	{
+		ScreenshotFolder() : StringEntry("ScreenshotFolder", "screenshots") {}
+	};
+
+	// HP warning threshold slider (0-100)
+	struct HPWarning : public Configuration::ByteEntry
+	{
+		HPWarning() : ByteEntry("HPWarning", "50") {}
+	};
+
+	// MP warning threshold slider (0-100)
+	struct MPWarning : public Configuration::ByteEntry
+	{
+		MPWarning() : ByteEntry("MPWarning", "50") {}
+	};
+
+	// Social filter settings — true means ALLOW
+	struct AllowWhisper : public Configuration::BoolEntry
+	{
+		AllowWhisper() : BoolEntry("AllowWhisper", "true") {}
+	};
+
+	struct AllowChatInvite : public Configuration::BoolEntry
+	{
+		AllowChatInvite() : BoolEntry("AllowChatInvite", "true") {}
+	};
+
+	struct AllowPartyInvite : public Configuration::BoolEntry
+	{
+		AllowPartyInvite() : BoolEntry("AllowPartyInvite", "true") {}
+	};
+
+	struct AllowGuildChat : public Configuration::BoolEntry
+	{
+		AllowGuildChat() : BoolEntry("AllowGuildChat", "true") {}
+	};
+
+	struct AllowAllianceChat : public Configuration::BoolEntry
+	{
+		AllowAllianceChat() : BoolEntry("AllowAllianceChat", "true") {}
+	};
+
+	struct AllowFamilyInvite : public Configuration::BoolEntry
+	{
+		AllowFamilyInvite() : BoolEntry("AllowFamilyInvite", "true") {}
+	};
+
+	struct AllowFriendChat : public Configuration::BoolEntry
+	{
+		AllowFriendChat() : BoolEntry("AllowFriendChat", "true") {}
+	};
+
+	struct AllowTradeRequest : public Configuration::BoolEntry
+	{
+		AllowTradeRequest() : BoolEntry("AllowTradeRequest", "true") {}
+	};
+
+	struct AllowExpeditionInvite : public Configuration::BoolEntry
+	{
+		AllowExpeditionInvite() : BoolEntry("AllowExpeditionInvite", "true") {}
+	};
+
+	struct AllowGuildInvite : public Configuration::BoolEntry
+	{
+		AllowGuildInvite() : BoolEntry("AllowGuildInvite", "true") {}
+	};
+
+	struct AllowAllianceInvite : public Configuration::BoolEntry
+	{
+		AllowAllianceInvite() : BoolEntry("AllowAllianceInvite", "true") {}
+	};
+
+	struct AllowFollow : public Configuration::BoolEntry
+	{
+		AllowFollow() : BoolEntry("AllowFollow", "true") {}
+	};
+
+	// Comma-separated list of quest IDs currently pinned in UIQuestHelper.
+	struct TrackedQuests : public Configuration::StringEntry
+	{
+		TrackedQuests() : StringEntry("TrackedQuests", "") {}
+	};
+
+	template <typename T>
+	// Can be used to access settings
+	struct Setting
+	{
+		// Access a setting
+		static T& get()
+		{
+			static_assert(std::is_base_of<Configuration::Entry, T>::value, "template parameter T for Setting must inherit from Configuration::Entry.");
+
+			auto* entry = Configuration::get().settings.get<T>();
+
+			if (entry)
+			{
+				return *entry;
+			}
+			else
+			{
+				static T defaultentry;
+				return defaultentry;
+			}
+		}
+	};
+}

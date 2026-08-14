@@ -1,0 +1,125 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#pragma once
+
+#include "../OutPacket.h"
+
+#include "../../Character/MapleStat.h"
+
+#include "../../IO/UITypes/UIKeyConfig.h"
+
+namespace ms
+{
+	// Requests a stat increase by spending AP
+	// Opcode: SPEND_AP(87)
+	class SpendApPacket : public OutPacket
+	{
+	public:
+		SpendApPacket(MapleStat::Id stat) : OutPacket(OutPacket::Opcode::SPEND_AP)
+		{
+			write_time();
+			write_int(MapleStat::codes[stat]);
+		}
+	};
+
+	// Requests a skill level increase by spending SP
+	// Opcode: SPEND_SP(90)
+	class SpendSpPacket : public OutPacket
+	{
+	public:
+		SpendSpPacket(int32_t skill_id) : OutPacket(OutPacket::Opcode::SPEND_SP)
+		{
+			write_time();
+			write_int(skill_id);
+		}
+	};
+
+	// Saves skill macro configuration
+	// Opcode: SKILL_MACRO_MODIFIED(92)
+	class SkillMacroModifiedPacket : public OutPacket
+	{
+	public:
+		struct MacroData
+		{
+			std::string name;
+			bool shout;
+			int32_t skill1;
+			int32_t skill2;
+			int32_t skill3;
+		};
+
+		SkillMacroModifiedPacket(const MacroData* macros, int16_t count) : OutPacket(OutPacket::Opcode::SKILL_MACRO_MODIFIED)
+		{
+			write_byte(static_cast<int8_t>(count));
+
+			for (int16_t i = 0; i < count; i++)
+			{
+				write_string(macros[i].name);
+				write_byte(macros[i].shout ? 1 : 0);
+				write_int(macros[i].skill1);
+				write_int(macros[i].skill2);
+				write_int(macros[i].skill3);
+			}
+		}
+	};
+
+	// Change monster book cover
+	// Opcode: MONSTER_BOOK_COVER(57)
+	class MonsterBookCoverPacket : public OutPacket
+	{
+	public:
+		MonsterBookCoverPacket(int32_t card_item_id) : OutPacket(OutPacket::Opcode::MONSTER_BOOK_COVER)
+		{
+			write_int(card_item_id); // 238xxxx card item ID, or 0 to clear
+		}
+	};
+
+	// Sends idle HP/MP regen request to the server
+	// Opcode: HEAL_OVER_TIME(89)
+	class HealOverTimePacket : public OutPacket
+	{
+	public:
+		HealOverTimePacket(int16_t heal_hp, int16_t heal_mp) : OutPacket(OutPacket::Opcode::HEAL_OVER_TIME)
+		{
+			skip(8); // timestamp + unknown
+			write_short(heal_hp);
+			write_short(heal_mp);
+		}
+	};
+
+	// Requests the server to change key mappings
+	// Opcode: CHANGE_KEYMAP(135)
+	class ChangeKeyMapPacket : public OutPacket
+	{
+	public:
+		ChangeKeyMapPacket(std::vector<std::tuple<KeyConfig::Key, KeyType::Id, int32_t>> updated_actions) : OutPacket(OutPacket::Opcode::CHANGE_KEYMAP)
+		{
+			write_int(0); // mode
+			write_int(updated_actions.size()); // Number of key changes
+
+			for (size_t i = 0; i < updated_actions.size(); i++)
+			{
+				auto keymap = updated_actions[i];
+
+				write_int(std::get<0>(keymap));		// key
+				write_byte(std::get<1>(keymap));	// type
+				write_int(std::get<2>(keymap));		// action
+			}
+		}
+	};
+}

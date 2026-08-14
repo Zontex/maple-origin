@@ -1,0 +1,131 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#pragma once
+
+#include "MapObject.h"
+
+#include "../../Character/Look/CharLook.h"
+#include "../../Graphics/Animation.h"
+#include "../../Graphics/Text.h"
+#include "../../Util/Randomizer.h"
+#include "../../IO/Components/ChatBalloon.h"
+
+namespace ms
+{
+	// Quest mark type to display above an NPC
+	enum class QuestMarkType : uint8_t
+	{
+		NONE,
+		AVAILABLE,         // Normal quest available (yellow !)
+		IN_PROGRESS,       // Quest in progress (yellow ?)
+		COMPLETE,          // Quest ready to complete (yellow ? with light)
+		AVAILABLE_REPEAT,  // Repeat quest available
+		LOW_LEVEL,         // Available but low level
+		HIGH_LEVEL         // Available but high level
+	};
+
+	// Represents a NPC on the current map
+	// Implements the 'MapObject' interface to be used in a 'MapObjects' template
+	class Npc : public MapObject
+	{
+	public:
+		// Constructs an NPC by combining data from game files with data sent by the server
+		Npc(int32_t npcid, int32_t oid, bool mirrored, uint16_t fhid, bool control, Point<int16_t> position);
+
+		// Draws the current animation and name/function tags
+		void draw(double viewx, double viewy, float alpha) const override;
+		// Name/function labels are drawn in a later pass so a character
+		// standing in front of an NPC cannot cover them.
+		void draw_name(double viewx, double viewy, float alpha) const;
+		// Draw a small scaled copy of the NPC's current sprite at a screen
+		// point (used to show the NPC on the minimap instead of a marker).
+		void draw_minimap(Point<int16_t> position, float scale, float alpha) const;
+		// Updates the current animation and physics
+		int8_t update(const Physics& physics) override;
+
+		// Changes stance and resets animation
+		void set_stance(const std::string& stance);
+
+		// Check whether this is a server-sided NPC
+		bool isscripted() const;
+		// Player NPC: renders a character look instead of NX npc art
+		void set_player_look(const LookEntry& look);
+		bool has_player_look() const;
+		// The server can mark an NPC scriptable at runtime (SET_NPC_SCRIPTABLE),
+		// which is the only way custom NPCs with no `script` node in NX get a
+		// chat icon. NX data alone cannot know about them.
+		void set_scripted(bool s);
+		// Check if the NPC is in range of the cursor
+		bool inrange(Point<int16_t> cursorpos, Point<int16_t> viewpos) const;
+
+		// Returns the NPC name
+		std::string get_name();
+		// Returns the NPC's function description or title
+		std::string get_func();
+		// Returns the NPC's data ID
+		int32_t get_npcid() const;
+
+		// Recalculate quest mark for this NPC based on current quest state
+		void update_quest_mark();
+
+		// Initialize shared quest mark animations (call once at startup)
+		static void init_quest_marks();
+
+	private:
+		std::map<std::string, Animation> animations;
+		std::map<std::string, std::vector<std::string>> lines;
+		std::vector<std::string> states;
+		std::string name;
+		std::string func;
+		bool hidename;
+		bool scripted;
+		CharLook player_look;
+		bool player_look_set = false;
+		bool mouseonly;
+
+		int32_t npcid;
+		bool flip;
+		std::string stance;
+		bool control;
+
+		Randomizer random;
+		Text namelabel;
+		Text funclabel;
+
+		// Ambient speech: cycles the NPC's resolved info/speak lines in a balloon
+		// above its head. Empty for NPCs without info/speak (they stay silent).
+		ChatBalloon speech_balloon;
+		std::vector<std::string> speak_lines;
+		size_t speak_index = 0;
+		int32_t speak_timer = 0;
+		bool speak_showing = false;
+
+		// Quest mark above NPC
+		QuestMarkType quest_mark_type;
+		mutable Animation quest_mark_anim;
+
+		// Shared quest mark animations from MapHelper.img/quest (v83)
+		static bool marks_initialized;
+		static Animation mark_available;      // chatNext — yellow lightbulb (quest available)
+		static Animation mark_in_progress;    // chatSelf — blue ? (quest in progress)
+		static Animation mark_complete;       // chatComplete — yellow ! (ready to turn in)
+		static Animation mark_repeat;
+		static Animation mark_low_level;
+		static Animation mark_high_level;
+	};
+}

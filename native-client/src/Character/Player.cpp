@@ -1,0 +1,887 @@
+//////////////////////////////////////////////////////////////////////////////////
+//	This file is part of the continued Journey MMORPG client					//
+//	Copyright (C) 2015-2019  Daniel Allendorf, Ryan Payton						//
+//																				//
+//	This program is free software: you can redistribute it and/or modify		//
+//	it under the terms of the GNU Affero General Public License as published by	//
+//	the Free Software Foundation, either version 3 of the License, or			//
+//	(at your option) any later version.											//
+//																				//
+//	This program is distributed in the hope that it will be useful,				//
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of				//
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the				//
+//	GNU Affero General Public License for more details.							//
+//																				//
+//	You should have received a copy of the GNU Affero General Public License	//
+//	along with this program.  If not, see <https://www.gnu.org/licenses/>.		//
+//////////////////////////////////////////////////////////////////////////////////
+#include "Player.h"
+
+#include "PlayerStates.h"
+#include "SkillId.h"
+
+#include "../Configuration.h"
+
+#include "../Audio/Audio.h"
+#include "../Data/WeaponData.h"
+#include "../IO/UI.h"
+#include "../IO/UITypes/UISkillBook.h"
+
+#include "../IO/UITypes/UIStatsInfo.h"
+#include "../Net/Packets/GameplayPackets.h"
+#include "../Net/Packets/InventoryPackets.h"
+#include "../Net/Packets/PlayerPackets.h"
+
+#ifdef USE_NX
+#include <nlnx/nx.hpp>
+#include <nlnx/bitmap.hpp>
+#endif
+
+namespace ms
+{
+	const PlayerNullState nullstate;
+
+	const PlayerState* get_state(Char::State state)
+	{
+		static PlayerStandState standing;
+		static PlayerWalkState walking;
+		static PlayerFallState falling;
+		static PlayerProneState lying;
+		static PlayerClimbState climbing;
+		static PlayerSitState sitting;
+		static PlayerFlyState flying;
+
+		switch (state)
+		{
+			case Char::State::STAND:
+				return &standing;
+			case Char::State::WALK:
+				return &walking;
+			case Char::State::FALL:
+				return &falling;
+			case Char::State::PRONE:
+				return &lying;
+			case Char::State::LADDER:
+			case Char::State::ROPE:
+				return &climbing;
+			case Char::State::SIT:
+				return &sitting;
+			case Char::State::SWIM:
+				return &flying;
+			default:
+				return nullptr;
+		}
+	}
+
+	Player::Player(const CharEntry& entry) : Char(entry.id, entry.look, entry.stats.name), stats(entry.stats)
+	{
+		attacking = false;
+		underwater = false;
+
+		set_state(Char::State::STAND);
+		set_direction(true);
+
+		apply_nametag_style(Configuration::get().get_admin());
+		refresh_ring_effect();
+	}
+
+	Player::Player() : Char(0, {}, "") {}
+
+	void Player::respawn(Point<int16_t> pos, bool uw)
+	{
+		set_position(pos.x(), pos.y());
+		underwater = uw;
+		keysdown.clear();
+		attacking = false;
+		ladder = nullptr;
+		chair_itemid = 0;
+		chair_anim = Animation();
+		nullstate.update_state(*this);
+	}
+
+	void Player::send_action(KeyAction::Id action, bool down)
+	{
+		const PlayerState* pst = get_state(state);
+
+		if (pst)
+			pst->send_action(*this, action, down);
+
+		keysdown[action] = down;
+	}
+
+	void Player::recalc_stats(bool equipchanged)
+	{
+		Weapon::Type weapontype = get_weapontype();
+
+		stats.set_weapontype(weapontype);
+		stats.init_totalstats();
+
+		if (equipchanged)
+			inventory.recalc_stats(weapontype);
+
+		for (auto stat : EquipStat::values)
+		{
+			int32_t inventory_total = inventory.get_stat(stat);
+			stats.add_value(stat, inventory_total);
+		}
+
+		auto passive_skills = skillbook.collect_passives();
+
+		for (auto& passive : passive_skills)
+		{
+			int32_t skill_id = passive.first;
+			int32_t skill_level = passive.second;
+
+			passive_buffs.apply_buff(stats, skill_id, skill_level);
+		}
+
+		for (const Buff& buff : buffs.values())
+			active_buffs.apply_buff(stats, buff.stat, buff.value);
+
+		stats.close_totalstats();
+
+		if (auto statsinfo = UI::get().get_element<UIStatsInfo>())
+			statsinfo->update_all_stats();
+	}
+
+	void Player::change_equip(int16_t slot)
+	{
+		if (int32_t itemid = inventory.get_item_id(InventoryType::Id::EQUIPPED, slot))
+			look.add_equip(itemid);
+		else
+			look.remove_equip(EquipSlot::by_id(slot));
+
+		// An effect ring's aura loops while it's worn.
+		refresh_ring_effect();
+	}
+
+	void Player::use_item(int32_t itemid)
+	{
+		InventoryType::Id type = InventoryType::by_item_id(itemid);
+
+		if (int16_t slot = inventory.find_item(type, itemid))
+		{
+			if (type == InventoryType::Id::USE)
+			{
+				UseItemPacket(slot, itemid).dispatch();
+			}
+			else if (type == InventoryType::Id::SETUP && itemid / 10000 == 301)
+			{
+				if (chair_itemid > 0)
+				{
+					// Already in a chair — stand up
+					set_state(Char::State::STAND);
+				}
+				else
+				{
+					// Sit in chair
+					set_chair(itemid);
+					set_state(Char::State::SIT);
+					UseChairPacket(itemid).dispatch();
+				}
+			}
+		}
+	}
+
+	void Player::draw(Layer::Id layer, double viewx, double viewy, float alpha) const
+	{
+		if (layer == get_layer())
+		{
+			Point<int16_t> absp = phobj.get_absolute(viewx, viewy, alpha);
+
+			// info/effect draws behind the body (the chair itself), grounded at
+			// the feet by chair_pos.
+			if (chair_itemid > 0)
+				chair_anim.draw(DrawArgument(absp + chair_pos, facing_right), alpha);
+
+			Char::draw(viewx, viewy, alpha);
+
+			// info/effect2 draws in front of the body (signs / decorations that
+			// sit over or above the seated character). Drawn unconditionally like
+			// the chair — an absent effect2 is an empty Animation whose invalid
+			// texture is a safe no-op. (Do NOT gate on get_bounds(): a plain
+			// bitmap frame has no lt/rb, so its bounds width is always 0.)
+			if (chair_itemid > 0)
+				chair_anim_front.draw(DrawArgument(absp + chair_pos_front, facing_right), alpha);
+		}
+	}
+
+	int8_t Player::update(const Physics& physics)
+	{
+		const PlayerState* pst = get_state(state);
+
+		if (pst)
+		{
+			pst->update(*this);
+			physics.move_object(phobj);
+
+			bool aniend = Char::update(physics, get_stancespeed());
+
+			if (aniend && attacking)
+			{
+				attacking = false;
+				nullstate.update_state(*this);
+			}
+			else
+			{
+				pst->update_state(*this);
+			}
+		}
+		else if (state == Char::State::DIED)
+		{
+			// Still update the character look so the death animation plays
+			Char::update(physics, get_stancespeed());
+		}
+
+		uint8_t stancebyte = facing_right ? state : state + 1;
+		Movement newmove(phobj, stancebyte);
+		bool needupdate = lastmove.hasmoved(newmove);
+
+		if (needupdate)
+		{
+			MovePlayerPacket(newmove).dispatch();
+			lastmove = newmove;
+		}
+
+		climb_cooldown.update();
+
+		if (chair_itemid > 0)
+		{
+			chair_anim.update();
+			chair_anim_front.update();
+		}
+
+		// Idle HP/MP regen — send HEAL_OVER_TIME every ~10 seconds
+		// Reset and pause counter while attacking, getting hit, in hit stun, or dead.
+		// Also detect server-driven HP drops (DoT / magic / status) that
+		// never route through Player::damage() and would otherwise leave
+		// the invincible window un-set, letting regen fire during a hit.
+		int16_t observed_hp = stats.get_stat(MapleStat::Id::HP);
+
+		if (last_seen_hp >= 0 && observed_hp < last_seen_hp)
+			hit_lockout_ticks = HIT_LOCKOUT_TICKS;
+
+		last_seen_hp = observed_hp;
+
+		if (hit_lockout_ticks > 0)
+			hit_lockout_ticks--;
+
+		if (state == Char::State::DIED || is_invincible() || attacking || hit_lockout_ticks > 0)
+		{
+			heal_tick_counter = 0;
+		}
+		else
+		{
+			heal_tick_counter++;
+		}
+
+		if (heal_tick_counter >= HEAL_TICK_INTERVAL)
+		{
+			heal_tick_counter = 0;
+
+			int16_t cur_hp = stats.get_stat(MapleStat::Id::HP);
+			int16_t max_hp = stats.get_stat(MapleStat::Id::MAXHP);
+			int16_t cur_mp = stats.get_stat(MapleStat::Id::MP);
+			int16_t max_mp = stats.get_stat(MapleStat::Id::MAXMP);
+
+			if (cur_hp < max_hp || cur_mp < max_mp)
+			{
+				int16_t level = stats.get_stat(MapleStat::Id::LEVEL);
+				int16_t int_stat = stats.get_stat(MapleStat::Id::INT);
+
+				// Base regen formula: scales with level
+				// Chair regen is higher (server also has its own chair heal timer)
+				bool sitting = (chair_itemid > 0);
+				int16_t heal_hp = static_cast<int16_t>(std::max(1, level / 5 + 2));
+				int16_t heal_mp = static_cast<int16_t>(std::max(1, level / 5 + int_stat / 20 + 3));
+
+				// Mage Improving MP Recovery (skill 2000000): Level * SkillLevel / 10 extra MP
+				int32_t mp_recovery_level = get_skilllevel(SkillId::Id::IMPROVE_HP_RECOVERY);
+				if (mp_recovery_level > 0)
+					heal_mp += static_cast<int16_t>(level * mp_recovery_level / 10);
+
+				if (sitting)
+				{
+					heal_hp *= 3;
+					heal_mp *= 3;
+				}
+
+				// Cap to not exceed max
+				heal_hp = std::min(heal_hp, static_cast<int16_t>(max_hp - cur_hp));
+				heal_mp = std::min(heal_mp, static_cast<int16_t>(max_mp - cur_mp));
+
+				if (heal_hp < 0) heal_hp = 0;
+				if (heal_mp < 0) heal_mp = 0;
+
+				// Cosmic drops any MP heal >= 1000 outright and autobans an HP heal
+				// above 77 * map recovery * 1.5, so stay inside both bounds.
+				heal_hp = std::min<int16_t>(heal_hp, 100);
+				heal_mp = std::min<int16_t>(heal_mp, 999);
+
+				if (heal_hp > 0 || heal_mp > 0)
+					HealOverTimePacket(heal_hp, heal_mp).dispatch();
+			}
+		}
+
+		if (auto_hp_pot_ticks > 0)
+			auto_hp_pot_ticks--;
+
+		if (auto_mp_pot_ticks > 0)
+			auto_mp_pot_ticks--;
+
+		if (state != Char::State::DIED && has_pet())
+		{
+			int32_t hp_pot = Configuration::get().get_auto_hp_pot();
+			int32_t mp_pot = Configuration::get().get_auto_mp_pot();
+
+			if (hp_pot != 0 || mp_pot != 0)
+			{
+				int32_t cur_hp = stats.get_stat(MapleStat::Id::HP);
+				int32_t max_hp = stats.get_stat(MapleStat::Id::MAXHP);
+				int32_t cur_mp = stats.get_stat(MapleStat::Id::MP);
+				int32_t max_mp = stats.get_stat(MapleStat::Id::MAXMP);
+
+				if (hp_pot != 0 && auto_hp_pot_ticks == 0 && cur_hp * 2 < max_hp && inventory.find_item(InventoryType::Id::USE, hp_pot))
+				{
+					use_item(hp_pot);
+					auto_hp_pot_ticks = AUTO_POT_COOLDOWN_TICKS;
+				}
+
+				if (mp_pot != 0 && auto_mp_pot_ticks == 0 && cur_mp * 2 < max_mp && inventory.find_item(InventoryType::Id::USE, mp_pot))
+				{
+					use_item(mp_pot);
+					auto_mp_pot_ticks = AUTO_POT_COOLDOWN_TICKS;
+				}
+			}
+		}
+
+		return get_layer();
+	}
+
+	int8_t Player::get_integer_attackspeed() const
+	{
+		int32_t weapon_id = look.get_equips().get_weapon();
+
+		if (weapon_id <= 0)
+			return 0;
+
+		const WeaponData& weapon = WeaponData::get(weapon_id);
+
+		int8_t base_speed = stats.get_attackspeed();
+		int8_t weapon_speed = weapon.get_speed();
+
+		return base_speed + weapon_speed;
+	}
+
+	void Player::set_direction(bool flipped)
+	{
+		if (!attacking)
+			Char::set_direction(flipped);
+	}
+
+	void Player::set_state(State st)
+	{
+		if (!attacking)
+		{
+			// Clear chair when leaving SIT state
+			if (st != Char::State::SIT && chair_itemid > 0)
+			{
+				set_chair(0);
+				CancelChairPacket().dispatch();
+			}
+
+			Char::set_state(st);
+
+			const PlayerState* pst = get_state(st);
+
+			if (pst)
+				pst->initialize(*this);
+		}
+	}
+
+	bool Player::is_attacking() const
+	{
+		return attacking;
+	}
+
+	bool Player::can_attack() const
+	{
+		return !attacking && !is_climbing() && !is_sitting() && look.get_equips().has_weapon();
+	}
+
+	SpecialMove::ForbidReason Player::can_use(const SpecialMove& move) const
+	{
+		if (move.is_skill() && state == Char::State::PRONE)
+			return SpecialMove::ForbidReason::FBR_OTHER;
+
+		if (move.is_attack() && (state == Char::State::LADDER || state == Char::State::ROPE))
+			return SpecialMove::ForbidReason::FBR_OTHER;
+
+		if (has_cooldown(move.get_id()))
+			return SpecialMove::ForbidReason::FBR_COOLDOWN;
+
+		int32_t moveid = move.get_id();
+
+		// Three Snails requires snail shell items as ammo
+		if (moveid == SkillId::THREE_SNAILS)
+		{
+			int32_t level = skillbook.get_level(moveid);
+			int32_t shellid = 0;
+
+			switch (level)
+			{
+			case 1: shellid = 4000019; break; // Blue Snail Shell
+			case 2: shellid = 4000000; break; // Snail Shell
+			case 3: shellid = 4000016; break; // Red Snail Shell
+			}
+
+			if (shellid == 0 || inventory.get_total_item_count(shellid) <= 0)
+				return SpecialMove::ForbidReason::FBR_BULLETCOST;
+		}
+
+		int32_t level = skillbook.get_level(moveid);
+		Weapon::Type weapon = get_weapontype();
+		const Job& job = stats.get_job();
+		uint16_t hp = stats.get_stat(MapleStat::Id::HP);
+		uint16_t mp = stats.get_stat(MapleStat::Id::MP);
+		uint16_t bullets = inventory.get_bulletcount();
+
+		return move.can_use(level, weapon, job, hp, mp, bullets);
+	}
+
+	Attack Player::prepare_attack(bool skill) const
+	{
+		Attack::Type attacktype;
+		bool degenerate;
+
+		if (state == Char::State::PRONE)
+		{
+			degenerate = true;
+			attacktype = Attack::Type::CLOSE;
+		}
+		else
+		{
+			Weapon::Type weapontype;
+			weapontype = get_weapontype();
+
+			switch (weapontype)
+			{
+				case Weapon::Type::BOW:
+				case Weapon::Type::CROSSBOW:
+				case Weapon::Type::CLAW:
+				case Weapon::Type::GUN:
+				{
+					degenerate = !inventory.has_projectile();
+					attacktype = degenerate ? Attack::Type::CLOSE : Attack::Type::RANGED;
+					break;
+				}
+				case Weapon::Type::WAND:
+				case Weapon::Type::STAFF:
+				{
+					degenerate = !skill;
+					attacktype = degenerate ? Attack::Type::CLOSE : Attack::Type::MAGIC;
+					break;
+				}
+				default:
+				{
+					attacktype = Attack::Type::CLOSE;
+					degenerate = false;
+					break;
+				}
+			}
+		}
+
+		Attack attack;
+		attack.type = attacktype;
+		attack.mindamage = stats.get_mindamage();
+		attack.maxdamage = stats.get_maxdamage();
+
+		if (degenerate)
+		{
+			attack.mindamage /= 10;
+			attack.maxdamage /= 10;
+		}
+
+		attack.critical = stats.get_critical();
+		attack.ignoredef = stats.get_ignoredef();
+		attack.accuracy = stats.get_total(EquipStat::Id::ACC);
+		attack.playerlevel = stats.get_stat(MapleStat::Id::LEVEL);
+		attack.range = stats.get_range();
+		attack.bullet = inventory.get_bulletid();
+		attack.origin = get_position();
+		attack.toleft = !facing_right;
+		attack.speed = get_integer_attackspeed();
+
+		return attack;
+	}
+
+	void Player::rush(double targetx)
+	{
+		if (phobj.onground)
+		{
+			uint16_t delay = get_attackdelay(1);
+			phobj.movexuntil(targetx, delay);
+			phobj.set_flag(PhysicsObject::Flag::TURNATEDGES);
+		}
+	}
+
+	void Player::teleport(int16_t x, int16_t y)
+	{
+		set_position(x, y);
+
+		// Kill momentum/forces so the next physics step re-evaluates the landing
+		// from a standstill (prevents the pre-blink velocity carrying through),
+		// and clear the foothold id so physics re-resolves the platform we landed
+		// on rather than trusting the pre-blink one.
+		phobj.hspeed = 0.0;
+		phobj.vspeed = 0.0;
+		phobj.hforce = 0.0;
+		phobj.vforce = 0.0;
+		phobj.fhid = 0;
+	}
+
+	bool Player::is_facing_right() const
+	{
+		return facing_right;
+	}
+
+	bool Player::is_invincible() const
+	{
+		if (state == Char::State::DIED)
+			return true;
+
+		if (has_buff(Buffstat::Id::DARKSIGHT))
+			return true;
+
+		return Char::is_invincible();
+	}
+
+	bool Player::is_hidden() const
+	{
+		return Char::is_hidden();
+	}
+
+	MobAttackResult Player::damage(const MobAttack& attack)
+	{
+		int32_t damage = stats.calculate_damage(attack.watk);
+		show_damage(damage);
+
+		if (damage > 0)
+			Sound(Sound::Name::HURTDAMAGE).play();
+
+		bool fromleft = attack.origin.x() > phobj.get_x();
+
+		bool missed = damage <= 0;
+		bool immovable = ladder || state == Char::State::DIED;
+		bool knockback = !missed && !immovable;
+
+		if (knockback && randomizer.above(stats.get_stance()))
+		{
+			phobj.hspeed = fromleft ? -1.5 : 1.5;
+			phobj.vforce -= 3.5;
+		}
+
+		uint8_t direction = fromleft ? 0 : 1;
+
+		return { attack, damage, direction };
+	}
+
+	void Player::give_buff(Buff buff)
+	{
+		if (buff.stat == Buffstat::Id::MONSTER_RIDING)
+			set_riding(look.get_equips().get_equip(EquipSlot::Id::TAMEDMOB));
+
+		buffs[buff.stat] = buff;
+	}
+
+	void Player::cancel_buff(Buffstat::Id stat)
+	{
+		if (stat == Buffstat::Id::MONSTER_RIDING)
+			set_riding(0);
+
+		buffs[stat] = {};
+	}
+
+	bool Player::has_buff(Buffstat::Id stat) const
+	{
+		return buffs[stat].value > 0;
+	}
+
+	void Player::change_skill(int32_t skill_id, int32_t skill_level, int32_t masterlevel, int64_t expiration)
+	{
+		int32_t old_level = skillbook.get_level(skill_id);
+		skillbook.set_skill(skill_id, skill_level, masterlevel, expiration);
+
+		if (old_level != skill_level)
+			recalc_stats(false);
+	}
+
+	void Player::add_cooldown(int32_t skill_id, int32_t cooltime)
+	{
+		cooldowns[skill_id] = cooltime;
+	}
+
+	bool Player::has_cooldown(int32_t skill_id) const
+	{
+		auto iter = cooldowns.find(skill_id);
+
+		if (iter == cooldowns.end())
+			return false;
+
+		return iter->second > 0;
+	}
+
+	void Player::change_level(uint16_t level)
+	{
+		uint16_t oldlevel = get_level();
+
+		if (level > oldlevel)
+		{
+			show_effect_id(CharEffect::Id::LEVELUP);
+			Sound(Sound::Name::LEVELUP).play();
+		}
+
+		stats.set_stat(MapleStat::Id::LEVEL, level);
+	}
+
+	uint16_t Player::get_level() const
+	{
+		return stats.get_stat(MapleStat::Id::LEVEL);
+	}
+
+	int32_t Player::get_skilllevel(int32_t skillid) const
+	{
+		return skillbook.get_level(skillid);
+	}
+
+	void Player::change_job(uint16_t jobid)
+	{
+		show_effect_id(CharEffect::Id::JOBCHANGE);
+		stats.change_job(jobid);
+	}
+
+	void Player::set_seat(Optional<const Seat> seat)
+	{
+		if (seat)
+		{
+			set_position(seat->getpos());
+			set_state(Char::State::SIT);
+		}
+	}
+
+	void Player::set_ladder(Optional<const Ladder> ldr)
+	{
+		ladder = ldr;
+
+		if (ladder)
+		{
+			phobj.set_x(ldr->get_x());
+
+			phobj.hspeed = 0.0;
+			phobj.vspeed = 0.0;
+			phobj.fhlayer = 7;
+
+			set_state(ldr->is_ladder() ? Char::State::LADDER : Char::State::ROPE);
+		}
+	}
+
+	void Player::set_climb_cooldown()
+	{
+		// Just long enough to clear the ladder you jumped off, not so long it
+		// blocks grabbing a different rope/ladder mid-jump.
+		climb_cooldown.set_for(250);
+	}
+
+	bool Player::can_climb()
+	{
+		return !climb_cooldown;
+	}
+
+	float Player::get_walkforce() const
+	{
+		return 0.05f + 0.11f * static_cast<float>(stats.get_total(EquipStat::Id::SPEED)) / 100;
+	}
+
+	float Player::get_jumpforce() const
+	{
+		return 1.0f + 3.5f * static_cast<float>(stats.get_total(EquipStat::Id::JUMP)) / 100;
+	}
+
+	float Player::get_climbforce() const
+	{
+		return static_cast<float>(stats.get_total(EquipStat::Id::SPEED)) / 100;
+	}
+
+	float Player::get_flyforce() const
+	{
+		return 0.25f;
+	}
+
+	bool Player::is_underwater() const
+	{
+		return underwater;
+	}
+
+	bool Player::is_key_down(KeyAction::Id action) const
+	{
+		return keysdown.count(action) ? keysdown.at(action) : false;
+	}
+
+	CharStats& Player::get_stats()
+	{
+		return stats;
+	}
+
+	const CharStats& Player::get_stats() const
+	{
+		return stats;
+	}
+
+	Inventory& Player::get_inventory()
+	{
+		return inventory;
+	}
+
+	const Inventory& Player::get_inventory() const
+	{
+		return inventory;
+	}
+
+	SkillBook& Player::get_skills()
+	{
+		return skillbook;
+	}
+
+	QuestLog& Player::get_quests()
+	{
+		return questlog;
+	}
+
+	TeleportRock& Player::get_teleportrock()
+	{
+		return teleportrock;
+	}
+
+	MonsterBook& Player::get_monsterbook()
+	{
+		return monsterbook;
+	}
+
+	Party& Player::get_party()
+	{
+		return party;
+	}
+
+	BuddyList& Player::get_buddylist()
+	{
+		return buddylist;
+	}
+
+	Optional<const Ladder> Player::get_ladder() const
+	{
+		return ladder;
+	}
+
+	void Player::set_chair(int32_t itemid)
+	{
+		chair_itemid = itemid;
+
+		if (itemid > 0)
+		{
+			std::string strprefix = "0" + std::to_string(itemid / 10000);
+			std::string strid = "0" + std::to_string(itemid);
+
+			nl::node item_node = nl::nx::item["Install"][strprefix + ".img"][strid];
+
+			// Bottom-centre a bitmap on the feet: the Animation subtracts each
+			// frame's origin at draw time, so we add it back and shift by half the
+			// width / full height. The net anchor is the sprite's bottom-centre,
+			// regardless of whatever origin the art was authored with.
+			auto ground_offset = [](nl::node frame0) -> Point<int16_t>
+			{
+				nl::bitmap bmp = frame0;
+				int16_t w = static_cast<int16_t>(bmp.width());
+				int16_t h = static_cast<int16_t>(bmp.height());
+				if (h <= 0)
+					return Point<int16_t>(0, 0);
+				Point<int16_t> origin = frame0["origin"];
+				return origin - Point<int16_t>(static_cast<int16_t>(w / 2), h);
+			};
+
+			nl::node effect_node = item_node["effect"];
+			nl::node front_node = item_node["effect2"];
+
+			// info/ai marks a Nano-Banana-generated chair. Only those get the
+			// automatic geometry (size from the sprite, ground at the feet, seat
+			// the body in the middle). Real Nexon chairs keep their hand-authored
+			// origin/pos and the legacy -50 lift, untouched.
+			if (item_node["info"]["ai"].get_bool())
+			{
+				chair_pos = ground_offset(effect_node["0"]);
+
+				int16_t chair_h = static_cast<int16_t>(nl::bitmap(effect_node["0"]).height());
+
+				// The seated pose carries the hips this many pixels above the
+				// character's foot-anchor, so lifting the anchor exactly to the
+				// cushion floats the body above it. Drop the body by this constant
+				// so the butt meets the seat. It is a property of the single sit
+				// pose — calibrated once, identical for every chair — so seat data
+				// stays the true cushion top and must NOT pre-shave it.
+				constexpr int16_t SIT_HIP_OFFSET = 12;
+
+				if (chair_h > 0)
+				{
+					// A side-view character sits on the chair's centreline, so the
+					// body is always centred horizontally on the chair — seat.x is
+					// ignored (an off-centre value just throws the body to one side,
+					// worse on wide front-facing chairs). Only the vertical seat
+					// matters: info/seat.y is the measured cushion-top pixel (y from
+					// the top), read off the render like the hat brow. Absent -> seat
+					// at the chair's vertical middle.
+					nl::node seat = item_node["info"]["seat"];
+					int16_t dy = seat
+						? static_cast<int16_t>((int16_t)seat["y"] - chair_h)
+						: static_cast<int16_t>(-(chair_h / 2));
+
+					sit_offset = Point<int16_t>(0, static_cast<int16_t>(dy + SIT_HIP_OFFSET));
+				}
+				else
+				{
+					sit_offset = Point<int16_t>(0, 0);
+				}
+
+				// effect2 (sign / aura in front of the body): centre it on the chair
+				// and sit its bottom edge on the chair's top edge, so one rule floats
+				// it above the seat for any chair. ground_offset centres it and puts
+				// its bottom at the feet; lift by the chair height to reach the top.
+				chair_pos_front = ground_offset(front_node["0"])
+					- Point<int16_t>(0, (chair_h > 0) ? chair_h : (int16_t)0);
+			}
+			else
+			{
+				// Vanilla chair: draw the effect at feet + info/pos + the fixed
+				// -50 lift, and leave the body foot-anchored (original behaviour).
+				nl::node pos_node = effect_node["pos"];
+				chair_pos = (pos_node
+					? Point<int16_t>(pos_node["x"], pos_node["y"])
+					: Point<int16_t>(0, 0)) + Point<int16_t>(0, -50);
+
+				nl::node front_pos = front_node["pos"];
+				chair_pos_front = (front_pos
+					? Point<int16_t>(front_pos["x"], front_pos["y"])
+					: Point<int16_t>(0, 0)) + Point<int16_t>(0, -50);
+
+				sit_offset = Point<int16_t>(0, 0);
+			}
+
+			chair_anim = effect_node ? Animation(effect_node) : Animation();
+			chair_anim_front = front_node ? Animation(front_node) : Animation();
+		}
+		else
+		{
+			chair_anim = Animation();
+			chair_anim_front = Animation();
+			sit_offset = Point<int16_t>(0, 0);
+		}
+	}
+}
