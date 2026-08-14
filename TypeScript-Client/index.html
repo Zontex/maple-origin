@@ -11,6 +11,18 @@
     <link rel="icon" href="/favicon.png" />
   </head>
   <body>
+    <!-- Portrait blocker (touch devices): the game is landscape-only.
+         True orientation locking isn't possible on the mobile web (iOS has
+         no lock API; Android only in fullscreen) — the Capacitor build
+         locks it natively. -->
+    <div id="rotate-overlay" style="display:none; position:fixed; inset:0; z-index:1000;
+         background:#000; color:#fff; text-align:center; font-family:Arial, sans-serif;">
+      <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);">
+        <div style="font-size:56px; line-height:1;">&#128241;&#8618;</div>
+        <div style="font-size:20px; font-weight:bold; margin-top:16px;">Please rotate your device</div>
+        <div style="font-size:14px; color:#aaa; margin-top:8px;">MapleOrigin plays in landscape</div>
+      </div>
+    </div>
     <div id="game-wrapper" class="game-wrapper">
       <canvas id="game" height="600" width="800" tabindex="-1"></canvas>
       <div

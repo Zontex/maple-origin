@@ -14,7 +14,26 @@ import { tryAutoLogin, hasDevSession, saveDevSnapshot } from "./DevAutoLogin";
 
 import config from "./Config";
 
+// Landscape guard for touch devices: show the rotate overlay in portrait,
+// and opportunistically lock orientation where the platform allows it
+// (Android fullscreen; iOS has no lock API — overlay only).
+const setupOrientationGuard = () => {
+  const isTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  if (!isTouch) return;
+  const overlay = document.getElementById("rotate-overlay");
+  const update = () => {
+    const portrait = window.innerHeight > window.innerWidth;
+    if (overlay) overlay.style.display = portrait ? "block" : "none";
+  };
+  window.addEventListener("resize", update);
+  window.addEventListener("orientationchange", update);
+  update();
+  // Best-effort native lock (works in installed/fullscreen contexts)
+  (screen.orientation as any)?.lock?.("landscape").catch(() => {});
+};
+
 const startGame = async () => {
+  setupOrientationGuard();
   const gameWrapper = document.getElementById("game-wrapper");
   const canvas: GameCanvas = new GameCanvas(gameWrapper!);
 
