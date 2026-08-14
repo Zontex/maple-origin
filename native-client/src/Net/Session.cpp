@@ -19,6 +19,88 @@
 
 #include "../Configuration.h"
 
+#ifdef USE_MW_JSON
+#include "MapleWeb.h"
+
+namespace ms
+{
+	// MapleWeb JSON mode: the socket is a WebSocket, framing/crypto vanish
+	// (one WS text frame = one JSON message), and dispatch goes through
+	// mw::forward instead of the binary PacketSwitch.
+	Session::Session()
+	{
+		connected = false;
+	}
+
+	Session::~Session()
+	{
+		if (connected)
+			socket.close();
+	}
+
+	bool Session::init(const char* host, const char* port)
+	{
+		std::string url = std::string("ws://") + host + ":" + port;
+		connected = socket.open(url);
+		return connected;
+	}
+
+	Error Session::init()
+	{
+		std::string HOST = Setting<ServerIP>::get().load();
+		std::string PORT = Setting<ServerPort>::get().load();
+
+		if (!init(HOST.c_str(), PORT.c_str()))
+			return Error::CONNECTION;
+
+		return Error::NONE;
+	}
+
+	void Session::reconnect(const char* address, const char* port)
+	{
+		socket.close();
+		init(address, port);
+	}
+
+	void Session::reconnect()
+	{
+		std::string HOST = Setting<ServerIP>::get().load();
+		std::string PORT = Setting<ServerPort>::get().load();
+		reconnect(HOST.c_str(), PORT.c_str());
+	}
+
+	void Session::write(int8_t*, size_t)
+	{
+		// Legacy binary path — inert in JSON mode (OutPacket::dispatch logs)
+	}
+
+	void Session::send_json(const std::string& text)
+	{
+		if (connected)
+			socket.send(text);
+	}
+
+	void Session::read()
+	{
+		connected = socket.is_connected();
+
+		std::string text;
+		while (socket.poll(text))
+			mw::forward(text);
+
+		mw::tick();
+	}
+
+	void Session::process(const int8_t*, size_t) {}
+
+	bool Session::is_connected() const
+	{
+		return connected;
+	}
+}
+
+#else // legacy v83 binary transport
+
 namespace ms
 {
 	Session::Session()
@@ -163,3 +245,4 @@ namespace ms
 		return connected;
 	}
 }
+#endif // USE_MW_JSON

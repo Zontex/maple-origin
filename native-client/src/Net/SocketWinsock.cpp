@@ -17,7 +17,7 @@
 //////////////////////////////////////////////////////////////////////////////////
 #include "SocketWinsock.h"
 
-#ifndef USE_ASIO
+#if !defined(USE_ASIO) && !defined(USE_MW_JSON)
 #include <ws2tcpip.h>
 
 #pragma comment (lib, "Ws2_32.lib")

@@ -37,6 +37,7 @@
 #include "../../Character/Job.h"
 
 #include "../../Net/Packets/SelectCharPackets.h"
+#include "../../Net/MapleWeb.h"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -843,7 +844,11 @@ namespace ms
 						}
 						case 2:
 						{
+#ifdef USE_MW_JSON
+							mw::send_select_character(id);
+#else
 							SelectCharPacket(id).dispatch();
+#endif
 							break;
 						}
 					}

@@ -29,6 +29,7 @@
 #include "../../Constants.h"
 
 #include "../../Net/Packets/LoginPackets.h"
+#include "../../Net/MapleWeb.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -252,7 +253,13 @@ namespace ms
 		auto loginwait = UI::get().get_element<UILoginWait>();
 
 		if (loginwait && loginwait->is_active())
+		{
+#ifdef USE_MW_JSON
+			mw::send_login(account_text, password_text);
+#else
 			LoginPacket(account_text, password_text).dispatch();
+#endif
+		}
 	}
 
 	void UILogin::open_url(uint16_t id)

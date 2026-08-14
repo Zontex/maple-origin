@@ -35,12 +35,19 @@ namespace ms
 
 	void OutPacket::dispatch()
 	{
+#ifdef USE_MW_JSON
+		// MapleWeb: legacy v83 binary sends are inert — every game action is
+		// re-sent through JsonPackets instead. Logging the opcode makes
+		// unported call sites easy to spot during bring-up.
+		std::cout << "[MW] dropped legacy packet opcode " << opcode
+			<< " (" << bytes.size() << " bytes)\n";
+#else
 		if (Configuration::get().get_show_packets())
 			std::cout << "Sent Packet: " << opcode
 				<< " (" << bytes.size() << " bytes)\n"; // '\n' not std::endl: never force-flush per packet
 
 		Session::get().write(bytes.data(), bytes.size());
-
+#endif
 	}
 
 	void OutPacket::skip(size_t count)

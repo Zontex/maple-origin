@@ -17,11 +17,18 @@
 //////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+// MapleWeb: JSON-over-WebSocket transport to the MapleWeb server (see
+// PROTOCOL.md). Replaces the v83 TCP + MapleCrypto stack entirely; legacy
+// binary OutPacket sends become no-ops so unported systems degrade safely.
+#define USE_MW_JSON
+
 // If defined use Asio for networking, otherwise use Winsock.
 //#define USE_ASIO
 
 // Use cryptography for communication with the server
+#ifndef USE_MW_JSON
 #define USE_CRYPTO
+#endif
 
 // If defined use NX, otherwise use WZ.
 #define USE_NX

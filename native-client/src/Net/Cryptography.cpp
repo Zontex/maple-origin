@@ -17,6 +17,10 @@
 //////////////////////////////////////////////////////////////////////////////////
 #include "Cryptography.h"
 
+// MapleWeb JSON mode never touches MapleCrypto — the upstream no-crypto
+// fallback in this file is bit-rotted, so the whole unit compiles out.
+#ifndef USE_MW_JSON
+
 namespace ms
 {
 	Cryptography::Cryptography(const int8_t* handshake)
@@ -374,3 +378,4 @@ namespace ms
 		}
 	}
 }
+#endif // USE_MW_JSON

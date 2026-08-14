@@ -25,7 +25,10 @@
 
 #include "../Template/Singleton.h"
 
-#ifdef USE_ASIO
+#ifdef USE_MW_JSON
+#include "SocketWebSocket.h"
+#include <string>
+#elif defined(USE_ASIO)
 #include "SocketAsio.h"
 #else
 #include "SocketWinsock.h"
@@ -52,19 +55,28 @@ namespace ms
 		// Check if the connection is alive
 		bool is_connected() const;
 
+#ifdef USE_MW_JSON
+		// Send one JSON text frame (the MapleWeb protocol; see MapleWeb.h)
+		void send_json(const std::string& text);
+#endif
+
 	private:
 		bool init(const char* host, const char* port);
 		void process(const int8_t* bytes, size_t available);
 
+#ifndef USE_MW_JSON
 		Cryptography cryptography;
 		PacketSwitch packetswitch;
 
 		int8_t buffer[MAX_PACKET_LENGTH];
 		size_t length;
 		size_t pos;
+#endif
 		bool connected;
 
-#ifdef USE_ASIO
+#ifdef USE_MW_JSON
+		SocketWebSocket socket;
+#elif defined(USE_ASIO)
 		SocketAsio socket;
 #else
 		SocketWinsock socket;

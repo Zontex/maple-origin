@@ -109,9 +109,14 @@ if(APPLE)
     # Legacy GL 2.1 + GLSL 120 path — deprecated on macOS but fully functional
     target_compile_definitions(OpenStory PRIVATE
         GL_SILENCE_DEPRECATION
-        USE_ASIO          # SocketAsio compiles on POSIX; replaced by WS in Phase 1
         MW_STUB_AUDIO     # BASS is Windows-only here; audio is a no-op for M1
     )
+
+    # MapleWeb JSON-over-WebSocket transport (replaces v83 TCP + MapleCrypto)
+    set(USE_ZLIB FALSE CACHE BOOL "" FORCE)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/vendor/IXWebSocket)
+    target_link_libraries(OpenStory ixwebsocket)
+    target_include_directories(OpenStory PUBLIC ${CMAKE_SOURCE_DIR}/vendor/IXWebSocket)
 elseif(UNIX)
     target_link_libraries(OpenStory ${PROJECT_SOURCE_DIR}/libs/NoLifeNx/nlnx/build/libNoLifeNx.a)
     TARGET_INCLUDE_DIRECTORIES(OpenStory PUBLIC ${PROJECT_SOURCE_DIR}/libs/NoLifeNx)
