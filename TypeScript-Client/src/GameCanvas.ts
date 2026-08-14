@@ -146,8 +146,14 @@ class GameCanvas {
     // The stylesheet's #game rule is fixed 4:3 — override it with the actual
     // internal aspect so a widescreen resolution fills a widescreen window
     // edge to edge instead of being pillarboxed back to 4:3.
+    // vh first as fallback, then dvh: on mobile browsers 100vh is the LARGE
+    // viewport (URL bar hidden), so a visible URL bar cropped the bottom of
+    // the game — dvh tracks the actually-visible viewport. Browsers without
+    // dvh support ignore the second assignment and keep the vh value.
     this.game.style.width = `min(100vw, calc(100vh * ${width} / ${height}))`;
     this.game.style.height = `min(100vh, calc(100vw * ${height} / ${width}))`;
+    this.game.style.width = `min(100dvw, calc(100dvh * ${width} / ${height}))`;
+    this.game.style.height = `min(100dvh, calc(100dvw * ${height} / ${width}))`;
     // Resizing a canvas resets its context state
     this.context.imageSmoothingEnabled = false;
     // Reposition DOM overlays (MapleInput) that scale off canvas size
