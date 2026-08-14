@@ -8,9 +8,7 @@ import UIState from './UIState';
 import GameCanvas from "./GameCanvas";
 import MySocket from "./mysocket";
 import config from "./Config";
-import { applyLoginResolution, applyConfiguredResolution } from "./Resolution";
-import UIMobileLogin from "./UI/UIMobileLogin";
-import { isTouchDevice } from "./UI/TouchControls";
+import { applyLoginResolution } from "./Resolution";
 
 export enum LoginSubState {
   LOGIN_SCREEN = 'LOGIN_SCREEN',
@@ -52,23 +50,6 @@ const LoginState: LoginState = {
 
   async initialize(canvas?: GameCanvas): Promise<void> {
     this._canvas = canvas ?? null;
-
-    // Touch devices get the mobile-native flow (DOM login card + canvas
-    // character cards) at the aspect-fit resolution — the 800x600 login
-    // map is desktop-only. Character sprite preload still runs.
-    if (isTouchDevice()) {
-      (this as any)._mobileFlow = true;
-      applyConfiguredResolution(canvas ?? null);
-      MyCharacter.deactivate();
-      MapleMap.PlayerCharacter = null;
-      this.characterLoadPromise = MyCharacter.baseBody
-        ? Promise.resolve()
-        : MyCharacter.load();
-      await UIMobileLogin.initialize(canvas!);
-      return;
-    }
-    (this as any)._mobileFlow = false;
-
     // Classic size for the whole login flow — config included, since the
     // background parallax and camera math read config live. Coming back
     // from a widescreen game session must shrink all of it, not just the
@@ -176,10 +157,6 @@ const LoginState: LoginState = {
     camera: CameraInterface,
     canvas: GameCanvas
   ): void {
-    if ((this as any)._mobileFlow) {
-      UIMobileLogin.doUpdate(msPerTick, camera, canvas);
-      return;
-    }
     if (MapleMap.doneLoading) {
       MapleMap.update(msPerTick);
 
@@ -194,10 +171,6 @@ const LoginState: LoginState = {
     msPerTick: number,
     tdelta: number
   ): void {
-    if ((this as any)._mobileFlow) {
-      UIMobileLogin.doRender(canvas, camera, lag, msPerTick, tdelta);
-      return;
-    }
     if (MapleMap.doneLoading) {
       MapleMap.render(canvas, camera, lag, msPerTick, tdelta);
       UILogin.doRender(canvas, camera, lag, msPerTick, tdelta);
@@ -206,7 +179,6 @@ const LoginState: LoginState = {
 
   async enterGame(): Promise<void> {
     UILogin.removeInputs();
-    if ((this as any)._mobileFlow) UIMobileLogin.cleanup();
 
     // The switch to the configured in-game resolution happens inside
     // MapState.initialize — not here. Widening the canvas before the map
