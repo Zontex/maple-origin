@@ -260,174 +260,11 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       // after it when the screen has already changed
       if (uiLoginRef.gameInAudio) PLAY_AUDIO(uiLoginRef.gameInAudio);
 
-      const charData = result.character;
-      const { default: MyChar, reviveOfflineDeath } = await import('../MyCharacter');
-      // Died and closed the game before respawning → revive like the original
-      // server does on load (50 HP at the death map's returnMap)
-      await reviveOfflineDeath(charData);
-      // Block saves until the full restore below succeeds — a save with a
-      // half-restored character would wipe DB inventory/equips
-      (MyChar as any)._restoreComplete = false;
-
-      // Apply appearance
-      MyChar.name = charData.name || 'Player';
-      await MyChar.setSkinColor(charData.skin ?? 0);
-      await MyChar.setFace(charData.face ?? 20000);
-      await MyChar.setHair(charData.hair ?? 30030);
-
-      // Apply stats
-      MyChar.hp = charData.hp;
-      MyChar.maxHp = charData.maxHp;
-      MyChar.mp = charData.mp;
-      MyChar.maxMp = charData.maxMp;
-      MyChar.fame = charData.fame ?? 0;
-      if (MyChar.stats) {
-        MyChar.stats.level = charData.stats.level;
-        MyChar.stats.str = charData.stats.str;
-        MyChar.stats.dex = charData.stats.dex;
-        MyChar.stats.int = charData.stats.int;
-        MyChar.stats.luk = charData.stats.luk;
-        MyChar.stats.abilityPoints = charData.stats.ap;
-        MyChar.stats.maxHp = charData.stats.maxHp;
-        MyChar.stats.maxMp = charData.stats.maxMp;
-        MyChar.stats.setJobId(charData.stats.jobId);
-        MyChar.job = charData.stats.jobId;
-      }
-      MyChar.exp = charData.exp ?? 0;
-      const { default: ExpTable } = await import('../Constants/ExpTable');
-      MyChar.maxExp = ExpTable.getExpNeededForLevel(charData.stats.level);
-      MyChar.recalcLocalStats();
-
-      // Apply equipped items — clear and reload from DB. equippedItemData is
-      // per-slot scroll bonuses and belongs to the same wipe: left behind, the
-      // previous character's scrolls kept applying to whatever this one happens
-      // to wear in that slot.
-      MyChar.equips = [];
-      MyChar.equippedItemIds = {};
-      MyChar.equippedItemData = {};
-      if (charData.equipped) {
-        for (const eq of charData.equipped) {
-          try {
-            await MyChar.attachEquip(eq.slot, eq.item_id);
-            // Restore per-instance scroll data onto the worn slot
-            if (eq.equip_data) {
-              try {
-                MyChar.equippedItemData[eq.slot] = JSON.parse(eq.equip_data);
-              } catch { /* corrupt JSON — treat as fresh */ }
-            }
-            console.log('[Login] Equipped slot', eq.slot, 'item', eq.item_id);
-          } catch (e) {
-            console.error('[Login] Failed to equip slot', eq.slot, 'item', eq.item_id, e);
-          }
-        }
-        MyChar.recalcLocalStats();
-      }
-
-      // Apply inventory
-      if (MyChar.inventory && charData.inventory) {
-        const Item = (await import('../Inventory/Item')).default;
-        for (const tab of ['equip', 'use', 'setup', 'etc', 'cash'] as const) {
-          const items = charData.inventory[tab] || [];
-          // Place items at their saved slot index; keep holes as null
-          const restored: any[] = new Array(items.length).fill(null);
-          for (let slot = 0; slot < items.length; slot++) {
-            const item = items[slot];
-            if (item && item.itemId) {
-              try {
-                restored[slot] = await Item.fromOpts({
-                  itemId: item.itemId,
-                  quantity: item.quantity,
-                  equipData: item.equipData ?? undefined,
-                });
-              } catch { /* skip failed items */ }
-            }
-          }
-          (MyChar.inventory as any)[tab] = restored;
-        }
-        MyChar.inventory.mesos = charData.mesos ?? 0;
-        MyChar.inventory.nx = charData.nx ?? 0;
-      }
-
-      // Clear the previous character's quest log FIRST, and unconditionally —
-      // the restore below only ever adds, and a character with no quests at all
-      // skips that block entirely, which is how a brand new character inherited
-      // the last one's completed quests and mob progress.
-      MyChar.questManager?.reset();
-
-      // Apply quests. Quest data must be loaded first: forceStartQuest reads
-      // requirements to rebuild mob progress — with the data still loading it
-      // restored nothing and seeded "not fulfilled", so the poll later saw a
-      // false→true flip and popped "Quest completed" on every login.
-      if (MyChar.questManager && charData.quests) {
-        await MyChar.questManager.initialize();
-        for (const q of charData.quests) {
-          if (q.state === 2) {
-            MyChar.questManager.forceCompleteQuest(q.quest_id, q.completed_at ?? 0);
-          } else if (q.state === 1) {
-            let mobProgress: Record<string, number> | undefined;
-            try {
-              if (q.mob_progress) mobProgress = JSON.parse(q.mob_progress);
-            } catch {}
-            MyChar.questManager.forceStartQuest(q.quest_id, mobProgress);
-          }
-        }
-        // After every quest is back (prereq-quest ordering settled)
-        MyChar.questManager.reseedFulfilled();
-      }
-
-      // Apply skills
-      if (MyChar.skillManager && charData.skills) {
-        MyChar.skillManager.deserialize(charData.skills);
-      }
-
-      // Apply hotkey bindings (skills + items). Unconditional: an empty
-      // keymap is a fresh character, and deserialize must still run to wipe
-      // whatever character was loaded before it this session.
-      {
-        const UIHotkeyBar = (await import('./UIHotkeyBar')).default;
-        await UIHotkeyBar.deserialize(charData.keymap || []);
-      }
-
-      // Apply SP
-      if (MyChar.stats && charData.stats?.spByTier) {
-        // Per-tier split wins; the flat `sp` below is the pre-split fallback.
-        MyChar.stats.spByTier = { ...charData.stats.spByTier };
-      } else if (MyChar.stats && charData.stats?.sp !== undefined) {
-        MyChar.stats.sp = charData.stats.sp;
-      }
-
-      // Store server character ID for saving later
-      (MyChar as any)._serverCharId = charData.id;
-      console.log('[Login] Set _serverCharId =', charData.id);
-      // Set starting map from saved data
-      (MyChar as any)._startMapId = charData.mapId;
-      (MyChar as any)._startPosX = charData.posX;
-      (MyChar as any)._startPosY = charData.posY;
-
-      // Expired Cash Shop rentals go before the flip below, so the follow-up
-      // save persists the removal rather than a half-swept state
-      try {
-        const { sweepExpiredCashItems } = await import('../Shop/CashShopData');
-        await sweepExpiredCashItems(MyChar);
-      } catch (e) {
-        console.warn('[Login] expiry sweep failed', e);
-      }
-
-      // Restore finished — saves are safe from here on
-      (MyChar as any)._restoreComplete = true;
-
-      // Save dev session for auto-login on HMR reload
-      try {
-        const { saveDevSession } = await import('../DevAutoLogin');
-        saveDevSession(
-          (uiLoginRef as any)._lastUsername || 'admin',
-          (uiLoginRef as any)._lastPassword || 'admin',
-          uiLoginRef.selectedWorldId || 0,
-          selectedChar._serverId,
-        );
-      } catch {}
-
-      await LoginState.enterGame();
+      await restoreCharacterAndEnterGame(result.character, {
+        username: (uiLoginRef as any)._lastUsername || 'admin',
+        password: (uiLoginRef as any)._lastPassword || 'admin',
+        worldId: uiLoginRef.selectedWorldId || 0,
+      });
     },
   });
   ClickManager.addButton(startButton);
@@ -2102,3 +1939,179 @@ UILogin.showTOS = function () {
 }
 
 export default UILogin;
+
+/**
+ * Hydrate MyCharacter from a select_character_result DTO and enter the game.
+ * Shared by the desktop character-select flow and the mobile login flow —
+ * this is the save-wipe-sensitive path and must exist exactly once.
+ */
+export async function restoreCharacterAndEnterGame(
+  charData: any,
+  opts: { username?: string; password?: string; worldId?: number } = {}
+): Promise<void> {
+  const { default: MyChar, reviveOfflineDeath } = await import('../MyCharacter');
+  // Died and closed the game before respawning → revive like the original
+  // server does on load (50 HP at the death map's returnMap)
+  await reviveOfflineDeath(charData);
+  // Block saves until the full restore below succeeds — a save with a
+  // half-restored character would wipe DB inventory/equips
+  (MyChar as any)._restoreComplete = false;
+
+  // Apply appearance
+  MyChar.name = charData.name || 'Player';
+  await MyChar.setSkinColor(charData.skin ?? 0);
+  await MyChar.setFace(charData.face ?? 20000);
+  await MyChar.setHair(charData.hair ?? 30030);
+
+  // Apply stats
+  MyChar.hp = charData.hp;
+  MyChar.maxHp = charData.maxHp;
+  MyChar.mp = charData.mp;
+  MyChar.maxMp = charData.maxMp;
+  MyChar.fame = charData.fame ?? 0;
+  if (MyChar.stats) {
+    MyChar.stats.level = charData.stats.level;
+    MyChar.stats.str = charData.stats.str;
+    MyChar.stats.dex = charData.stats.dex;
+    MyChar.stats.int = charData.stats.int;
+    MyChar.stats.luk = charData.stats.luk;
+    MyChar.stats.abilityPoints = charData.stats.ap;
+    MyChar.stats.maxHp = charData.stats.maxHp;
+    MyChar.stats.maxMp = charData.stats.maxMp;
+    MyChar.stats.setJobId(charData.stats.jobId);
+    MyChar.job = charData.stats.jobId;
+  }
+  MyChar.exp = charData.exp ?? 0;
+  const { default: ExpTable } = await import('../Constants/ExpTable');
+  MyChar.maxExp = ExpTable.getExpNeededForLevel(charData.stats.level);
+  MyChar.recalcLocalStats();
+
+  // Apply equipped items — clear and reload from DB. equippedItemData is
+  // per-slot scroll bonuses and belongs to the same wipe: left behind, the
+  // previous character's scrolls kept applying to whatever this one happens
+  // to wear in that slot.
+  MyChar.equips = [];
+  MyChar.equippedItemIds = {};
+  MyChar.equippedItemData = {};
+  if (charData.equipped) {
+    for (const eq of charData.equipped) {
+      try {
+        await MyChar.attachEquip(eq.slot, eq.item_id);
+        // Restore per-instance scroll data onto the worn slot
+        if (eq.equip_data) {
+          try {
+            MyChar.equippedItemData[eq.slot] = JSON.parse(eq.equip_data);
+          } catch { /* corrupt JSON — treat as fresh */ }
+        }
+      } catch (e) {
+        console.error('[Login] Failed to equip slot', eq.slot, 'item', eq.item_id, e);
+      }
+    }
+    MyChar.recalcLocalStats();
+  }
+
+  // Apply inventory
+  if (MyChar.inventory && charData.inventory) {
+    const Item = (await import('../Inventory/Item')).default;
+    for (const tab of ['equip', 'use', 'setup', 'etc', 'cash'] as const) {
+      const items = charData.inventory[tab] || [];
+      // Place items at their saved slot index; keep holes as null
+      const restored: any[] = new Array(items.length).fill(null);
+      for (let slot = 0; slot < items.length; slot++) {
+        const item = items[slot];
+        if (item && item.itemId) {
+          try {
+            restored[slot] = await Item.fromOpts({
+              itemId: item.itemId,
+              quantity: item.quantity,
+              equipData: item.equipData ?? undefined,
+            });
+          } catch { /* skip failed items */ }
+        }
+      }
+      (MyChar.inventory as any)[tab] = restored;
+    }
+    MyChar.inventory.mesos = charData.mesos ?? 0;
+    MyChar.inventory.nx = charData.nx ?? 0;
+  }
+
+  // Clear the previous character's quest log FIRST, and unconditionally —
+  // the restore below only ever adds, and a character with no quests at all
+  // skips that block entirely, which is how a brand new character inherited
+  // the last one's completed quests and mob progress.
+  MyChar.questManager?.reset();
+
+  // Apply quests. Quest data must be loaded first: forceStartQuest reads
+  // requirements to rebuild mob progress — with the data still loading it
+  // restored nothing and seeded "not fulfilled", so the poll later saw a
+  // false→true flip and popped "Quest completed" on every login.
+  if (MyChar.questManager && charData.quests) {
+    await MyChar.questManager.initialize();
+    for (const q of charData.quests) {
+      if (q.state === 2) {
+        MyChar.questManager.forceCompleteQuest(q.quest_id, q.completed_at ?? 0);
+      } else if (q.state === 1) {
+        let mobProgress: Record<string, number> | undefined;
+        try {
+          if (q.mob_progress) mobProgress = JSON.parse(q.mob_progress);
+        } catch {}
+        MyChar.questManager.forceStartQuest(q.quest_id, mobProgress);
+      }
+    }
+    // After every quest is back (prereq-quest ordering settled)
+    MyChar.questManager.reseedFulfilled();
+  }
+
+  // Apply skills
+  if (MyChar.skillManager && charData.skills) {
+    MyChar.skillManager.deserialize(charData.skills);
+  }
+
+  // Apply hotkey bindings (skills + items). Unconditional: an empty
+  // keymap is a fresh character, and deserialize must still run to wipe
+  // whatever character was loaded before it this session.
+  {
+    const UIHotkeyBar = (await import('./UIHotkeyBar')).default;
+    await UIHotkeyBar.deserialize(charData.keymap || []);
+  }
+
+  // Apply SP
+  if (MyChar.stats && charData.stats?.spByTier) {
+    // Per-tier split wins; the flat `sp` below is the pre-split fallback.
+    MyChar.stats.spByTier = { ...charData.stats.spByTier };
+  } else if (MyChar.stats && charData.stats?.sp !== undefined) {
+    MyChar.stats.sp = charData.stats.sp;
+  }
+
+  // Store server character ID for saving later
+  (MyChar as any)._serverCharId = charData.id;
+  // Set starting map from saved data
+  (MyChar as any)._startMapId = charData.mapId;
+  (MyChar as any)._startPosX = charData.posX;
+  (MyChar as any)._startPosY = charData.posY;
+
+  // Expired Cash Shop rentals go before the flip below, so the follow-up
+  // save persists the removal rather than a half-swept state
+  try {
+    const { sweepExpiredCashItems } = await import('../Shop/CashShopData');
+    await sweepExpiredCashItems(MyChar);
+  } catch (e) {
+    console.warn('[Login] expiry sweep failed', e);
+  }
+
+  // Restore finished — saves are safe from here on
+  (MyChar as any)._restoreComplete = true;
+
+  // Save dev session for auto-login on HMR reload
+  try {
+    const { saveDevSession } = await import('../DevAutoLogin');
+    saveDevSession(
+      opts.username || 'admin',
+      opts.password || 'admin',
+      opts.worldId || 0,
+      charData.id,
+    );
+  } catch {}
+
+  await LoginState.enterGame();
+}
