@@ -37,6 +37,7 @@ import PartyMenuSprite from "./UI/Menu/PartyMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
 import PetManager from "./Pet/PetManager";
 import TouchControls, { isTouchDevice as isTouchDeviceTC } from "./UI/TouchControls";
+import MobileHUD from "./UI/MobileHUD";
 import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
 import UISystemOption from "./UI/UISystemOption";
@@ -549,7 +550,8 @@ MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
       // Minimap click (world button)
       if (UIMiniMap.handleClick(cx, cy)) return;
 
-      // Touch devices: tapping a quickslot fires the bound skill/item
+      // Touch devices: mobile HUD icons + quickslot taps
+      if (MobileHUD.handleTap(cx, cy, MapStateInstance)) return;
       if (TouchControls.active && UIHotkeyBar.handleTap(cx, cy)) return;
 
       // Quest Helper widget — swallow clicks over it (handled via wasClicked)
@@ -1003,8 +1005,17 @@ MapStateInstance.doRender = function (
     // stays down for the duration so only the scene shows. The Cash Shop
     // overlay borrows the same treatment — HUD, minimap and chat input all
     // drop while it has the screen.
+    // Touch devices replace the desktop status bar/quickslot with the
+    // MobileHUD + touch controls (MapleStory M style)
+    const mobileHud = TouchControls.active;
+    MobileHUD.active = mobileHud;
+    if (mobileHud) {
+      for (const btn of (UIMap as any).buttons ?? []) btn.isHidden = true;
+      UIHotkeyBar.isVisible = false;
+    }
+
     const inCutscene = DirectionScene.isActive || CashShopUI.isVisible;
-    setHudHiddenForCutscene(inCutscene);
+    setHudHiddenForCutscene(inCutscene || mobileHud);
 
     if (!inCutscene) {
       // Hotkey bar above status bar
@@ -1041,8 +1052,9 @@ MapStateInstance.doRender = function (
     // Party quest overlays: event timer clock, map-effect banner, clear effect
     HenesysPQ.render(canvas);
 
-    // On-screen joystick/buttons (touch devices only) — topmost
+    // On-screen joystick/buttons + mobile HUD (touch devices only) — topmost
     TouchControls.draw(canvas);
+    MobileHUD.draw(canvas);
   }
 
   // Drag ghost icon — on top of all UI

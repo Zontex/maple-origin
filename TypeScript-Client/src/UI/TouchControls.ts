@@ -1,19 +1,21 @@
 import GameCanvas from '../GameCanvas';
 import config from '../Config';
 import KeyBindings from '../KeyBindings';
+import UIHotkeyBar from './UIHotkeyBar';
 
 /**
- * MapleStory-M-style on-screen controls for touch devices: a virtual
- * joystick (bottom-left) and action buttons (bottom-right), drawn on the
- * game canvas and multi-touch aware — move with one thumb while attacking
- * with the other.
+ * MapleStory-M-style on-screen controls for touch devices.
  *
- * Integration model: the controls inject VIRTUAL KEY STATE into
- * GameCanvas.pressedKeys through setVirtualKey. The entire input layer
- * (movement, tryJump's rope re-arm, attack cadence, pickup) already polls
- * isKeyDown, so every keyboard nuance works unchanged. GameCanvas routes
- * touches here first (claimTouch); unclaimed touches fall through to the
- * mouse emulation that drives regular UI taps.
+ * Movement is a FLOATING pad: any touch in the lower-left region of the
+ * screen becomes the stick, anchored where the thumb lands — there is no
+ * small grab circle to miss, which is what made earlier joystick touches
+ * fall through to cursor emulation ("can't move"). The right side is the
+ * action cluster: big ATK, JUMP, LOOT, and four skill slots that mirror
+ * the first hotkey-bar slots (icons included, tap to fire).
+ *
+ * Controls inject VIRTUAL KEY STATE (GameCanvas.setVirtualKey), so the
+ * entire existing input layer — movement, tryJump's rope re-arm, attack
+ * cadence, pickup — works unchanged and follows user rebindings.
  */
 
 export function isTouchDevice(): boolean {
@@ -23,88 +25,116 @@ export function isTouchDevice(): boolean {
 interface VButton {
   id: string;
   label: string;
-  /** action name in KeyBindings (jump/attack/pickup) or a raw key name */
   action: string;
-  rawKey?: string; // when set, inject this key name instead of an action
   radius: number;
-  /** position factory — recomputed per frame so resolution changes follow */
   pos: () => { x: number; y: number };
   touchId: number | null;
 }
 
-const JOY_RADIUS = 76;
-const JOY_NUB = 34;
-const JOY_DEADZONE = 0.28; // fraction of radius before a direction engages
-const DIAGONAL_RATIO = 0.5; // |dy/dx| beyond which the vertical also engages
+const JOY_RADIUS = 70;
+const JOY_NUB = 30;
+const JOY_DEADZONE_PX = 14;      // floating stick: small fixed deadzone
+const DIAGONAL_RATIO = 0.45;
 
 const TouchControls = {
-  /** true while the map state wants the controls (touch device + in game) */
   active: false,
 
+  // Floating pad state
   _joyTouchId: null as number | null,
+  _joyOrigin: { x: 0, y: 0 },
   _joyDX: 0,
   _joyDY: 0,
 
-  // MapleStory-M-style cluster: big ATK under the right thumb, JUMP inside
-  // it, LOOT above — all clear of the bottom HUD strip (status bar +
-  // quickslot art occupy roughly the bottom 90px)
   _buttons: [
     {
-      id: 'attack', label: 'ATK', action: 'attack', radius: 50,
-      pos: () => ({ x: config.width - 88, y: config.height - 158 }),
+      id: 'attack', label: 'ATK', action: 'attack', radius: 52,
+      pos: () => ({ x: config.width - 86, y: config.height - 96 }),
       touchId: null,
     },
     {
       id: 'jump', label: 'JUMP', action: 'jump', radius: 40,
-      pos: () => ({ x: config.width - 196, y: config.height - 120 }),
+      pos: () => ({ x: config.width - 198, y: config.height - 74 }),
       touchId: null,
     },
     {
-      id: 'loot', label: 'LOOT', action: 'pickup', radius: 32,
-      pos: () => ({ x: config.width - 186, y: config.height - 226 }),
+      id: 'loot', label: 'LOOT', action: 'pickup', radius: 30,
+      pos: () => ({ x: config.width - 206, y: config.height - 168 }),
       touchId: null,
     },
   ] as VButton[],
 
-  joyCenter() {
-    return { x: 118, y: config.height - 170 };
+  // Skill arc: mirrors UIHotkeyBar slots (index 0..3), arcing up-left of ATK
+  _skillSlots: [
+    { slotIndex: 0, radius: 27, touchId: null as number | null,
+      pos: () => ({ x: config.width - 96, y: config.height - 208 }) },
+    { slotIndex: 1, radius: 27, touchId: null as number | null,
+      pos: () => ({ x: config.width - 168, y: config.height - 258 }) },
+    { slotIndex: 2, radius: 27, touchId: null as number | null,
+      pos: () => ({ x: config.width - 252, y: config.height - 280 }) },
+    { slotIndex: 3, radius: 27, touchId: null as number | null,
+      pos: () => ({ x: config.width - 338, y: config.height - 284 }) },
+  ],
+
+  /** Default (idle) pad anchor — also where the ghost pad draws */
+  padAnchor() {
+    return { x: 120, y: config.height - 150 };
   },
 
-  /**
-   * Try to claim a starting touch. Returns true when the touch belongs to
-   * the controls (GameCanvas must then NOT treat it as a mouse tap).
-   */
+  /** The whole lower-left region summons the floating pad */
+  inPadZone(x: number, y: number): boolean {
+    return x < config.width * 0.42 && y > config.height * 0.30;
+  },
+
   claimTouch(x: number, y: number, id: number): boolean {
     if (!this.active) return false;
 
-    const c = this.joyCenter();
-    // Generous grab area around the stick so thumbs don't need precision
-    if (this._joyTouchId === null && Math.hypot(x - c.x, y - c.y) <= JOY_RADIUS * 1.6) {
-      this._joyTouchId = id;
-      this._joyDX = x - c.x;
-      this._joyDY = y - c.y;
-      return true;
-    }
-
+    // Action buttons and skill slots first (they sit right of the pad zone)
     for (const b of this._buttons) {
       const p = b.pos();
-      if (b.touchId === null && Math.hypot(x - p.x, y - p.y) <= b.radius * 1.35) {
+      if (b.touchId === null && Math.hypot(x - p.x, y - p.y) <= b.radius * 1.3) {
         b.touchId = id;
         return true;
       }
     }
+    for (const s of this._skillSlots) {
+      const p = s.pos();
+      if (s.touchId === null && Math.hypot(x - p.x, y - p.y) <= s.radius * 1.3) {
+        s.touchId = id;
+        // Fire on press for responsiveness (same path as the bound key)
+        const slot = UIHotkeyBar.slots?.[s.slotIndex];
+        if (slot && slot.type !== 'none' && slot.actionId != null) {
+          if (slot.type === 'item') UIHotkeyBar.activateItem(slot.actionId);
+          else if (slot.type === 'skill') void UIHotkeyBar.activateSkill(slot.actionId);
+        }
+        return true;
+      }
+    }
+
+    // Floating movement pad
+    if (this._joyTouchId === null && this.inPadZone(x, y)) {
+      this._joyTouchId = id;
+      // Anchor at the touch, clamped so the full pad stays on screen
+      this._joyOrigin = {
+        x: Math.max(JOY_RADIUS, Math.min(config.width * 0.42, x)),
+        y: Math.max(config.height * 0.30 + JOY_RADIUS * 0.5,
+            Math.min(config.height - JOY_RADIUS * 0.6, y)),
+      };
+      this._joyDX = 0;
+      this._joyDY = 0;
+      return true;
+    }
+
     return false;
   },
 
   moveTouch(x: number, y: number, id: number): boolean {
     if (id === this._joyTouchId) {
-      const c = this.joyCenter();
-      this._joyDX = x - c.x;
-      this._joyDY = y - c.y;
+      this._joyDX = x - this._joyOrigin.x;
+      this._joyDY = y - this._joyOrigin.y;
       return true;
     }
-    // Buttons are press-and-hold; movement within/out of them is ignored
-    return this._buttons.some((b) => b.touchId === id);
+    return this._buttons.some((b) => b.touchId === id) ||
+      this._skillSlots.some((s) => s.touchId === id);
   },
 
   endTouch(id: number): boolean {
@@ -116,19 +146,18 @@ const TouchControls = {
       handled = true;
     }
     for (const b of this._buttons) {
-      if (b.touchId === id) {
-        b.touchId = null;
-        handled = true;
-      }
+      if (b.touchId === id) { b.touchId = null; handled = true; }
+    }
+    for (const s of this._skillSlots) {
+      if (s.touchId === id) { s.touchId = null; handled = true; }
     }
     return handled;
   },
 
   _virtualState: {} as Record<string, boolean>,
 
-  /** Per-frame: convert control state into virtual key state. Call BEFORE
-   *  the input polling in MapState.doUpdate. Edge-detected so a held
-   *  physical key is never stomped by the per-frame refresh. */
+  /** Per-frame: control state → virtual keys. Edge-detected so held
+   *  physical keys are never stomped. Call before input polling. */
   update(canvas: GameCanvas) {
     const setKey = (name: string, down: boolean) => {
       if (this._virtualState[name] === down) return;
@@ -137,20 +166,17 @@ const TouchControls = {
     };
 
     if (!this.active) {
-      // Make sure nothing sticks when controls get disabled mid-hold
       for (const name of ['left', 'right', 'up', 'down']) setKey(name, false);
       return;
     }
 
-    // Joystick → 8-way directions with hysteresis-free deadzone
     let left = false, right = false, up = false, down = false;
     if (this._joyTouchId !== null) {
       const dx = this._joyDX;
       const dy = this._joyDY;
-      const dead = JOY_RADIUS * JOY_DEADZONE;
       const adx = Math.abs(dx);
       const ady = Math.abs(dy);
-      if (Math.hypot(dx, dy) > dead) {
+      if (Math.hypot(dx, dy) > JOY_DEADZONE_PX) {
         if (adx > ady * DIAGONAL_RATIO) {
           left = dx < 0;
           right = dx > 0;
@@ -167,45 +193,67 @@ const TouchControls = {
     setKey('down', down);
 
     for (const b of this._buttons) {
-      const keyName = b.rawKey ?? KeyBindings.keyNameFor(b.action as any);
+      const keyName = KeyBindings.keyNameFor(b.action as any);
       if (keyName) setKey(keyName, b.touchId !== null);
     }
   },
 
-  /** Draw the overlay — call late in the render so it sits above the HUD */
   draw(canvas: GameCanvas) {
     if (!this.active) return;
     const ctx = canvas.context;
     ctx.save();
 
-    // Joystick base + nub
-    const c = this.joyCenter();
-    ctx.globalAlpha = 0.28;
+    // Movement pad: ghost at anchor when idle, full pad at the floating
+    // origin while held — with M-style direction chevrons
+    const held = this._joyTouchId !== null;
+    const c = held ? this._joyOrigin : this.padAnchor();
+    ctx.globalAlpha = held ? 0.4 : 0.22;
     ctx.fillStyle = '#000000';
     ctx.beginPath();
     ctx.arc(c.x, c.y, JOY_RADIUS, 0, Math.PI * 2);
     ctx.fill();
-    ctx.globalAlpha = 0.5;
+    ctx.globalAlpha = held ? 0.7 : 0.4;
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(c.x, c.y, JOY_RADIUS, 0, Math.PI * 2);
     ctx.stroke();
 
+    // Chevrons
+    ctx.globalAlpha = held ? 0.85 : 0.5;
+    ctx.fillStyle = '#ffffff';
+    const ch = (px: number, py: number, rot: number) => {
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(rot);
+      ctx.beginPath();
+      ctx.moveTo(-7, 5);
+      ctx.lineTo(0, -5);
+      ctx.lineTo(7, 5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    };
+    ch(c.x, c.y - JOY_RADIUS + 16, 0);
+    ch(c.x, c.y + JOY_RADIUS - 16, Math.PI);
+    ch(c.x - JOY_RADIUS + 16, c.y, -Math.PI / 2);
+    ch(c.x + JOY_RADIUS - 16, c.y, Math.PI / 2);
+
+    // Nub
     let nx = c.x, ny = c.y;
-    if (this._joyTouchId !== null) {
+    if (held) {
       const len = Math.hypot(this._joyDX, this._joyDY) || 1;
-      const clamped = Math.min(len, JOY_RADIUS - 8);
+      const clamped = Math.min(len, JOY_RADIUS - 10);
       nx = c.x + (this._joyDX / len) * clamped;
       ny = c.y + (this._joyDY / len) * clamped;
     }
-    ctx.globalAlpha = this._joyTouchId !== null ? 0.75 : 0.45;
+    ctx.globalAlpha = held ? 0.8 : 0.4;
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(nx, ny, JOY_NUB, 0, Math.PI * 2);
     ctx.fill();
 
-    // Buttons
+    // Action buttons
     for (const b of this._buttons) {
       const p = b.pos();
       const pressed = b.touchId !== null;
@@ -222,14 +270,47 @@ const TouchControls = {
       ctx.stroke();
       ctx.globalAlpha = pressed ? 1 : 0.7;
       canvas.drawText({
-        text: b.label,
-        x: p.x,
-        y: p.y - 6,
-        color: '#ffffff',
-        fontSize: 13,
-        fontWeight: 'bold',
-        align: 'center',
+        text: b.label, x: p.x, y: p.y - 6, color: '#ffffff',
+        fontSize: 13, fontWeight: 'bold', align: 'center',
       });
+    }
+
+    // Skill arc — hotkey slot icons in round frames
+    for (const s of this._skillSlots) {
+      const p = s.pos();
+      const slot = UIHotkeyBar.slots?.[s.slotIndex];
+      const filled = slot && slot.type !== 'none' && slot.actionId != null;
+      const pressed = s.touchId !== null;
+
+      ctx.globalAlpha = pressed ? 0.65 : 0.3;
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, s.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (filled && slot!.icon) {
+        ctx.save();
+        ctx.globalAlpha = pressed ? 1 : 0.9;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, s.radius - 2, 0, Math.PI * 2);
+        ctx.clip();
+        const size = (s.radius - 2) * 2;
+        ctx.drawImage(slot!.icon, p.x - size / 2, p.y - size / 2, size, size);
+        ctx.restore();
+      } else {
+        ctx.globalAlpha = 0.4;
+        canvas.drawText({
+          text: '+', x: p.x, y: p.y - 8, color: '#ffffff',
+          fontSize: 16, align: 'center',
+        });
+      }
+
+      ctx.globalAlpha = pressed ? 0.95 : 0.5;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, s.radius, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     ctx.restore();
