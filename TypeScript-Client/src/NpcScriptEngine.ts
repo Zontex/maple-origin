@@ -430,17 +430,21 @@ export default class NpcScriptEngine {
         const c: any = character;
         if (!c) return;
         c.savedLocations = c.savedLocations || {};
-        c.savedLocations[type] = c.map?.mapId ?? 0;
+        // Coerced: the store's readers gate on `typeof v === 'number'`, so a
+        // map id that arrived as a string would read back as nothing saved
+        const mapId = Number(c.map?.mapId);
+        c.savedLocations[type] = Number.isFinite(mapId) && mapId > 0 ? mapId : 0;
       },
       peekSavedLocation(type: string) {
-        const v = (character as any)?.savedLocations?.[type];
-        return typeof v === 'number' && v > 0 ? v : -1;
+        const v = Number((character as any)?.savedLocations?.[type]);
+        return Number.isFinite(v) && v > 0 ? v : -1;
       },
       getSavedLocation(type: string) {
         const c: any = character;
         const v = c?.savedLocations?.[type];
         if (c?.savedLocations) delete c.savedLocations[type];
-        return typeof v === 'number' && v > 0 ? v : -1;
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? n : -1;
       },
       clearSavedLocation(type: string) {
         const c: any = character;

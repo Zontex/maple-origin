@@ -291,7 +291,15 @@ MapleMap.load = async function (id: number | string) {
   this.questDialog = questDialog;
   this.scriptEngine = new QuestScriptEngine();
   this.npcScriptEngine = new NpcScriptEngine();
-  this.mapId = id as number;
+  // Genuinely a number, not just cast to one. `load` takes `number | string`
+  // (the login map is "MapLogin"), and `as number` is a compile-time cast that
+  // converts nothing — a string id stayed a string in a field everything else
+  // treats as numeric. That breaks strict comparisons (`mapRef.mapId ===
+  // def.map?.mapId` below) and the saved-location store, whose `typeof v ===
+  // 'number'` guard read a stored "102000000" as nothing saved and sent
+  // Happyville's exit to its Ellinia fallback instead of back to Perion.
+  const numericId = Number(id);
+  this.mapId = Number.isFinite(numericId) ? numericId : (id as any);
 
   const endTime = new Date().getTime();
   console.log(`MapleMap.load ${id} took ${endTime - startTime}ms`);
