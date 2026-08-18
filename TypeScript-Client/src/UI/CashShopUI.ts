@@ -690,7 +690,11 @@ const CashShopUI: any = {
     const jump = canvas.isKeyDown('alt');
     const attack = canvas.isKeyDown('ctrl');
 
-    let stance = 'stand1';
+    // Idle/walk poses come from the worn weapon, not a literal: two-handed
+    // weapons ship stand2/walk2 and no stand1 node at all, so hardcoding it
+    // here re-posed the preview a frame after attachEquipByItemId got it
+    // right and the try-on went empty-handed the moment you moved.
+    let stance = p.idleStance();
     const grounded = s.y >= 0 && s.vy === 0;
 
     if (s.attackMs > 0) {
@@ -737,7 +741,7 @@ const CashShopUI: any = {
           s.x += (left ? -1 : 1) * 125 * dt;
           s.x = Math.max(STAGE_MIN_X, Math.min(STAGE_MAX_X, s.x));
           p.setFlipped(!left ? true : false);
-          if (grounded) stance = 'walk1';
+          if (grounded) stance = p.walkStance();
         }
         // Jump + the engine's exact air integration: drag pulls vy toward 0
         // before gravity is added, fall speed capped

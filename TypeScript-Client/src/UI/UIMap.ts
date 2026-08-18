@@ -263,6 +263,17 @@ async function quitToLogin(canvas: GameCanvas) {
     console.error("[Quit] chat cleanup failed", e);
   }
 
+  // Same story for the draggable windows: the Monster Book's search field is
+  // also a real DOM input, and it only tears down when the window is hidden.
+  // Quitting with the book open stranded it over the login screen, one more
+  // each time the player came back.
+  try {
+    const MapStateInstance = (window as any).MapStateInstance;
+    MapStateInstance?.closeAllMenus?.();
+  } catch (e) {
+    console.error("[Quit] menu cleanup failed", e);
+  }
+
   UIGameMenu.hide();
 
   try {

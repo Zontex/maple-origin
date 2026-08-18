@@ -182,8 +182,11 @@ class MonsterBook {
 
     for (const [key, raw] of Object.entries(cards || {})) {
       const cardId = parseInt(key, 10);
-      const copies = Math.max(1, Math.min(MAX_COPIES, Number(raw) || 0));
-      if (!Number.isFinite(cardId) || copies < 1) continue;
+      const stored = Number(raw);
+      // Garbage is dropped, not promoted: clamping first turned a NaN or a 0
+      // into a phantom copy of a card the player never collected
+      if (!Number.isFinite(cardId) || !Number.isFinite(stored) || stored < 1) continue;
+      const copies = Math.min(MAX_COPIES, Math.floor(stored));
       this.cards.set(cardId, copies);
       if (isSpecialCard(cardId)) this._special++;
       else this._basic++;

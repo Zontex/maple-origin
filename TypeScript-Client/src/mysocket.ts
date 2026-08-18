@@ -102,6 +102,8 @@ class MySocket {
   socket: WebSocket | null = null;
   playerId: string = "";
   otherPlayers: Map<string, MapleCharacter> = new Map();
+  /** Last Monster Book summary sent, so player_update only carries changes */
+  private _lastBookKey: string = '';
   isMobHost: boolean = false;
   // player_info couldn't be sent yet (map still loading) — retried by the
   // update loop; without it the server never assigns a mob host
@@ -960,9 +962,19 @@ class MySocket {
     const petAction = PetManager.consumePendingAction();
     if (petAction) (update as any).petAction = petAction;
 
-    // Keeps a watcher's character-info window current when a card lands
-    // mid-session, rather than only at the next map change
-    (update as any).monsterBook = MyCharacter.monsterBook?.summary();
+    // Change-gated like the pet roster, and for the same reason CLAUDE.md
+    // gives: player_update runs ~30x a second, and the book summary only
+    // moves when a card is picked up. Shipping it every tick allocated five
+    // fields per player per frame and made the server rewrite its stored info
+    // just as often.
+    const bookSummary = MyCharacter.monsterBook?.summary();
+    const bookKey = bookSummary
+      ? `${bookSummary.level}:${bookSummary.cover}:${bookSummary.total}`
+      : '';
+    if (bookKey !== this._lastBookKey) {
+      this._lastBookKey = bookKey;
+      if (bookSummary) (update as any).monsterBook = bookSummary;
+    }
 
     this.sendMessage({
       type: "player_update",

@@ -2722,7 +2722,7 @@ isCloseToMob = (inAllDirections = true) => {
     // Monster cards carry `spec/consumeOnPickup` in the WZ: they never reach
     // the inventory. Picking one up registers it in the Monster Book and the
     // card itself is gone, sixth copy included.
-    if (this.collectMonsterCard(itemId)) return;
+    if (this.collectMonsterCard(itemId, itemDrop.amount)) return;
 
     this.inventory.addToInventory(
       isEquipDrop ? itemDrop.id : itemDrop.itemFile.nName,
@@ -2739,14 +2739,18 @@ isCloseToMob = (inAllDirections = true) => {
    * pickup path knows to stop. Remote characters take the same early exit —
    * their pickups are cosmetic and must not touch this player's book.
    */
-  collectMonsterCard(itemId: number): boolean {
+  collectMonsterCard(itemId: number, amount: number = 1): boolean {
     if (!isMonsterCardId(itemId)) return false;
     if (this.isRemote) return true;
 
     const book = this.monsterBook;
     if (!book) return true;
 
-    const result = book.addCard(itemId);
+    // Registers one copy per unit, matching the Inventory gate. Card drops are
+    // always a single card today, so the two agreeing costs nothing and stops
+    // them drifting apart if that ever changes.
+    let result = book.addCard(itemId);
+    for (let i = 1; i < Math.max(1, amount); i++) result = book.addCard(itemId);
     this.playCardGet();
 
     import('./UI/UIChatLog')

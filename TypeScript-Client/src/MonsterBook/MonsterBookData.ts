@@ -140,11 +140,6 @@ export function isSpecialCard(cardId: number): boolean {
   return Math.floor(cardId / 1000) >= 2388;
 }
 
-/** Whether an item id is one of the 343 monster cards. */
-export function isMonsterCard(itemId: number): boolean {
-  return byId.has(itemId);
-}
-
 /**
  * Cheap range test for callers that may run before the catalogue has loaded
  * (the drop pickup path). The card block is 2380000-2388999 and holds nothing
@@ -158,16 +153,8 @@ export function getCard(cardId: number): MonsterBookCard | undefined {
   return byId.get(cardId);
 }
 
-export function getCardForMob(mobId: number): MonsterBookCard | undefined {
-  return byMob.get(mobId);
-}
-
 export function getCardsForTab(tab: number): MonsterBookCard[] {
   return byTab[tab] ?? [];
-}
-
-export function getAllCards(): MonsterBookCard[] {
-  return file?.cards ?? [];
 }
 
 export function getMobInfo(mobId: number): MonsterBookMob {

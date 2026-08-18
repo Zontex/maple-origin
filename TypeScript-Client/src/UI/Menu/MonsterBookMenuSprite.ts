@@ -323,18 +323,14 @@ class MonsterBookMenuSprite extends DragableMenu {
     }
 
     // Catalogue and the three name tables the pages read from
-    await ensureMonsterBookData();
-    ensureMobNames().catch(() => {});
+    // Awaited, not fired: the search box matches on monster names, and a
+    // query submitted before String.wz/Mob.img lands silently finds nothing
+    await Promise.all([ensureMonsterBookData(), ensureMobNames()]);
     ensureItemNames().catch(() => {});
     ensureMapNames().catch(() => {});
     preloadTabIcons(0);
 
     ClickManager.addDragableMenu(this);
-  }
-
-  /** Late binding: MapState builds the window before the character restore. */
-  setBook(book: MonsterBook) {
-    this.book = book;
   }
 
   getRect(_camera: CameraInterface) {
@@ -348,8 +344,11 @@ class MonsterBookMenuSprite extends DragableMenu {
       this.closeContextMenu();
       this.removeSearchInput();
     } else {
-      // Reopening lands on the card grid, and on a tab whose "new" marker is
-      // now answered for
+      // Reopening lands on the card grid, on the last card tab looked at —
+      // this is what `tab` is kept for. Without restoring it, closing while
+      // the summary page was up reopened onto the summary, and the markSeen
+      // below cleared the "new card" blink for a tab never actually viewed.
+      this.leftView = this.tab;
       this.book?.markSeen(this.tab);
       this.syncSearchInput();
     }
@@ -388,6 +387,18 @@ class MonsterBookMenuSprite extends DragableMenu {
       });
     }
     this.searchInput.setCanvasPos(this.x + SEARCH_X, this.y + SEARCH_Y);
+
+    // A DOM input sits above the canvas and eats every press inside its rect
+    // before GameCanvas ever sees one, so ownsPoint can't arbitrate for it —
+    // an inventory slot dragged over the search box became a dead spot. Hide
+    // it whenever another window is in front, which is the only case where
+    // the book has no claim on those pixels anyway.
+    const stack = DragableMenu.stack;
+    let front: DragableMenu | null = null;
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (!stack[i].isHidden) { front = stack[i]; break; }
+    }
+    this.searchInput.input.style.display = front === this ? '' : 'none';
   }
 
   private removeSearchInput() {
@@ -460,7 +471,14 @@ class MonsterBookMenuSprite extends DragableMenu {
   // ---- input -------------------------------------------------------------
 
   onMouseDown(mouseX: number, mouseY: number): boolean {
-    if (this.isHidden || !this.ownsPoint(mouseX, mouseY)) return false;
+    if (this.isHidden) return false;
+    if (!this.ownsPoint(mouseX, mouseY)) {
+      // A press anywhere else dismisses the context menu, the way every
+      // right-click menu behaves — it used to sit on the book indefinitely
+      // because only presses landing on the window could clear it.
+      this.closeContextMenu();
+      return false;
+    }
 
     // The context menu is modal over the window while it is up
     if (this.contextCard) {
@@ -822,14 +840,12 @@ class MonsterBookMenuSprite extends DragableMenu {
       // The blue frame marks the registered book cover, the orange one the
       // selection. Both are 31x42 around a 27x38 hole, anchored bottom-left
       // via their WZ origin (2,40).
+      // Blue frame = the registered book cover, orange = the selection. There
+      // is no third frame in the WZ, so hovering draws nothing: borrowing the
+      // cover frame for mouse-over made every card you passed over look like
+      // the one you had registered.
       if (this.book?.cover === card.id) this.drawFrame(canvas, this.coverFrame, r.x, r.y);
       if (this.selected === card.id) this.drawFrame(canvas, this.selectFrame, r.x, r.y);
-      else if (
-        mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height &&
-        this.book?.cover !== card.id
-      ) {
-        this.drawFrame(canvas, this.coverFrame, r.x, r.y);
-      }
     }
 
     // The magnifier sits in the gap the cardSlot art leaves to the right of
