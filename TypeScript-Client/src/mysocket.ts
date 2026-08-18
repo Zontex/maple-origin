@@ -1801,23 +1801,35 @@ class MySocket {
       ? this.otherPlayers.get(data.sourcePlayerId)
       : null;
     if (attacker) mob.setAggro(attacker);
-    // Apply damage on host — hit() handles HP, death, drops
-    mob.hit(data.damage, data.knockbackDir || 1, null);
+    // Apply damage on host — hit() handles HP, death, drops. The requester's
+    // id rides along so a killing blow is credited back to them.
+    mob.hit(
+      data.damage,
+      data.knockbackDir || 1,
+      null,
+      false,
+      Number(data.skillId) || 0,
+      data.sourcePlayerId || null
+    );
   }
 
   // Non-host sends damage request to host (via server)
-  sendMobDamageRequest(oId: number, damage: number, knockbackDir: number) {
+  sendMobDamageRequest(oId: number, damage: number, knockbackDir: number, skillId: number = 0) {
     this.sendMessage({
       type: 'mob_damage_request',
-      data: { oId, damage, knockbackDir, mapId: Number(MapleMap.id) }
+      data: { oId, damage, knockbackDir, skillId, mapId: Number(MapleMap.id) }
     });
   }
 
-  // Host broadcasts mob death
-  sendMobDeath(oId: number) {
+  // Host broadcasts mob death. `credit` is present only when the finishing
+  // blow came from another player's damage request — see handleMobDeath.
+  sendMobDeath(
+    oId: number,
+    credit?: { killerId: string; mobId: number; skillId: number; exp: number }
+  ) {
     this.sendMessage({
       type: 'mob_death',
-      data: { oId, mapId: Number(MapleMap.id) }
+      data: { oId, mapId: Number(MapleMap.id), ...(credit || {}) }
     });
   }
 
@@ -1825,6 +1837,13 @@ class MySocket {
   handleMobDeath(data: any) {
     if (this.isMobHost) return;
     if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    // Our own damage request landed the finishing blow on the host: the mob
+    // only ever had HP over there, so this message is how the kill gets paid
+    // out here. Runs before the mob lookup — credit is owed whether or not
+    // our copy of the monster is still around.
+    if (data.killerId && data.killerId === this.playerId) {
+      this.awardRemoteKillCredit(data);
+    }
     const mob = MapleMap.findMonsterByOId(data.oId);
     if (!mob || mob.destroyed || mob.dying) return;
     mob.hp = 0;
@@ -1834,6 +1853,15 @@ class MySocket {
     if (mob.stances['die1'] || mob.stances['die']) {
       mob.setStance(mob.stances['die'] ? 'die' : 'die1');
     }
+  }
+
+  // EXP and quest progress for a mob the host killed on our behalf — the same
+  // rewards Monster.die() hands out locally, party split included
+  private awardRemoteKillCredit(data: any) {
+    const exp = Number(data.exp) || 0;
+    if (exp > 0) MyCharacter.addExp(PartyManager.shareKillExp(exp));
+    const mobId = Number(data.mobId) || 0;
+    if (mobId) MyCharacter.questManager?.onMobKill(mobId, Number(data.skillId) || 0);
   }
 
   // Host broadcasts mob respawn

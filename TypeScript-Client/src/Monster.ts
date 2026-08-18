@@ -508,7 +508,7 @@ async addDrops() {
    * Fixed version of the die method for the Monster class
    * This should be integrated into your existing Monster class
    */
-  die(responsibleMapleCharacter: any, skillId: number = 0) {
+  die(responsibleMapleCharacter: any, skillId: number = 0, attackerNetId: string | null = null) {
     this.setFrame(!this.stances.die ? "die1" : "die");
     this.playAudio("Die");
     this.dying = true;
@@ -522,8 +522,20 @@ async addDrops() {
         }, 100);
       }
 
-      // Broadcast death to other clients
-      try { MySocket.sendMobDeath(this.oId); } catch {}
+      // Broadcast death to other clients. When the finishing blow came from
+      // another player's damage request, the kill is theirs — ride the death
+      // message with everything they need to pay themselves out, since only
+      // the host ever ran this mob's HP.
+      try {
+        MySocket.sendMobDeath(this.oId, attackerNetId
+          ? {
+              killerId: attackerNetId,
+              mobId: this.id,
+              skillId,
+              exp: this.mobFile?.info?.exp?.nValue ?? 0,
+            }
+          : undefined);
+      } catch {}
     }
 
     // Award experience to the player who killed the monster; local kills
@@ -605,7 +617,10 @@ async addDrops() {
     isCritical: boolean = false,
     // Skill that dealt this blow (0 = plain weapon attack). Only carried so a
     // killing blow can be credited to the right skill-tutorial quest.
-    skillId: number = 0
+    skillId: number = 0,
+    // Network id of the player this blow belongs to, set when the host is
+    // applying a non-host's damage request on their behalf (null for local hits)
+    attackerNetId: string | null = null
   ) {
     const indicatorType = isCritical
       ? DamageIndicatorType.PlayerCritialHitMob
@@ -618,7 +633,7 @@ async addDrops() {
     if (this.isRemote) {
       // Send damage request to host via server
       try {
-        MySocket.sendMobDamageRequest(this.oId, damage, knockBackDirection);
+        MySocket.sendMobDamageRequest(this.oId, damage, knockBackDirection, skillId);
       } catch {}
       // Show damage indicator locally for immediate feedback
       this.DamageIndicator.addDamageIndicator(
@@ -653,7 +668,7 @@ async addDrops() {
       this.pos.right = false;
       this.pos.left = false;
       this.hp = 0;
-      this.die(responsibleMapleCharacter, skillId);
+      this.die(responsibleMapleCharacter, skillId, attackerNetId);
     } else {
       this.hp -= damage;
       this.playAudio(MobSounds.Damage);

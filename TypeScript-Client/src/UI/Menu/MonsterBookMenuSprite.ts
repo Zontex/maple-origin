@@ -554,11 +554,14 @@ class MonsterBookMenuSprite extends DragableMenu {
     const my = c.mouseY;
     const inside = this.ownsPoint(mx, my);
 
-    // Right-click a card you own to register it as the book cover
+    // Right-click a card you own to register it as the book cover. Only
+    // consumed when the press is over this window — clearing the flag either
+    // way would eat right-clicks meant for whatever else is open (the world
+    // map closes on one).
     const rightNow = !!(c as any).rightClicked;
-    if (rightNow && !this.prevRightClick) {
+    if (rightNow && !this.prevRightClick && inside) {
       (c as any).rightClicked = false;
-      if (inside) this.handleRightClick(mx, my);
+      this.handleRightClick(mx, my);
     }
     this.prevRightClick = rightNow;
 
@@ -609,7 +612,30 @@ class MonsterBookMenuSprite extends DragableMenu {
 
   // ---- right page content model -----------------------------------------
 
+  /**
+   * The selected card's list for the open tab, memoised on (card, tab).
+   *
+   * The draw pass asks for this every frame, and building the EPISODE tab
+   * word-wraps a whole lore paragraph — a Snail's runs ~110 words, each one a
+   * canvas.measureText with its own save/restore and font assignment. Doing
+   * that 60 times a second for text that only changes when you click is pure
+   * waste. Name lookups are the one catch: String.wz loads lazily, so a list
+   * built before it lands would cache "Item 4000019" forever — those results
+   * are left uncached until every name resolves.
+   */
   private contentLines(canvas: GameCanvas): { kind: 'text' | 'item'; text: string; id?: number }[] {
+    const key = `${this.selected}:${this.rightTab}`;
+    if (this._linesCache && this._linesCache.key === key) return this._linesCache.lines;
+    const lines = this.buildContentLines(canvas);
+    if (!lines.some((l) => l.unresolved)) {
+      this._linesCache = { key, lines };
+    }
+    return lines;
+  }
+
+  private buildContentLines(
+    canvas: GameCanvas
+  ): { kind: 'text' | 'item'; text: string; id?: number; unresolved?: boolean }[] {
     if (!this.selected) return [];
     const card = getCardsForTab(tabOf(this.selected)).find((c) => c.id === this.selected);
     if (!card) return [];
@@ -636,15 +662,27 @@ class MonsterBookMenuSprite extends DragableMenu {
     }
 
     if (this.rightTab === 2) {
-      return info.rewards.map((id) => ({
-        kind: 'item' as const,
-        text: getItemNameSync(id) || `Item ${id}`,
-        id,
-      }));
+      return info.rewards.map((id) => {
+        const name = getItemNameSync(id);
+        return {
+          kind: 'item' as const,
+          text: name || `Item ${id}`,
+          id,
+          unresolved: !name,
+        };
+      });
     }
 
     if (this.rightTab === 3) {
-      return info.maps.map((id) => ({ kind: 'text' as const, text: getMapNameSync(id) }));
+      return info.maps.map((id) => {
+        const name = getMapNameSync(id);
+        return {
+          kind: 'text' as const,
+          text: name,
+          // getMapNameSync falls back to "Map <id>" before String.wz lands
+          unresolved: name === `Map ${id}`,
+        };
+      });
     }
 
     return [];
@@ -659,6 +697,10 @@ class MonsterBookMenuSprite extends DragableMenu {
   }
 
   private _lineCount = 0;
+  private _linesCache: {
+    key: string;
+    lines: { kind: 'text' | 'item'; text: string; id?: number; unresolved?: boolean }[];
+  } | null = null;
 
   private maxScroll(): number {
     return Math.max(0, this._lineCount - this.visibleLines());
