@@ -1214,6 +1214,7 @@ MapleMap.render = function (
     if (pc.questClearActive) drawEffect(pc, pc.questClearFrames, pc.questClearFrame);
     if (pc.jobChangedActive) drawEffect(pc, pc.jobChangedFrames, pc.jobChangedFrame);
     if (pc.questStartActive) drawEffect(pc, pc.questStartFrames, pc.questStartFrame);
+    if (pc.cardGetActive) drawEffect(pc, pc.cardGetFrames, pc.cardGetFrame);
     if (pc.incExpActive) drawEffect(pc, pc.incExpFrames, pc.incExpFrame);
     if (pc.skillEffectActive) drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame);
     if (pc.afterimage?.active) pc.afterimage.draw(canvas, camera);
@@ -1238,9 +1239,12 @@ MapleMap.render = function (
     _npcLayers[i].forEach(draw);
   };
 
-  // v83 draws pets behind their owner
-  const drawPets = () => {
-    try { PetManager.drawPets(canvas, camera); } catch (e) {
+  // v83 draws following pets behind their owner; pets hanging on a climbing
+  // owner's back draw AFTER the player instead, so the back-facing hang
+  // sprite rides visibly in front (GMS look) — drawn behind, the player
+  // sprite covered small pets completely
+  const drawPets = (hover?: boolean) => {
+    try { PetManager.drawPets(canvas, camera, hover); } catch (e) {
       console.error('[MapleMap] Pet draw crash:', e);
     }
   };
@@ -1249,20 +1253,23 @@ MapleMap.render = function (
     // Climbing: draw ALL layers, then player on top (player in front of rope/chain)
     for (let i = 0; i <= 7; i++) drawLayer(i);
 
-    drawPets();
+    drawPets(false);
     if (this.PlayerCharacter) {
       draw(this.PlayerCharacter);
       drawPlayerEffects(this.PlayerCharacter);
     }
+    drawPets(true);
   } else {
     // Normal/jumping: draw up to player's layer, then player, then higher layers
     for (let i = 0; i <= playerLayer; i++) drawLayer(i);
 
-    drawPets();
+    drawPets(false);
     if (this.PlayerCharacter) {
       draw(this.PlayerCharacter);
       drawPlayerEffects(this.PlayerCharacter);
     }
+    // Remote climbers' hanging pets ride in front of their owner too
+    drawPets(true);
 
     for (let i = playerLayer + 1; i <= 7; i++) drawLayer(i);
   }

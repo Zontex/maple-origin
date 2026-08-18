@@ -42,6 +42,7 @@ import GameCanvas from "./GameCanvas";
 import { CameraInterface } from "./Camera";
 import { AfterimageState, loadAfterimage } from "./Effects/Afterimage";
 import { spawnSkillHit } from "./Effects/SkillHitEffect";
+import { isMonsterCardId } from "./MonsterBook/MonsterBookData";
 
 // Played the moment a quest's requirements are met — killing the 10th of 10
 // snails — alongside the red balloon. This is "quest finished", which in GMS
@@ -202,6 +203,10 @@ class MapleCharacter {
   hitCooldownTimeInMS: number = 0;
   lastAttackTime: number = 0;
   lastHitTime: number = 0;
+  /** Last hit that actually dealt damage — lastHitTime also advances on a
+   *  MISS (it gates the touch re-roll cooldown), so the hit flicker keys
+   *  on this instead. */
+  lastDamagedTime: number = 0;
   spawnDefaultHp: number = 0;
   weaponEquip: any = null;
   weaponEquipId: any = null;
@@ -251,6 +256,24 @@ class MapleCharacter {
   incExpFrames: any = null;
   incExpFrame: number = 0;
   incExpDelay: number = 0;
+  // Monster card pickup effect
+  cardGetActive: boolean = false;
+  cardGetFrames: any = null;
+  cardGetFrame: number = 0;
+  cardGetDelay: number = 0;
+  /**
+   * Monster Book. Only the local player has one — a remote character carries
+   * `monsterBookInfo` (level/cover/counts off the roster) instead, which is all
+   * their character-info window needs.
+   */
+  monsterBook: any = null;
+  monsterBookInfo: {
+    level: number;
+    cover: number;
+    total: number;
+    basic: number;
+    special: number;
+  } | null = null;
   onStanceFinish: any = null;
   onLastFrame: any = null;
   zmap: any = null;
@@ -504,6 +527,11 @@ class MapleCharacter {
 
         if (this.isInAttack) {
           this.setAlert();
+        } else if (this.isInAlert && this.stance === Stance.alert) {
+          // GMS holds the combat-ready pose for the whole alert window
+          // after attacking or being hit — loop the animation; setAlert's
+          // 5s timeout is what releases it back to stand
+          this.frame = 0;
         } else {
           this.isInAlert = false;
         }
@@ -1487,7 +1515,7 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
         false,
         () => { this.isInAttack = false; },
         () => {
-          this.fireSkillProjectile(effect, info.element, fixedDamageOverride, ballFrame);
+          this.fireSkillProjectile(effect, info.element, fixedDamageOverride, ballFrame, skillId);
         }
       );
     } else {
@@ -1531,8 +1559,9 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
 /**
  * Fire a skill projectile using ball sprites from Skill.wz.
  */
-fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverride: number = 0, ballFrame: number | null = null) {
+fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverride: number = 0, ballFrame: number | null = null, skillId: number = 0) {
   const projectile = Projectile.fromSkill({
+    skillId,
     charecter: this,
     x: this.pos.x,
     y: this.pos.y - 26,
@@ -1636,7 +1665,7 @@ async executeSkillDamage(skillId: number, effect: any) {
         }
 
         const knockbackDirection = isCharacterFacingRight ? 1 : -1;
-        monster.hit(damage, knockbackDirection, this, isCritical);
+        monster.hit(damage, knockbackDirection, this, isCritical, skillId);
       }
       // The skill's own impact art when it has one (Magic Claw, Energy Bolt's
       // melee fallback); otherwise nothing, as before
@@ -2537,9 +2566,13 @@ isCloseToMob = (inAllDirections = true) => {
       return;
     }
 
+    this.lastDamagedTime = currentTime;
     const knowbackXdirection = this.pos.x - monster.pos.x > 0 ? 1 : -1;
-    const knowbackYdirection = this.pos.y > monster.pos.y ? 1 : -1;
-    this.pos.applyKnockback(knowbackXdirection, knowbackYdirection);
+    // Always pop up-and-back like v83. A downward push (player standing
+    // below the mob's anchor) combined with knockback dropping the foothold
+    // started the fall ON the foothold line moving down, so the crossing
+    // check never caught it and the player tunnelled through the floor.
+    this.pos.applyKnockback(knowbackXdirection, -1);
 
     // v83 mob damage: mob attack scaled by level gap, reduced by the player's
     // matching defense (weapon def for physical, magic def for magic)
@@ -2682,16 +2715,80 @@ isCloseToMob = (inAllDirections = true) => {
     // drops (incl. mesos, id=0) keep resolving via itemFile.nName.
     // equipData restores scroll bonuses on picked-up gear.
     const isEquipDrop = Math.floor(itemDrop.id / 1000000) === 1;
+    const itemId = isEquipDrop
+      ? itemDrop.id
+      : parseInt(String(itemDrop.itemFile.nName), 10);
+
+    // Monster cards carry `spec/consumeOnPickup` in the WZ: they never reach
+    // the inventory. Picking one up registers it in the Monster Book and the
+    // card itself is gone, sixth copy included.
+    if (this.collectMonsterCard(itemId)) return;
+
     this.inventory.addToInventory(
       isEquipDrop ? itemDrop.id : itemDrop.itemFile.nName,
       itemDrop.amount,
       isEquipDrop ? (itemDrop as any).equipData ?? undefined : undefined,
     );
-    this.logPickupMessage(
-      isEquipDrop ? itemDrop.id : parseInt(String(itemDrop.itemFile.nName), 10),
-      itemDrop.amount,
-    );
+    this.logPickupMessage(itemId, itemDrop.amount);
   };
+
+  /**
+   * Route a monster card into the Monster Book instead of the inventory.
+   *
+   * Returns true when the item was a card and has been dealt with, so the
+   * pickup path knows to stop. Remote characters take the same early exit —
+   * their pickups are cosmetic and must not touch this player's book.
+   */
+  collectMonsterCard(itemId: number): boolean {
+    if (!isMonsterCardId(itemId)) return false;
+    if (this.isRemote) return true;
+
+    const book = this.monsterBook;
+    if (!book) return true;
+
+    const result = book.addCard(itemId);
+    this.playCardGet();
+
+    import('./UI/UIChatLog')
+      .then(async ({ default: UIChatLog }) => {
+        const { getMobName, getCard, ensureMonsterBookData, ensureMobNames } =
+          await import('./MonsterBook/MonsterBookData');
+        await Promise.all([ensureMonsterBookData(), ensureMobNames()]);
+        const mobId = getCard(itemId)?.mob ?? 0;
+        const name = mobId ? getMobName(mobId) : `Card ${itemId}`;
+        if (result === 'full') {
+          UIChatLog.system(`You already have every ${name} card.`);
+        } else {
+          const copies = book.copiesOf(itemId);
+          UIChatLog.system(
+            `You have obtained a ${name} card. (${copies}/5)` +
+              (result === 'new' ? ` Monster Book Lv. ${book.level}` : '')
+          );
+        }
+      })
+      .catch(() => { /* chat line is cosmetic */ });
+
+    return true;
+  }
+
+  /** The card-pickup flourish: BasicEff.img/MonsterBook/cardGet + mCardGet. */
+  async playCardGet() {
+    try {
+      const sfxNode: any = await WZManager.get('Sound.wz/Game.img/mCardGet');
+      if (sfxNode?.nGetAudio) PLAY_AUDIO(sfxNode.nGetAudio());
+      const eff: any = await WZManager.get('Effect.wz/BasicEff.img/MonsterBook/cardGet');
+      const frames = (eff?.nChildren ?? []).filter((n: any) => n.nTagName === 'canvas');
+      if (frames.length > 0) {
+        this.cardGetFrames = frames;
+        await preloadFrames(this.cardGetFrames);
+        this.cardGetActive = true;
+        this.cardGetFrame = 0;
+        this.cardGetDelay = 0;
+      }
+    } catch (e) {
+      console.error('playCardGet error:', e);
+    }
+  }
 
   // GMS-style chat log line for a picked-up drop
   async logPickupMessage(itemId: number, amount: number) {
@@ -2779,6 +2876,22 @@ isCloseToMob = (inAllDirections = true) => {
         this.questClearActive = false;
         this.questClearFrame = 0;
         this.questClearDelay = 0;
+      }
+    }
+
+    // Monster card pickup effect
+    if (this.cardGetActive && this.cardGetFrames) {
+      this.cardGetDelay += msPerTick;
+      const curFrame = this.cardGetFrames[this.cardGetFrame];
+      const frameDelay = curFrame?.delay?.nValue ?? 130;
+      if (this.cardGetDelay > frameDelay) {
+        this.cardGetDelay -= frameDelay;
+        this.cardGetFrame += 1;
+      }
+      if (this.cardGetFrame >= this.cardGetFrames.length || !this.cardGetFrames[this.cardGetFrame]) {
+        this.cardGetActive = false;
+        this.cardGetFrame = 0;
+        this.cardGetDelay = 0;
       }
     }
 
@@ -3358,6 +3471,19 @@ isCloseToMob = (inAllDirections = true) => {
     let minDx = 0;
     let minDy = 0;
   
+    // v83 hit feedback: the sprite flickers translucent for the whole
+    // i-frame window after a DAMAGING mob hit (lastDamagedTime — misses
+    // advance only the cooldown gate; poison/fall damage don't flicker)
+    const sinceHit = Date.now() - this.lastDamagedTime;
+    const hitFlickerAlpha =
+      !this.isDead &&
+      this.lastDamagedTime > 0 &&
+      sinceHit < this.hitCooldownTimeInMS
+        ? Math.floor(sinceHit / 125) % 2 === 0
+          ? 0.45
+          : 0.7
+        : 1;
+
     // draws all parts of the character: head, body, etc..
     let spriteBottomY = 0;
     drawableFrames.forEach((frame: any) => {
@@ -3374,6 +3500,7 @@ isCloseToMob = (inAllDirections = true) => {
         rx: -frame.x,
         ry: -frame.y,
         angle,
+        alpha: hitFlickerAlpha,
       });
     });
     this.spriteBottomY = spriteBottomY;

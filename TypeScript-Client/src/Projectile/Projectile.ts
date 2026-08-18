@@ -59,6 +59,9 @@ class Projectile {
   hitEffectFrames: any[] | null = null;
   hitEffectFrame: number = 0;
   hitEffectDelay: number = 0;
+  // Skill that fired this projectile (0 = plain weapon shot) — carried so a
+  // killing blow can be credited to the right skill-tutorial quest
+  skillId: number = 0;
   hitEffectActive: boolean = false;
   hitEffectX: number = 0;
   hitEffectY: number = 0;
@@ -72,6 +75,7 @@ class Projectile {
 
   // Create a skill projectile from pre-loaded WZ ball node (no async WZ fetch needed)
   static fromSkill(opts: {
+    skillId?: number;
     charecter: MapleCharacter;
     x: number;
     y: number;
@@ -85,6 +89,7 @@ class Projectile {
     maxDistance?: number;
   }): Projectile {
     const p = new Projectile({});
+    p.skillId = opts.skillId || 0;
     p.charecter = opts.charecter;
     p.pos = new ProjectilePhysics({
       x: opts.x,
@@ -236,7 +241,9 @@ class Projectile {
       this.target!.hit(
         this.finalDamangeAfterTargetDefense,
         this.pos!.x < this.target!.centerPosition.x ? 1 : -1,
-        this.charecter
+        this.charecter,
+        false,
+        this.skillId
       );
     }
   }
@@ -288,7 +295,8 @@ class Projectile {
           this.finalDamangeAfterTargetDefense,
           this.pos!.x < this.target!.centerPosition.x ? 1 : -1,
           this.charecter,
-          this.isCritical
+          this.isCritical,
+          this.skillId
         );
       } else {
         // will happen when projectile hits the mob
@@ -353,7 +361,7 @@ class Projectile {
       if (!isPositionInsideRect(this.pos!, rect)) continue;
 
       const knockbackDir = this.pos!.vx > 0 ? 1 : -1;
-      monster.hit(this.fixedDamage, knockbackDir, this.charecter);
+      monster.hit(this.fixedDamage, knockbackDir, this.charecter, false, this.skillId);
       this.startHitEffect();
       this.isMovementEnabled = false;
       this.destroy();
@@ -385,7 +393,8 @@ class Projectile {
           this.finalDamangeAfterTargetDefense,
           this.pos!.x < this.target.centerPosition.x ? 1 : -1,
           this.charecter,
-          this.isCritical
+          this.isCritical,
+          this.skillId
         );
       }
       // Start skill hit effect animation if available

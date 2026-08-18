@@ -148,6 +148,21 @@ const LoginState: LoginState = {
     }
 
     const newPos = LOGIN_CAMERA_POSITIONS[subState];
+    if (subState === LoginSubState.LOGIN_SCREEN) {
+      // The login sign's layout offsets were measured against where the
+      // camera rests when approaching from boot's (0,0) (see initialize —
+      // easing never travels the last few pixels, so the rest position
+      // depends on the approach). Coming back from another section rests
+      // several px off and shears the world-drawn planks against the
+      // screen-fixed buttons. Reproduce the boot approach exactly, and
+      // fade in over the swoop the same way boot does.
+      Camera.doReset();
+      (UILogin as any).loginFadeIn = {
+        startTime: Date.now(),
+        delay: 0,
+        duration: 450,
+      };
+    }
     Camera.setTopLeft(newPos.x, newPos.y);
     Camera.update();
   },

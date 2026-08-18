@@ -34,6 +34,7 @@ import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
 import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
 import CharInfoMenuSprite from "./UI/Menu/CharInfoMenuSprite";
 import PartyMenuSprite from "./UI/Menu/PartyMenuSprite";
+import MonsterBookMenuSprite from "./UI/Menu/MonsterBookMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
 import PetManager from "./Pet/PetManager";
 import TouchControls, { isTouchDevice as isTouchDeviceTC } from "./UI/TouchControls";
@@ -128,6 +129,7 @@ export interface MapState extends UIState {
   skillMenu: SkillMenuSprite;
   charInfoMenu: CharInfoMenuSprite;
   partyMenu: PartyMenuSprite;
+  monsterBookMenu: MonsterBookMenuSprite;
   UIMenus: any[];
   closeAllMenus: () => void;
   PlayerCharacter: any; // Reference to MyCharacter
@@ -496,7 +498,17 @@ MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
     canvas: ClickManager.GameCanvas,
   });
 
-  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu, this.charInfoMenu, this.partyMenu];
+  // 475x349 — the widest window here, so it starts centred rather than tucked
+  // into a corner where half of it would sit off a 800x600 canvas
+  this.monsterBookMenu = await MonsterBookMenuSprite.fromOpts({
+    x: Math.round((config.width - 475) / 2),
+    y: 60,
+    isHidden: true,
+    canvas: ClickManager.GameCanvas,
+    book: (MyCharacter as any).monsterBook,
+  });
+
+  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu, this.charInfoMenu, this.partyMenu, this.monsterBookMenu];
   // Same array, same order as the draw pass — so "later in the list" means
   // "drawn on top", which is what click ownership is decided on.
   DragableMenu.setStack(this.UIMenus);
@@ -770,6 +782,9 @@ MapStateInstance.doUpdate = function (
       }
       if (actionPressed(canvas, "party") && !DirectionScene.isActive) {
         this.partyMenu.setIsHidden(!this.partyMenu.isHidden);
+      }
+      if (actionPressed(canvas, "monsterBook") && !DirectionScene.isActive) {
+        this.monsterBookMenu.setIsHidden(!this.monsterBookMenu.isHidden);
       }
       // Face emotes (F1-F7 by default) — held 5s, synced to other players
       for (const faceAction of Object.keys(FACE_EXPRESSIONS) as BindableAction[]) {

@@ -508,7 +508,7 @@ async addDrops() {
    * Fixed version of the die method for the Monster class
    * This should be integrated into your existing Monster class
    */
-  die(responsibleMapleCharacter: any) {
+  die(responsibleMapleCharacter: any, skillId: number = 0) {
     this.setFrame(!this.stances.die ? "die1" : "die");
     this.playAudio("Die");
     this.dying = true;
@@ -534,7 +534,7 @@ async addDrops() {
         exp = PartyManager.shareKillExp(exp);
       }
       responsibleMapleCharacter.addExp(exp);
-      responsibleMapleCharacter.questManager?.onMobKill(this.id);
+      responsibleMapleCharacter.questManager?.onMobKill(this.id, skillId);
     }
   }
 
@@ -602,7 +602,10 @@ async addDrops() {
     damage: number,
     knockBackDirection: number,
     responsibleMapleCharacter: any,
-    isCritical: boolean = false
+    isCritical: boolean = false,
+    // Skill that dealt this blow (0 = plain weapon attack). Only carried so a
+    // killing blow can be credited to the right skill-tutorial quest.
+    skillId: number = 0
   ) {
     const indicatorType = isCritical
       ? DamageIndicatorType.PlayerCritialHitMob
@@ -650,7 +653,7 @@ async addDrops() {
       this.pos.right = false;
       this.pos.left = false;
       this.hp = 0;
-      this.die(responsibleMapleCharacter);
+      this.die(responsibleMapleCharacter, skillId);
     } else {
       this.hp -= damage;
       this.playAudio(MobSounds.Damage);

@@ -2,6 +2,7 @@ import MapleInventory, {
   MapleInventoryType,
 } from "../Constants/Inventory/MapleInventory";
 import Item from "./Item";
+import { isMonsterCardId } from "../MonsterBook/MonsterBookData";
 
 // cant be more than 96 cause of the UI
 const maxInventorySize = 96;
@@ -47,6 +48,33 @@ class Inventory {
     this.nx = opts.nx || 0;
   }
 
+  /**
+   * Merge same-item partial stacks left-to-right, repairing inventories
+   * fragmented by the old first-stack-only fill in addToInventory. Runs on
+   * restore. Slots emptied by merging are nulled in place so the remaining
+   * items keep their positions. Equips and pets never merge (slotMax 1),
+   * and anything carrying an equipData blob (rentals, pet state) is
+   * skipped outright so distinct blobs can't collapse into one stack.
+   */
+  compactStacks() {
+    for (const tab of [this.use, this.setup, this.etc, this.cash]) {
+      for (let i = 0; i < tab.length; i++) {
+        const target: any = tab[i];
+        if (!target || target.equipData) continue;
+        const slotMax = target.getSlotMax?.() ?? 100;
+        if (slotMax <= 1) continue;
+        for (let j = i + 1; j < tab.length && target.quantity < slotMax; j++) {
+          const src: any = tab[j];
+          if (!src || src.itemId !== target.itemId || src.equipData) continue;
+          const put = Math.min(slotMax - target.quantity, src.quantity);
+          target.quantity += put;
+          src.quantity -= put;
+          if (src.quantity <= 0) (tab as any)[j] = null;
+        }
+      }
+    }
+  }
+
   /** Clamped meso mutation — v83 caps at int32 max, never below 0 */
   gainMesos(amount: number) {
     const MESO_CAP = 2147483647;
@@ -66,6 +94,14 @@ class Inventory {
     (window as any).__mySocket?.requestSave?.();
     if (MapleInventory.isMeso(itemId.toString())) {
       this.gainMesos(quantity);
+    } else if (isMonsterCardId(itemId) && (window as any).charecter?.monsterBook) {
+      // Monster cards never occupy an inventory slot in v83 — their WZ spec
+      // carries `consumeOnPickup`, so the card is spent registering itself in
+      // the Monster Book. Gating it here rather than only at pickup covers
+      // every other way an item is granted (quest and NPC script rewards),
+      // so a card can't reach a tab by a route nobody thought of.
+      const book = (window as any).charecter.monsterBook;
+      for (let i = 0; i < Math.max(1, quantity); i++) book.addCard(itemId);
     } else {
       const mapleInventoryType =
         MapleInventory.getInventoryTypeFromItemId(itemId);
@@ -90,10 +126,15 @@ class Inventory {
           break;
       }
 
-      // Fill existing stacks up to slotMax, then open new stacks in free slots
+      // Fill existing stacks up to slotMax, then open new stacks in free
+      // slots. Every matching stack gets topped up — checking only the first
+      // one meant that once it was full, each pickup opened another 1-qty
+      // slot forever instead of filling the partial overflow stacks.
+      // (Equips and pets have slotMax 1, so they never merge here.)
       let remaining = quantity;
-      const existing = chosenType.find((item) => item?.itemId === itemId);
-      if (existing) {
+      for (const existing of chosenType) {
+        if (remaining <= 0) break;
+        if (!existing || existing.itemId !== itemId) continue;
         const slotMax = existing.getSlotMax?.() ?? 100;
         const room = slotMax - existing.quantity;
         if (room > 0) {

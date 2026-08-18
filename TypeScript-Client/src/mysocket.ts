@@ -466,6 +466,9 @@ class MySocket {
         quests,
         skills: MyCharacter.skillManager?.serialize() || [],
         keymap: serializeFullKeymap(),
+        // Monster Book: card id -> copies, plus the registered cover card
+        monsterBook: MyCharacter.monsterBook?.serialize() ?? {},
+        monsterBookCover: MyCharacter.monsterBook?.cover ?? 0,
       },
     });
   }
@@ -894,6 +897,10 @@ class MySocket {
     // player_list (the server rebroadcasts the whole stored info)
     (playerInfo as any).pets = PetManager.getSummonedSummary();
 
+    // Monster Book summary — the five figures another player's character-info
+    // window prints. The card map itself never leaves this client.
+    (playerInfo as any).monsterBook = MyCharacter.monsterBook?.summary();
+
     console.log("Sending player info:", playerInfo);
     
     this.sendMessage({
@@ -952,6 +959,10 @@ class MySocket {
     (update as any).pets = PetManager.getSummonedSummary();
     const petAction = PetManager.consumePendingAction();
     if (petAction) (update as any).petAction = petAction;
+
+    // Keeps a watcher's character-info window current when a card lands
+    // mid-session, rather than only at the next map change
+    (update as any).monsterBook = MyCharacter.monsterBook?.summary();
 
     this.sendMessage({
       type: "player_update",
@@ -1231,6 +1242,7 @@ class MySocket {
 
         // Their summoned pets (roster rode in on player_info)
         this.applyRemotePets(character, playerData);
+        this.applyRemoteMonsterBook(character, playerData);
 
         console.log(`Added player ${character.name} to the map`);
       } catch (error) {
@@ -1245,6 +1257,7 @@ class MySocket {
         // Roster refresh (player_list) carries pets too — apply before the
         // dead-stance branch's early return can skip it
         this.applyRemotePets(character, playerData);
+        this.applyRemoteMonsterBook(character, playerData);
 
         const dx = playerData.x - character.pos.x;
         const dy = playerData.y - character.pos.y;
@@ -1377,6 +1390,7 @@ class MySocket {
 
       // Pet roster changes + one-shot pet actions
       this.applyRemotePets(character, playerData);
+      this.applyRemoteMonsterBook(character, playerData);
     }
   }
 
@@ -1399,6 +1413,16 @@ class MySocket {
     if (playerData.petAction) {
       PetManager.playRemoteAction(character, playerData.petAction);
     }
+  }
+
+  /**
+   * Store another player's Monster Book summary (level, cover card, card
+   * counts) for their character-info window. Only the summary crosses the
+   * wire; nobody else's client needs the card map itself.
+   */
+  applyRemoteMonsterBook(character: any, playerData: any) {
+    if (playerData.monsterBook === undefined) return;
+    character.monsterBookInfo = playerData.monsterBook ?? null;
   }
   
   handleMonsterUpdate(data: any) {

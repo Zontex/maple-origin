@@ -17,6 +17,9 @@ export interface QuestInfo {
   order?: number;
   autoStart?: boolean;
   autoPreComplete?: boolean;
+  // Skill-tutorial quests (2415-2421, "Using Power Strike" and friends) name
+  // the skill here — their mob counter only moves on kills made with it
+  selectedSkillID?: number;
 }
 
 export interface QuestRequirement {
@@ -437,6 +440,7 @@ class QuestDataManager {
           case 'order': info.order = val; break;
           case 'autoStart': info.autoStart = val === 1; break;
           case 'autoPreComplete': info.autoPreComplete = val === 1; break;
+          case 'selectedSkillID': info.selectedSkillID = val || 0; break;
         }
       }
 

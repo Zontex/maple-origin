@@ -161,6 +161,20 @@ function initSchema() {
     // Column already exists — ignore
   }
 
+  // Migration: Monster Book. The card map is a JSON blob keyed by card id
+  // ({"2380000":3}) rather than its own table — it is written and read whole,
+  // exactly like sp_by_tier, and never queried across characters.
+  try {
+    db.exec(`ALTER TABLE characters ADD COLUMN monsterbook TEXT DEFAULT NULL`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+  try {
+    db.exec(`ALTER TABLE characters ADD COLUMN monsterbook_cover INTEGER DEFAULT 0`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+
   // Migration: per-instance equip data (scroll bonuses/upgrade slots)
   try {
     db.exec(`ALTER TABLE inventory_items ADD COLUMN equip_data TEXT`);

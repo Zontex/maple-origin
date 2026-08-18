@@ -6,6 +6,7 @@ import Inventory from "./Inventory/Inventory";
 import QuestManager from "./Quest/QuestManager";
 import SkillManager from "./Skills/SkillManager";
 import BuffManager from "./Skills/BuffManager";
+import MonsterBook from "./MonsterBook/MonsterBook";
 
 const MyCharacter = new MapleCharacter({
   name: "Player",
@@ -42,6 +43,10 @@ MyCharacter.questManager.initialize();
 // Initialize skill manager.
 MyCharacter.skillManager = new SkillManager(MyCharacter);
 MyCharacter.skillManager.initialize();
+
+// Initialize the Monster Book. Only the local player keeps one: remote
+// characters carry a summary off the roster, not the card map.
+MyCharacter.monsterBook = new MonsterBook();
 
 // Initialize buff manager — buff apply/expire recalculates effective stats.
 (MyCharacter as any).buffManager = new BuffManager(() => MyCharacter.recalcLocalStats());

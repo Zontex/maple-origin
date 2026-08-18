@@ -479,9 +479,15 @@ export default class QuestManager {
     console.log(`Quest forfeited: ${QuestData.quests.get(questId)?.name}`);
   }
 
-  onMobKill(mobId: number): void {
+  onMobKill(mobId: number, skillId: number = 0): void {
     for (const [questId, active] of this.activeQuests) {
       if (active.mobProgress.has(mobId)) {
+        // "Using Power Strike" and its six siblings (2415-2421) carry a
+        // selectedSkillID: the kill only counts when that skill landed the
+        // finishing blow, so a plain swing leaves the counter alone
+        const selectedSkillId = QuestData.quests.get(questId)?.selectedSkillID || 0;
+        if (selectedSkillId && skillId !== selectedSkillId) continue;
+
         const reqs = QuestData.requirements.get(questId);
         const required = reqs?.complete.mobs?.find(m => m.id === mobId)?.count || 0;
         const current = active.mobProgress.get(mobId) || 0;

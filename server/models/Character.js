@@ -244,6 +244,14 @@ class Character {
       skin: char.skin,
       gender: char.gender,
       fame: char.fame,
+      // Monster Book: card id -> copies held, and the registered cover card.
+      // Null for characters saved before the column existed — the client then
+      // starts them with an empty book.
+      monsterBook: (() => {
+        try { return char.monsterbook ? JSON.parse(char.monsterbook) : null; }
+        catch { return null; }
+      })(),
+      monsterBookCover: char.monsterbook_cover || 0,
       equipped,
       inventory: groupInventory(inventory),
       quests,
@@ -260,7 +268,8 @@ class Character {
         level = ?, exp = ?, str = ?, dex = ?, int = ?, luk = ?, ap = ?, sp = ?, sp_by_tier = ?,
         hp = ?, max_hp = ?, mp = ?, max_mp = ?,
         job_id = ?, map_id = ?, pos_x = ?, pos_y = ?,
-        mesos = ?, nx = ?, fame = ?, hair = ?, face = ?, skin = ?
+        mesos = ?, nx = ?, fame = ?, hair = ?, face = ?, skin = ?,
+        monsterbook = ?, monsterbook_cover = ?
       WHERE id = ?
     `);
 
@@ -344,6 +353,10 @@ class Character {
         delete data.skills;
         delete data.quests;
         delete data.keymap;
+        // Same reasoning as the rest: a half-restored client would post an
+        // empty book and delete a whole card collection
+        delete data.monsterBook;
+        delete data.monsterBookCover;
       }
     }
 
@@ -360,6 +373,10 @@ class Character {
         data.posX ?? current.pos_x, data.posY ?? current.pos_y,
         data.mesos ?? current.mesos, data.nx ?? current.nx, data.fame ?? current.fame,
         data.hair ?? current.hair, data.face ?? current.face, data.skin ?? current.skin,
+        // A partial save carries no book — keep the stored one rather than
+        // stamping an empty object over a collection
+        data.monsterBook ? JSON.stringify(data.monsterBook) : current.monsterbook,
+        data.monsterBookCover ?? current.monsterbook_cover ?? 0,
         characterId
       );
 

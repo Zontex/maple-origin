@@ -72,11 +72,16 @@ const imageInView = function (
     width: camera.width,
     height: camera.height,
   };
+  // width/height, not right/bottom — this used to pass `dx + img.width`, an
+  // absolute coordinate, into a field rectanglesOverlap adds to x again, so
+  // the test claimed a hit far outside the image. Nothing calls this today;
+  // it is the obvious helper to reach for the next time something needs
+  // culling, and it has to be correct when someone does.
   const r2 = {
     x: dx,
     y: dy,
-    width: dx + img.width,
-    height: dy + img.height,
+    width: img.width,
+    height: img.height,
   };
   return GUIUtil.rectanglesOverlap(r1, r2);
 };

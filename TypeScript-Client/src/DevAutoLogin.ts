@@ -312,6 +312,16 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
       MyCharacter.skillManager.deserialize(charData.skills);
     }
 
+    // Monster Book — unconditional, so a character with no cards still clears
+    // the book the previously loaded character left behind
+    MyCharacter.monsterBook?.deserialize(charData.monsterBook, charData.monsterBookCover ?? 0);
+    try {
+      const { sweepInventoryCards } = await import('./MonsterBook/MonsterBook');
+      sweepInventoryCards(MyCharacter);
+    } catch (e) {
+      console.warn('[DevAutoLogin] monster card sweep failed', e);
+    }
+
     // Hotkey bindings (skills + items). Unconditional: an empty keymap is a
     // fresh character, and deserialize must still run to wipe whatever
     // character was loaded before it this session.
@@ -333,6 +343,10 @@ export async function tryAutoLogin(canvas: GameCanvas): Promise<boolean> {
     } catch (e) {
       console.warn('[DevAutoLogin] expiry sweep failed', e);
     }
+
+    // Merge same-item partial stacks fragmented by the old
+    // first-stack-only fill (still before the flip, like the sweep)
+    MyCharacter.inventory?.compactStacks?.();
 
     // Restore finished — saves are safe from here on
     (MyCharacter as any)._restoreComplete = true;

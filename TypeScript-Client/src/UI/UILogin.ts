@@ -380,6 +380,17 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         MyChar.skillManager.deserialize(charData.skills);
       }
 
+      // Apply the Monster Book. Unconditional, like the quest reset above: a
+      // character with no cards must still clear whatever book the previously
+      // loaded character left behind.
+      MyChar.monsterBook?.deserialize(charData.monsterBook, charData.monsterBookCover ?? 0);
+      try {
+        const { sweepInventoryCards } = await import('../MonsterBook/MonsterBook');
+        sweepInventoryCards(MyChar);
+      } catch (e) {
+        console.warn('[Login] monster card sweep failed', e);
+      }
+
       // Apply hotkey bindings (skills + items). Unconditional: an empty
       // keymap is a fresh character, and deserialize must still run to wipe
       // whatever character was loaded before it this session.
@@ -412,6 +423,10 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       } catch (e) {
         console.warn('[Login] expiry sweep failed', e);
       }
+
+      // Merge same-item partial stacks fragmented by the old
+      // first-stack-only fill (still before the flip, like the sweep)
+      MyChar.inventory?.compactStacks?.();
 
       // Restore finished — saves are safe from here on
       (MyChar as any)._restoreComplete = true;
@@ -536,6 +551,19 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         await LoginState.switchToSubState(LoginSubState.CHARACTER_SELECT);
       } else if (LoginState.currentSubState === LoginSubState.CHARACTER_SELECT) {
         await LoginState.switchToSubState(LoginSubState.WORLD_SELECT);
+      } else if (uiLoginRef.selectedWorldId !== null) {
+        // A world is selected, so the channel scroll is open — Back closes
+        // it and stays on world select; only a second Back leaves the screen
+        uiLoginRef.selectedWorldId = null;
+        uiLoginRef.selectedChannelIndex = null;
+        uiLoginRef.channelSelectAnimation = null;
+        uiLoginRef.scrollOpenAnimation.reset();
+        uiLoginRef.scrollOpenAnimation.active = false;
+        uiLoginRef.scrollContentFadeIn.active = false;
+        uiLoginRef.scrollContentFadeIn.alpha = 0;
+        uiLoginRef.channelButtons.forEach((b: any) => {
+          b.isHidden = true;
+        });
       } else {
         viewAllCharacterButton.isHidden = true;
         channelBackButton.isHidden = true;
@@ -1290,7 +1318,8 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
 
             // Deselect previous
             if (this.charSelected && this.selectedCharIndex !== i) {
-              this.characters[this.selectedCharIndex]?.setStance('stand1', 0, true);
+              this.characters[this.selectedCharIndex]?.setStance(
+                this.characters[this.selectedCharIndex].idleStance(), 0, true);
             }
             this.selectedCharIndex = i;
             this.charSelected = true;
@@ -1301,7 +1330,9 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
             this.charSelectScrollFrame = 0;
             this.charSelectScrollDelay = 0;
             // Switch selected character to walk animation
-            this.characters[i].setStance('walk1', 0, false);
+            // walk2 for a two-handed weapon: a spear has no walk1 node, so the
+            // selected character would walk with an empty hand
+            this.characters[i].setStance(this.characters[i].walkStance(), 0, false);
             // Enable the start button
             if (this.startButton) {
               this.startButton.stance = 'normal';

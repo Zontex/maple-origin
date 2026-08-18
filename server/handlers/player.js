@@ -63,6 +63,9 @@ function handlePlayerUpdate(playerId, updateData) {
   // petAction is a one-shot like emote — present for one broadcast only
   if (updateData.pets !== undefined) updatedInfo.pets = updateData.pets;
   updatedInfo.petAction = updateData.petAction;
+  // Monster Book summary (level / cover card / card counts) — persists in info
+  // so a late joiner's character-info window sees it too
+  if (updateData.monsterBook !== undefined) updatedInfo.monsterBook = updateData.monsterBook;
 
   const currentMapId = Number(player.mapId);
   const newMapId = updateData.mapId;

@@ -1290,21 +1290,10 @@ class InventoryMenuSprite extends DragableMenu {
       return;
     }
 
-    // Block dropping quest items
-    const questManager = this.charecter?.questManager;
-    if (questManager) {
-      for (const [, active] of questManager.activeQuests) {
-        const reqs = QuestData.requirements.get(active.questId);
-        if (reqs?.complete?.items?.some((i: any) => i.id === item.itemId)) {
-          console.log(`[Quest] Cannot drop quest item #${item.itemId}`);
-          return;
-        }
-        if (reqs?.start?.items?.some((i: any) => i.id === item.itemId)) {
-          console.log(`[Quest] Cannot drop quest item #${item.itemId}`);
-          return;
-        }
-      }
-    }
+    // NOTE: no active-quest-requirements check here on purpose. GMS only
+    // protects true quest items — the ones flagged quest=1 in their own WZ
+    // info, which canDropItem above already enforces. A common item that a
+    // quest merely needs (Branch, Stone, ...) stays droppable.
 
     const maxQuantity = item.quantity || 1;
 

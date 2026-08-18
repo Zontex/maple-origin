@@ -26,6 +26,7 @@ export type BindableAction =
   | "miniMap"
   | "worldMap"
   | "party"
+  | "monsterBook"
   | "keyConfig"
   | "face1"
   | "face2"
@@ -59,6 +60,7 @@ export const ACTIONS: ActionInfo[] = [
   { action: "miniMap", icon: 7, label: "Mini Map" },
   { action: "worldMap", icon: 5, label: "World Map" },
   { action: "party", icon: 19, label: "Party" },
+  { action: "monsterBook", icon: 22, label: "Monster Book" },
   { action: "keyConfig", icon: 9, label: "Set Key" },
   // Face emotes — the v83 client maps keymap face actions to the Face.wz
   // expression at (action - 98): F1 is the famous "ouch" hit face
@@ -128,6 +130,11 @@ export const DEFAULT_BINDINGS: Record<number, BindableAction> = {
   50: "miniMap",    // M
   17: "worldMap",   // W
   25: "party",      // P
+  // The MONSTER BOOK plate is icon 22 of the KeyConfig strip, so the action is
+  // v83's own — but Nexon shipped it unbound, sitting in the palette for the
+  // player to place. B is ours, purely so the window is reachable out of the
+  // box; rebinding or clearing it in SET KEY works like any other action.
+  48: "monsterBook", // B
   // v83 default emote row
   59: "face1",      // F1
   60: "face2",      // F2

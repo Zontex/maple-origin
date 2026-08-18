@@ -409,14 +409,34 @@ class NPC {
     return sprite;
   }
 
+  /**
+   * Whether the NPC's whole extent lies outside the viewport.
+   *
+   * Tests the sprite box, NOT the anchor point. `cy` is the NPC's feet, so a
+   * tall sprite reaches far above it — Perion's MapleTV (9250045) is 411x520
+   * with origin (213,520), i.e. every pixel of it is above its own anchor.
+   * Point-testing that anchor against a fixed margin culled the billboard
+   * while it still covered the screen: climb above it and `cy - camera.y`
+   * passes height+300 with 520px of artwork still in view, which is exactly
+   * the "disappears when you stand on top of it" report.
+   */
+  private isOffScreen(camera: CameraInterface, margin: number): boolean {
+    const b = this.getBounds();
+    return (
+      b.right - camera.x < -margin ||
+      b.left - camera.x > config.width + margin ||
+      b.bottom - camera.y < -margin ||
+      b.top - camera.y > config.height + margin
+    );
+  }
+
   draw(canvas: GameCanvas, camera: CameraInterface, lag: number, msPerTick: number, tdelta: number) {
     if (this.hide) return;
 
-    // Skip NPCs far outside the viewport (wide margin covers name tags,
-    // quest icons and chat balloons drawn around the sprite)
-    const screenX = this.x - camera.x;
-    const screenY = this.cy - camera.y;
-    if (screenX < -300 || screenX > config.width + 300 || screenY < -300 || screenY > config.height + 300) return;
+    // Skip NPCs fully outside the viewport. The margin covers what is drawn
+    // around the sprite rather than inside it — name tag, func text, and the
+    // MapleTV's ad panels.
+    if (this.isOffScreen(camera, 200)) return;
 
     // Draw the NPC's stance
     const currentFrame = this.stances[this.stance]?.frames[this.frame];
@@ -452,9 +472,9 @@ class NPC {
    */
   drawOverlays(canvas: GameCanvas, camera: CameraInterface) {
     if (this.hide) return;
-    const screenX = this.x - camera.x;
-    const screenY = this.cy - camera.y;
-    if (screenX < -300 || screenX > config.width + 300 || screenY < -300 || screenY > config.height + 300) return;
+    // Same bounds test as draw(): these hang off the sprite's head, which on a
+    // tall NPC is nowhere near its anchor
+    if (this.isOffScreen(camera, 200)) return;
 
     this.drawQuestIndicator(canvas, camera);
     if (this.showDialog) {

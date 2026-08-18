@@ -26,7 +26,7 @@ export const PET_JUMP_COOLDOWN_MS = 600;
 // the character, feet anchored this many px above the owner's feet. Low
 // enough that the player's torso (drawn after the pet) covers its front,
 // so it reads as riding the back with just head/ears peeking out.
-export const PET_HANG_Y_OFFSET = 8;
+export const PET_HANG_Y_OFFSET = -6;
 
 // Idle stance reroll window
 export const PET_IDLE_MIN_MS = 5000;

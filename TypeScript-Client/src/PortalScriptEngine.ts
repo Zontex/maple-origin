@@ -266,7 +266,28 @@ export default class PortalScriptEngine {
       warpParty(mapId: number, portalNameOrId?: any) { onWarp(mapId, portalNameOrId); },
       getLevel() { return character?.stats?.level ?? 1; },
       getJobId() { return character?.stats?.jobId ?? 0; },
-      openNpc(npcId: number) { /* stub */ },
+      /**
+       * Hand the conversation to an NPC script. The NPC need not be standing
+       * on the map — v83 uses this for portals that talk instead of warping,
+       * like Happyville's chimney01, whose `in_xmas_party` opens NPC 9209100
+       * to tell you off for sneaking into someone's house. Left as a stub this
+       * portal did nothing at all: the script opens the NPC and returns false,
+       * so entry is blocked and no dialogue ever appeared.
+       */
+      openNpc(npcId: number) {
+        void (async () => {
+          try {
+            const { default: MapleMap } = await import('./MapleMap');
+            const { npcNames } = await import('./Quest/QuestData');
+            await MapleMap.tryNpcScript({
+              id: npcId,
+              strings: { name: npcNames.get(npcId) || '' },
+            });
+          } catch (e) {
+            console.error(`[PortalScript] openNpc(${npcId}) failed:`, e);
+          }
+        })();
+      },
       showInfo(path: string) { /* stub */ },
       guideHint(hint: number) { /* stub */ },
     }, 'PortalScript pi');

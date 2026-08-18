@@ -4,6 +4,13 @@ import ClickManager from '../ClickManager';
 import GameCanvas from '../../GameCanvas';
 import { CameraInterface } from '../../Camera';
 import { ensureItemNames, getItemNameSync } from '../../Quest/QuestData';
+import {
+  ensureMobNames,
+  ensureMonsterBookData,
+  getCard,
+  getCardIcon,
+  getMobName,
+} from '../../MonsterBook/MonsterBookData';
 
 /**
  * Character Info window — v83 UIWindow.img/UserInfo, opened by double-clicking
@@ -101,6 +108,9 @@ class CharInfoMenuSprite extends DragableMenu {
     }
 
     ensureItemNames().catch(() => {});
+    // The Monster Book section names the cover card's monster
+    ensureMonsterBookData().catch(() => {});
+    ensureMobNames().catch(() => {});
     ClickManager.addDragableMenu(this);
   }
 
@@ -186,6 +196,18 @@ class CharInfoMenuSprite extends DragableMenu {
   }
 
   // ---- data helpers ----------------------------------------------------
+  /**
+   * Monster Book figures for whoever is being inspected. The local player has
+   * the live book; a remote character carries the summary that rides their
+   * roster entry, which is exactly the five values this section prints.
+   */
+  private bookSummary(): { level: number; cover: number; total: number; basic: number; special: number } {
+    const t = this.target;
+    if (t?.monsterBook) return t.monsterBook.summary();
+    if (t?.monsterBookInfo) return t.monsterBookInfo;
+    return { level: 1, cover: 0, total: 0, basic: 0, special: 0 };
+  }
+
   private medalIds(): number[] {
     const ids: number[] = [];
     const t = this.target;
@@ -275,12 +297,38 @@ class CharInfoMenuSprite extends DragableMenu {
 
     if (!this.expanded) return;
 
-    // Monster Book — no card system yet: fresh book values
-    canvas.drawText({ text: '1', x: this.x + 100, y: this.y + 183, color: '#000000', fontSize: 11 });
-    canvas.drawText({ text: '-', x: this.x + 100, y: this.y + 203, color: '#000000', fontSize: 11 });
-    canvas.drawText({ text: '0', x: this.x + 98, y: this.y + 221, color: '#000000', fontSize: 11 });
-    canvas.drawText({ text: '0', x: this.x + 182, y: this.y + 221, color: '#000000', fontSize: 11 });
-    canvas.drawText({ text: '0', x: this.x + 252, y: this.y + 221, color: '#000000', fontSize: 11 });
+    // Monster Book: book level, the registered cover card, and the card counts
+    const book = this.bookSummary();
+    canvas.drawText({
+      text: String(book.level), x: this.x + 100, y: this.y + 183,
+      color: '#000000', fontSize: 11,
+    });
+
+    const coverMob = book.cover ? getCard(book.cover)?.mob ?? 0 : 0;
+    canvas.drawText({
+      text: coverMob ? getMobName(coverMob) : '-',
+      x: this.x + 100, y: this.y + 203, color: '#000000', fontSize: 11,
+    });
+    if (book.cover) {
+      const icon = getCardIcon(book.cover);
+      // The card face at half size, tucked left of its name in the row
+      if (icon?.width) {
+        canvas.drawImage({ img: icon, dx: this.x + 82, dy: this.y + 200, dw: 14, dh: 19 });
+      }
+    }
+
+    canvas.drawText({
+      text: String(book.total), x: this.x + 98, y: this.y + 221,
+      color: '#000000', fontSize: 11,
+    });
+    canvas.drawText({
+      text: String(book.basic), x: this.x + 182, y: this.y + 221,
+      color: '#000000', fontSize: 11,
+    });
+    canvas.drawText({
+      text: String(book.special), x: this.x + 252, y: this.y + 221,
+      color: '#000000', fontSize: 11,
+    });
 
     // Collection (medals)
     const medals = this.medalIds();

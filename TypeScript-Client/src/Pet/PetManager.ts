@@ -187,6 +187,15 @@ class PetManagerClass {
     try {
       this.owner = owner;
       const cash: any[] = owner.inventory.cash ?? [];
+      // A rebuilt inventory (login restore after QUIT, reconnect) leaves any
+      // still-live pet holding a stale Item object — the identity dedup
+      // below can't recognize it against the rebuilt item and would summon
+      // the same pet a second time. Despawn pets whose item is no longer in
+      // the cash tab; their rebuilt items re-summon in the loop below.
+      // 'mapleave' keeps the saved summoned flag intact.
+      for (const pet of [...this.pets]) {
+        if (!cash.includes(pet.itemRef)) this.despawn(pet, 'mapleave');
+      }
       for (const item of cash) {
         if (this.pets.length >= MAX_PETS) break;
         const data = item?.equipData;
@@ -277,11 +286,18 @@ class PetManagerClass {
     }
   }
 
-  drawPets(canvas: GameCanvas, camera: any) {
+  /**
+   * hover filter: undefined = all pets; false = only grounded followers
+   * (drawn behind their owner, v83 style); true = only pets hanging on a
+   * climbing owner's back — those draw AFTER the player so the back-facing
+   * hang sprite rides visibly in front, like GMS.
+   */
+  drawPets(canvas: GameCanvas, camera: any, hover?: boolean) {
+    const want = (pet: Pet) => hover === undefined || pet.hover === hover;
     for (const [, pets] of this.remotePets) {
-      for (const pet of pets) pet.draw(canvas, camera);
+      for (const pet of pets) if (want(pet)) pet.draw(canvas, camera);
     }
-    for (const pet of this.pets) pet.draw(canvas, camera);
+    for (const pet of this.pets) if (want(pet)) pet.draw(canvas, camera);
   }
 
   drawOverlays(canvas: GameCanvas, camera: any) {

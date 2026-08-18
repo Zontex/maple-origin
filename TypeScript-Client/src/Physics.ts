@@ -229,6 +229,16 @@ class Physics {
     // Apply knockback force in the specified direction
     this.vx = directionX * force;
     this.vy = directionY * force;
+
+    // Knockback must actually leave the ground: with fh still set the
+    // grounded branch keeps the character snapped to the foothold and both
+    // velocities are ignored — jump() drops fh for the same reason. Only
+    // for an UPWARD launch, though: dropping fh with downward velocity
+    // starts the fall on the foothold line moving down, which the crossing
+    // check never catches — the entity tunnels through the floor.
+    if (directionY < 0) {
+      this.fh = null;
+    }
   }
 
   applyKnockbackX(directionX = 1, force = 150) {

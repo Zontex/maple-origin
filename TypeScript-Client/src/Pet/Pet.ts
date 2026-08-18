@@ -391,13 +391,18 @@ class Pet {
   drawOverlays(canvas: GameCanvas, camera: any) {
     if (this.destroyed || !this.wz) return;
     const screenX = this.pos.x - camera.x;
-    drawPetNameTag(
-      canvas,
-      this.wz.nameTagArt,
-      this.data?.petName ?? this.wz.name,
-      screenX,
-      this.pos.y - camera.y
-    );
+    // Hanging on a climbing owner's back (hover): GMS hides the pet's name
+    // tag there — the pet sits at the player's torso, so the tag would
+    // print straight across the player sprite and their own name tag
+    if (!this.hover) {
+      drawPetNameTag(
+        canvas,
+        this.wz.nameTagArt,
+        this.data?.petName ?? this.wz.name,
+        screenX,
+        this.pos.y - camera.y
+      );
+    }
     if (this.balloonText && this.balloonArt) {
       drawPetBalloon(
         canvas,

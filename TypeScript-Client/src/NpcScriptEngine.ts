@@ -360,6 +360,40 @@ export default class NpcScriptEngine {
     }
   }
 
+  /**
+   * A world point in the shape Cosmic scripts expect. Scripts compare a
+   * player's position against a portal's — Happyville's 9209100 measures the
+   * distance to the chimney01 portal to decide which line Santa says — and
+   * through the safe-stub proxy those reads silently became NaN, so the
+   * comparison was always false and only the generic greeting ever showed.
+   */
+  private static point(x: number, y: number) {
+    return { getX() { return x; }, getY() { return y; }, x, y };
+  }
+
+  /** The map shim scripts reach through cm.getMap() / player.getMap(). */
+  private mapApi() {
+    const character = this.character;
+    return makeSafeScriptApi({
+      getId() { return character?.map?.mapId ?? 0; },
+      getPortal(nameOrIndex: string | number) {
+        const portals = character?.map?.portals ?? [];
+        const index = typeof nameOrIndex === 'number'
+          ? nameOrIndex
+          : portals.findIndex((p: any) => p.name === nameOrIndex);
+        const portal = portals[index];
+        if (!portal) return null;
+        return makeSafeScriptApi({
+          // Portal ids in the WZ are the node names, i.e. load order — the
+          // Portal class doesn't keep one, so the index is that same number
+          getId() { return index; },
+          getName() { return portal.name ?? ''; },
+          getPosition() { return NpcScriptEngine.point(portal.x ?? 0, portal.y ?? 0); },
+        }, `NpcScript portal ${String(nameOrIndex)}`);
+      },
+    }, 'NpcScript map');
+  }
+
   private createCM(): any {
     const engine = this;
     const character = this.character;
@@ -383,10 +417,9 @@ export default class NpcScriptEngine {
         return { getId() { return jobId; }, id: jobId };
       },
       getMapId() { return character?.map?.mapId ?? 0; },
-      getMap() {
-        return makeSafeScriptApi({
-          getId() { return character?.map?.mapId ?? 0; },
-        }, 'NpcScript player map');
+      getMap() { return engine.mapApi(); },
+      getPosition() {
+        return NpcScriptEngine.point(character?.pos?.x ?? 0, character?.pos?.y ?? 0);
       },
       // Cosmic saved-location API (FLORINA, MIRROR, EVENT, ...): entry NPCs
       // save the origin map before warping, exit NPCs read it to warp back.
@@ -519,11 +552,7 @@ export default class NpcScriptEngine {
       getMeso() { return character?.inventory?.mesos ?? 0; },
       getMapId() { return character?.map?.mapId ?? 0; },
       getNpc() { return engine.npcId; },
-      getMap() {
-        return makeSafeScriptApi({
-          getId() { return character?.map?.mapId ?? 0; },
-        }, 'NpcScript map');
-      },
+      getMap() { return engine.mapApi(); },
 
       // Items
       gainItem(itemId: number, count?: number) {

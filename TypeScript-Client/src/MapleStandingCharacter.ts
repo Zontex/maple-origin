@@ -88,6 +88,15 @@ export default class MapleStandingCharacter {
   // Equips & IDs
   equips: any[] = [];
   weaponEquipId: number | null = null;
+  /**
+   * Which of the two idle poses the worn weapon wants, from its WZ
+   * `info/stand`. Two-handed weapons are authored for `stand2` ONLY — a spear
+   * has no `stand1` node at all — so a preview locked to stand1 finds no frame
+   * for the weapon layer and silently draws the character empty-handed.
+   */
+  weaponStandType: 1 | 2 = 1;
+  /** Same story for the walk cycle, from the weapon's WZ `info/walk`. */
+  weaponWalkType: 1 | 2 = 1;
   private equippedIdsBySlot: Record<number, number> = {};
 
   // Public fields to match external Character type
@@ -155,7 +164,13 @@ export default class MapleStandingCharacter {
 
     if (typeof a.hairId === "number") await this.setHair(a.hairId);
     if (a.equipIds?.length) await this.setEquipsByIds(a.equipIds);
-    else this.equippedIdsBySlot = {};
+    else {
+      // Re-skinning to a character with no equips must also drop the previous
+      // one's weapon, or the pose stays stuck in its stand
+      this.equippedIdsBySlot = {};
+      this.weaponStandType = 1;
+      this.weaponWalkType = 1;
+    }
 
     if (a.blink) {
       if (typeof a.blink.enabled === "boolean")
@@ -164,7 +179,7 @@ export default class MapleStandingCharacter {
       if (typeof a.blink.maxMs === "number") this.blink.maxMs = a.blink.maxMs;
     }
 
-    this.setStance("stand1", 0, true);
+    this.setStance(this.idleStance(), 0, true);
     this.scheduleNextBlink();
     this.syncLook();
   }
@@ -233,7 +248,7 @@ export default class MapleStandingCharacter {
     this.setFaceExpr(this.blink.baseline);
     this.setFaceFrame(0);
 
-    this.setStance("stand1", 0, true);
+    this.setStance(this.idleStance(), 0, true);
     this.scheduleNextBlink();
     this.syncLook();
   }
@@ -318,12 +333,27 @@ export default class MapleStandingCharacter {
     this.syncLook();
   }
 
+  /** The idle pose the worn weapon is drawn in. */
+  idleStance(): string {
+    return this.weaponStandType === 2 ? "stand2" : "stand1";
+  }
+
+  /** The walk cycle the worn weapon is drawn in. */
+  walkStance(): string {
+    return this.weaponWalkType === 2 ? "walk2" : "walk1";
+  }
+
   /** Replace all equips by raw item IDs. */
   async setEquipsByIds(ids: number[] = []) {
     this.equips = [];
     this.weaponEquipId = null;
+    this.weaponStandType = 1;
+    this.weaponWalkType = 1;
     this.equippedIdsBySlot = {};
     for (const id of ids) await this.attachEquipByItemId(id);
+    // Re-pose: the weapon that just arrived decides which stand the whole
+    // character is drawn in
+    this.setStance(this.idleStance(), 0, true);
     this.syncLook();
   }
 
@@ -379,7 +409,14 @@ export default class MapleStandingCharacter {
       const equip = await WZManager.get(`Character.wz/${meta.dir}/0${id}.img`);
       this.equips[meta.slot] = equip;
       this.equippedIdsBySlot[meta.slot] = id;
-      if (meta.slot === 10) this.weaponEquipId = id;
+      if (meta.slot === 10) {
+        this.weaponEquipId = id;
+        this.weaponStandType = (equip as any)?.info?.stand?.nValue === 2 ? 2 : 1;
+        this.weaponWalkType = (equip as any)?.info?.walk?.nValue === 2 ? 2 : 1;
+        // Attaching a weapon on its own (the Cash Shop try-on) has to re-pose
+        // too, not just the bulk setEquipsByIds path
+        this.setStance(this.idleStance(), 0, true);
+      }
       this.syncLook();
     } catch (e) {
       console.warn(`[StandingCharacter] no sprite for equip ${id}`);

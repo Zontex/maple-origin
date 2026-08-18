@@ -480,8 +480,16 @@ export default class UIQuestDialog {
     this.speakerNode = stand;
     this.speakerImg = stand?.nGetImage?.() || null;
 
-    // Degenerate placeholders are a sliver wide; anything real is not
-    const standIsPlaceholder = !stand || (GUIUtil.wzSize(stand).width || 0) <= 2;
+    // Placeholders are markers, not art, and the WZ separates the two
+    // cleanly: across all 6928 NPCs a `stand/0` is either 1px (5619 of them)
+    // or 4px (56, e.g. Happyville's Santa 9209100, an invisible trigger with
+    // hideName=1 whose portrait is the 179x80 info/default) in its smaller
+    // dimension, and the smallest genuine sprite is 17. Anything in that gap
+    // is a marker. The old test only looked at width and only caught <=2, so
+    // the 4px markers slipped through and drew a blank portrait.
+    const standSize = GUIUtil.wzSize(stand);
+    const standIsPlaceholder =
+      !stand || Math.min(standSize.width || 0, standSize.height || 0) <= 8;
     if (standIsPlaceholder && fallback) {
       this.speakerNode = fallback;
       this.speakerImg = fallback.nGetImage?.() || null;
