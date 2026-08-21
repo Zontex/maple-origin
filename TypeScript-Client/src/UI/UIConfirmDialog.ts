@@ -121,7 +121,7 @@ export default class UIConfirmDialog {
 
   update(_msPerTick: number) { /* buttons are ClickManager-driven */ }
 
-  draw(canvas: GameCanvas, _camera: CameraInterface, _lag: number, _ms: number, _t: number) {
+  draw(canvas: GameCanvas, camera: CameraInterface, lag: number, ms: number, t: number) {
     if (this.isHidden || !this.frame) return;
     const x = this.x;
     let y = this.y;
@@ -139,6 +139,9 @@ export default class UIConfirmDialog {
     this.lines.forEach((line, i) => {
       canvas.drawText({ text: line, x: centerX, y: blockTop + i * LINE_H, color: '#000000', fontSize: 12, align: 'center' });
     });
+    // ClickManager only routes clicks — buttons draw themselves, here, on top
+    // of the strip (the meso-quantity dialog does the same)
+    this.buttons.forEach((btn) => btn.draw(canvas, camera, lag, ms, t));
   }
 
   private wrap(text: string, maxW: number): string[] {
