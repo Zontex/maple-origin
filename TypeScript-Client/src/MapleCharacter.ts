@@ -32,7 +32,14 @@ import DamageIndicator, {
 import { AttackType } from "./Constants/AttackType";
 import Inventory from "./Inventory/Inventory";
 import Stats, { DamageRange } from "./Stats/Stats";
-import { BOOSTER_SKILL_IDS } from "./Constants/CombatSkills";
+import {
+  BOOSTER_SKILL_IDS,
+  DASH_SKILL_ID,
+  SKILL_BULLET_STAGGER_MS,
+  usesWeaponSound,
+} from "./Constants/CombatSkills";
+import { playSkillSound } from "./Skills/SkillSound";
+import PartyManager from "./Party/PartyManager";
 import { jobMeetsEquipReq } from "./Constants/Jobs";
 import { MapleMap } from "./MapleMap";
 import Monster from "./Monster";
@@ -43,6 +50,8 @@ import { CameraInterface } from "./Camera";
 import { AfterimageState, loadAfterimage } from "./Effects/Afterimage";
 import { spawnSkillHit } from "./Effects/SkillHitEffect";
 import { isMonsterCardId } from "./MonsterBook/MonsterBookData";
+import GuildManager from "./Guild/GuildManager";
+import { getEmblemImage, EMBLEM_SIZE } from "./Guild/GuildEmblem";
 
 // Played the moment a quest's requirements are met — killing the 10th of 10
 // snails — alongside the red balloon. This is "quest finished", which in GMS
@@ -148,6 +157,20 @@ class MapleCharacter {
   skillEffectFrames: any[] | null = null;
   skillEffectFrame: number = 0;
   skillEffectDelay: number = 0;
+  // Frame of the attack stance on which the current skill fires
+  // (SKILL_TRIGGER_FRAME); null = the stance's last frame, via onLastFrame
+  skillTriggerFrame: number | null = null;
+  onSkillTriggerFrame: (() => void) | null = null;
+  // Dash: dust puffs (the skill's `special` art) left at the feet while
+  // running under the buff — see updateDashTrail
+  dashTrail: Array<{ frames: any[]; frame: number; delay: number; x: number; y: number; flipped: boolean }> = [];
+  dashTrailTimer: number = 0;
+  static dashSpecialFrames: any[] | null = null;
+  // Natural HP/MP recovery clock — see updateNaturalRecovery
+  recoveryTimer: number = 0;
+  // Remote characters only: buffs the server says are up on them
+  // (skillId -> expiresAt), fed by player_buff / the join roster
+  remoteBuffs: Map<number, number> = new Map();
   afterimage: AfterimageState = new AfterimageState();
   _portalScriptEngine: any = null;
   pos: Physics;
@@ -510,7 +533,126 @@ class MapleCharacter {
       this.isOscillateFrames = isOscillateFrames;
     }
   }
+  /**
+   * v83 natural recovery (the client-side HealOverTime tick): every 10s,
+   * HP +10 while standing still, +Improving HP Recovery's `hp` (3..50) on top;
+   * MP +3, and with Improving MP Recovery +floor(skillLevel/10 × level) — the
+   * pre-BB formulas (10 base HP standing still; MP 3 + skillLv/10 × charLv).
+   * Walking, attacking or being airborne forfeits the HP tick; MP keeps
+   * coming. On a rope or ladder nothing recovers unless Endure is learned,
+   * which then restores HP every `time` seconds (31s at L1 down to 10s).
+   * Chairs run their own recovery, so a seated character skips this one.
+   */
+  static readonly RECOVERY_INTERVAL_MS = 10000;
+  updateNaturalRecovery(msPerTick: number) {
+    if (this.isRemote || this.isDead || !this.skillManager) return;
+    const onRope = this.isInClimbingRope;
+    const endure = onRope ? this.skillManager.getSkillEffectSync(1000002) : null;
+    const interval = onRope
+      ? (endure ? (endure.time || 31) * 1000 : Infinity)
+      : MapleCharacter.RECOVERY_INTERVAL_MS;
+    this.recoveryTimer += msPerTick;
+    if (this.recoveryTimer < interval) return;
+    this.recoveryTimer = 0;
+    if (this.chairId) return;
+
+    const hpSkill = this.skillManager.getSkillEffectSync(1000000)?.hp ?? 0;
+    let hpGain = 0;
+    let mpGain = 0;
+    if (onRope) {
+      hpGain = 10 + hpSkill;
+    } else {
+      const still = !!this.pos.fh && Math.abs(this.pos.vx) < 1 && !this.isInAttack;
+      if (still) hpGain = 10 + hpSkill;
+      const mpLv = this.skillManager.getSkillLevel(2000000);
+      mpGain = 3 + (mpLv > 0 ? Math.floor((mpLv / 10) * (this.stats?.level ?? 1)) : 0);
+    }
+    if (hpGain > 0 && this.hp < this.maxHp) this.hp = Math.min(this.maxHp, this.hp + hpGain);
+    if (mpGain > 0 && this.mp < this.maxMp) this.mp = Math.min(this.maxMp, this.mp + mpGain);
+  }
+
+  /**
+   * Dash's `special` art: a small dust puff. While the buff is up and the
+   * character is running on the ground, one is dropped at the feet every
+   * DASH_TRAIL_INTERVAL_MS and left behind to play out. `effect` (the burst)
+   * plays once at activation through the normal skill-effect path; `effect0`
+   * is not used — nothing in the WZ says what triggers it.
+   */
+  static readonly DASH_TRAIL_INTERVAL_MS = 200;
+  updateDashTrail(msPerTick: number) {
+    const dashing = !this.isRemote && !!this.buffManager?.hasBuff?.(DASH_SKILL_ID);
+    if (dashing) {
+      if (!MapleCharacter.dashSpecialFrames) {
+        MapleCharacter.dashSpecialFrames = [];
+        void WZManager.get(`Skill.wz/500.img/skill/${DASH_SKILL_ID}/special`).then((n: any) => {
+          MapleCharacter.dashSpecialFrames = (n?.nChildren ?? []).filter((f: any) => f?.nGetImage);
+        });
+      }
+      const running = !!this.pos.fh && Math.abs(this.pos.vx) > 20;
+      this.dashTrailTimer += msPerTick;
+      if (
+        running &&
+        this.dashTrailTimer >= MapleCharacter.DASH_TRAIL_INTERVAL_MS &&
+        MapleCharacter.dashSpecialFrames.length > 0
+      ) {
+        this.dashTrailTimer = 0;
+        this.dashTrail.push({
+          frames: MapleCharacter.dashSpecialFrames,
+          frame: 0,
+          delay: 0,
+          x: this.pos.x,
+          y: this.pos.y,
+          flipped: this.flipped,
+        });
+      }
+    }
+    for (let i = this.dashTrail.length - 1; i >= 0; i--) {
+      const puff = this.dashTrail[i];
+      puff.delay += msPerTick;
+      const frameDelay = puff.frames[puff.frame]?.nGet?.("delay")?.nGet?.("nValue", 120) ?? 120;
+      if (puff.delay >= frameDelay) {
+        puff.delay -= frameDelay;
+        puff.frame += 1;
+      }
+      if (puff.frame >= puff.frames.length) this.dashTrail.splice(i, 1);
+    }
+  }
+
+  /**
+   * The frame on which an attack stance connects, or null to use the last
+   * frame. Only the body's alias stances (frames that point at another
+   * action's frame: straight, shot, somersault, doublefire, backspin...) say:
+   * a NEGATIVE delay marks a wind-up frame, and the hit lands on the first
+   * frame whose delay is not negative — straight -240/360 punches on frame 1,
+   * shot -240/540/0 fires on frame 1, doubleupper -300/-120/120... on frame 2.
+   * Plain stances (swingO1, shoot1) carry no such marker.
+   */
+  attackFrameOf(stance: string): number | null {
+    const frames = this.baseBody?.[stance];
+    if (!frames) return null;
+    let sawAlias = false;
+    for (let i = 0; frames[i]; i++) {
+      const f = frames[i];
+      if (!f.action) continue;
+      sawAlias = true;
+      if (f.nGet("delay").nGet("nValue", 0) >= 0) return i;
+    }
+    return null;
+  }
+
   setFrame(frame = 0, carryOverDelay = 0) {
+    // Skill trigger frame (see useSkill): fire once when the stance reaches it
+    if (
+      this.skillTriggerFrame !== null &&
+      frame === this.skillTriggerFrame &&
+      this.onSkillTriggerFrame
+    ) {
+      const fire = this.onSkillTriggerFrame;
+      this.skillTriggerFrame = null;
+      this.onSkillTriggerFrame = null;
+      fire();
+    }
+
     if (
       this.useStanceUntilMaxFrame &&
       !this.baseBody[this.stance][frame + 1] &&
@@ -1249,6 +1391,17 @@ async attack() {
 
   void this.armAfterimage(attackStance);
 
+  const fire = () => {
+    if (useRanged) void this.fireProjectile(weaponType);
+    else void this.executeAttackDamage();
+  };
+  // Alias stances (the gun's `shot`) mark their attack frame; plain swings
+  // connect on the last frame as before — see attackFrameOf
+  const triggerFrame = this.attackFrameOf(attackStance);
+  if (triggerFrame !== null) {
+    this.skillTriggerFrame = triggerFrame;
+    this.onSkillTriggerFrame = fire;
+  }
   this.setStance(
     attackStance,
     0,
@@ -1256,14 +1409,12 @@ async attack() {
     false,
     () => {
       this.isInAttack = false;
+      const pending = this.onSkillTriggerFrame;
+      this.skillTriggerFrame = null;
+      this.onSkillTriggerFrame = null;
+      if (pending) pending();
     },
-    async () => {
-      if (useRanged) {
-        await this.fireProjectile(weaponType);
-      } else {
-        await this.executeAttackDamage();
-      }
-    }
+    triggerFrame === null ? fire : () => {}
   );
 }
 
@@ -1362,8 +1513,9 @@ async executeAttackDamage() {
         isCritical = true;
       }
       const knockbackDirection = isCharacterFacingRight ? 1 : -1;
+      // No impact art on a plain swing: v83 has none — the mob's own hit
+      // stance is the feedback — so there is nothing to draw here
       monster.hit(damage, knockbackDirection, this, isCritical);
-      this.createHitEffect(monster.pos.x, monster.pos.y);
     } catch (error) {
       console.error('Error processing monster hit:', error);
     }
@@ -1484,15 +1636,39 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
       ballFrame = shell.frame;
     }
 
+    // Weapon class the WZ demands (`weapon`: Double Shot carries 49, guns —
+    // the item-id prefix is 100 + the code). Anything else: no cast.
+    const weaponType = getEquipTypeById(this.weaponEquipId);
+    const config = getWeaponConfig(weaponType);
+    if (info.weapon != null && Math.floor(this.weaponEquipId / 10000) !== 100 + info.weapon) {
+      console.log(`[Skill] ${skillId} needs weapon class ${info.weapon} — cast blocked`);
+      return false;
+    }
+
+    // A ball skill on a ranged weapon with no magic and no fixed damage is a
+    // weapon shot (Double Shot): real ammo at the skill's multiplier,
+    // `bulletCount` rounds per cast, and no cast at all with an empty pouch.
+    const isWeaponShot =
+      hasBall && !((effect.mad || 0) > 0) && !((effect.fixdamage || 0) > 0) &&
+      !fixedDamageOverride && !!config?.isRanged;
+    if (isWeaponShot && !this.findAmmo(weaponType)) {
+      console.log(`[Skill] ${skillId} has no ammo to fire`);
+      return false;
+    }
+
     this.lastAttackTime = Date.now();
     this.isInAttack = true;
     this.rightClickRelease();
     this.leftClickRelease();
     this.isInAlert = false;
 
+    // Pirate 1st-job melee skills swing to the weapon's own clip (see
+    // WEAPON_SOUND_SKILLS); a weapon shot plays it per bullet in fireProjectile
+    if (usesWeaponSound(skillId) && !isWeaponShot) {
+      try { playAudioForAttackByWeaponType(weaponType); } catch (e) { /* ignore */ }
+    }
+
     // Determine body stance
-    const weaponType = getEquipTypeById(this.weaponEquipId);
-    const config = getWeaponConfig(weaponType);
     const stancePool = config?.stances?.melee || ['swingO1'];
     let attackStance: string = stancePool[Math.floor(Math.random() * stancePool.length)];
 
@@ -1506,31 +1682,67 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
     // effect / hit art. Swinging a staff for Energy Bolt must not streak.
     this.afterimage.cancel();
 
-    if (hasBall) {
-      // Projectile skill — fire a projectile with ball sprites
-      this.setStance(
-        attackStance,
-        0,
-        true,
-        false,
-        () => { this.isInAttack = false; },
-        () => {
-          this.fireSkillProjectile(effect, info.element, fixedDamageOverride, ballFrame, skillId);
+    let fire: () => void;
+    if (isWeaponShot) {
+      const rounds = Math.max(1, effect.bulletCount || 1);
+      // Ammo spent per cast: `bulletConsume` when the skill says so (Avenger
+      // throws one big star but eats 3), otherwise one per visible round
+      const toConsume = effect.bulletConsume > 0 ? effect.bulletConsume : rounds;
+      const shot = {
+        skillId,
+        damagePercent: (effect.damage || 100) / 100,
+        range: effect.range || 0,
+        ballNode: effect.ballNode,
+        hitNode: effect.hitNode,
+      };
+      fire = () => {
+        // Anything beyond one per round comes off the stack up front
+        const extra = toConsume - rounds;
+        if (extra > 0) {
+          const ammo = this.findAmmo(weaponType);
+          if (ammo) {
+            this.inventory.removeFromInventory(ammo.itemId, Math.min(extra, ammo.quantity ?? extra));
+            this.recalcLocalStats();
+          }
         }
-      );
+        for (let i = 0; i < rounds; i++) {
+          const consumeAmmo = i < toConsume;
+          const shoot = () => { void this.fireProjectile(weaponType, { ...shot, consumeAmmo }); };
+          if (i === 0) shoot();
+          else setTimeout(shoot, i * SKILL_BULLET_STAGGER_MS);
+        }
+      };
+    } else if (hasBall) {
+      // Projectile skill — fire a projectile with ball sprites
+      fire = () => this.fireSkillProjectile(effect, info.element, fixedDamageOverride, ballFrame, skillId);
     } else {
       // Melee skill — direct hit detection
-      this.setStance(
-        attackStance,
-        0,
-        true,
-        false,
-        () => { this.isInAttack = false; },
-        async () => {
-          await this.executeSkillDamage(skillId, effect);
-        }
-      );
+      fire = () => { void this.executeSkillDamage(skillId, effect); };
     }
+
+    // Connect on the stance's attack frame when the body defines one,
+    // otherwise on its last frame (see attackFrameOf)
+    const triggerFrame = this.attackFrameOf(attackStance);
+    if (triggerFrame !== null) {
+      this.skillTriggerFrame = triggerFrame;
+      this.onSkillTriggerFrame = fire;
+    }
+    this.setStance(
+      attackStance,
+      0,
+      true,
+      false,
+      () => {
+        this.isInAttack = false;
+        // A trigger frame the stance never reached still fires on the way
+        // out, so a cast never silently does nothing
+        const pending = this.onSkillTriggerFrame;
+        this.skillTriggerFrame = null;
+        this.onSkillTriggerFrame = null;
+        if (pending) pending();
+      },
+      triggerFrame === null ? fire : () => {}
+    );
     this.beginSkillCooldown(skillId, effect);
     return true;
   } else if (info.isBuff) {
@@ -1590,10 +1802,8 @@ async executeSkillDamage(skillId: number, effect: any) {
   const damagePercent = (effect.damage || 100) / 100;
   const fixDamage = effect.fixdamage || 0;
 
-  try {
-    playAudioForAttackByWeaponType(weaponType);
-  } catch (e) { /* ignore */ }
-
+  // No weapon swing sfx here: a skill's `Use` clip (played at cast) is its
+  // attack sound, and its `Hit` clip lands below
   const isCharacterFacingRight = this.flipped;
 
   // Find monsters in range
@@ -1677,13 +1887,8 @@ async executeSkillDamage(skillId: number, effect: any) {
     }
   }
 
-  // Play hit sound
-  try {
-    const hitNode = await WZManager.get('Sound.wz/Game.img/Hit');
-    if (hitNode && (hitNode as any).nGetAudio) {
-      PLAY_AUDIO((hitNode as any).nGetAudio());
-    }
-  } catch (e) { /* ignore */ }
+  // The skill's own Hit clip, falling back to the generic weapon hit
+  void playSkillSound(skillId, 'Hit');
 
   this.checkForItemDropPickup(true);
 }
@@ -1701,11 +1906,26 @@ getAttackTypeFromStance(): AttackType {
 /**
  * Fire a projectile for ranged weapon attacks (bow, crossbow, claw, pistol).
  */
-async fireProjectile(weaponType: number) {
-  try {
-    playAudioForAttackByWeaponType(weaponType);
-  } catch (error) {
-    console.error('Error playing attack sound:', error);
+async fireProjectile(
+  weaponType: number,
+  skill: {
+    skillId: number;
+    damagePercent: number;
+    range: number;
+    ballNode?: any;
+    hitNode?: any;
+    consumeAmmo?: boolean;
+  } | null = null
+) {
+  // A skill's Use clip is normally its gunshot, so only a plain shot plays the
+  // weapon sfx — except the pirate 1st-job shots, whose WZ Use clip is not
+  // theirs (WEAPON_SOUND_SKILLS): they bang once per bullet
+  if (!skill || usesWeaponSound(skill.skillId)) {
+    try {
+      playAudioForAttackByWeaponType(weaponType);
+    } catch (error) {
+      console.error('Error playing attack sound:', error);
+    }
   }
 
   const attackType = this.getAttackTypeFromStance();
@@ -1715,7 +1935,7 @@ async fireProjectile(weaponType: number) {
   // Fire the actual equipped ammo and consume one
   const ammo = this.findAmmo(weaponType);
   const projectileItemId = ammo?.itemId || DEFAULT_PROJECTILE_ID[weaponType] || 2060000;
-  if (ammo) {
+  if (ammo && (skill?.consumeAmmo ?? true)) {
     this.inventory.removeFromInventory(ammo.itemId, 1);
     this.recalcLocalStats();
   }
@@ -1732,32 +1952,17 @@ async fireProjectile(weaponType: number) {
       weaponAttackRange: weaponAttackRange,
       // A basic ranged attack is a single-target attack with no skill
       // geometry — the same category Energy Bolt and Power Strike are in, so
-      // it takes the same reach rather than a constant of its own
-      maxDistance: SINGLE_TARGET_REACH,
+      // it takes the same reach rather than a constant of its own. A weapon
+      // skill brings its own `range` (Double Shot 215..350).
+      maxDistance: skill?.range || SINGLE_TARGET_REACH,
+      skillId: skill?.skillId ?? 0,
+      damagePercent: skill?.damagePercent ?? 1,
+      ballNode: skill?.ballNode ?? null,
+      hitNode: skill?.hitNode ?? null,
     });
     this.projectiles.push(projectile);
   } catch (error) {
     console.error('Error creating projectile:', error);
-  }
-}
-
-/**
- * Create a visual hit effect at the specified position
- */
-async createHitEffect(x: number, y: number) {
-  try {
-    // This is a placeholder for creating hit effects
-    // You would typically load a sprite sheet and animate it
-    // For now, we'll just log that we want to create an effect
-    console.log(`Creating hit effect at (${x}, ${y})`);
-    
-    // In the future, you could implement something like:
-    // const hitEffect = await HitEffect.fromOpts({
-    //   x: x, y: y, type: "normal"
-    // });
-    // this.map.addEffect(hitEffect);
-  } catch (error) {
-    console.error("Error creating hit effect:", error);
   }
 }
 
@@ -1827,7 +2032,9 @@ isCloseToMob = (inAllDirections = true) => {
   checkForLadder(direction: ClimbDirections) {
     const isUp = direction === ClimbDirections.UP;
     const lock = this.ropeJumpLock;
-    const ladderRope = this.map!.wzNode.ladderRope.nChildren.find(
+    // nGet: maps without a single ladder or rope have no ladderRope node at
+    // all, and a bare property read threw on every Up/Down press there
+    const ladderRope = this.map!.wzNode.nGet("ladderRope").nChildren.find(
       (ladderRope: any) => {
         // its ladder or rope
         const isLadder = ladderRope.nGet("l").nValue === 1;
@@ -2567,12 +2774,10 @@ isCloseToMob = (inAllDirections = true) => {
     }
 
     this.lastDamagedTime = currentTime;
-    const knowbackXdirection = this.pos.x - monster.pos.x > 0 ? 1 : -1;
-    // Always pop up-and-back like v83. A downward push (player standing
-    // below the mob's anchor) combined with knockback dropping the foothold
-    // started the fall ON the foothold line moving down, so the crossing
-    // check never caught it and the player tunnelled through the floor.
-    this.pos.applyKnockback(knowbackXdirection, -1);
+    // Bounce up-and-away from the mob (v83 numbers in Physics.hitKnockback);
+    // on a ladder or rope the damage lands but the grip holds
+    const knockbackDirection: 1 | -1 = this.pos.x - monster.pos.x > 0 ? 1 : -1;
+    this.pos.hitKnockback(knockbackDirection);
 
     // v83 mob damage: mob attack scaled by level gap, reduced by the player's
     // matching defense (weapon def for physical, magic def for magic)
@@ -2703,13 +2908,9 @@ isCloseToMob = (inAllDirections = true) => {
    * both funnel through here so the flows can never diverge.
    */
   pickupDrop = (itemDrop: DropItemSprite) => {
+    if (!this.canPickUpDrop(itemDrop)) return;
     itemDrop.goToPlayer(this.pos.vx, this.pos.vy);
     itemDrop.isAlreadyPickedUp = true;
-    // Broadcast pickup to other players
-    const netDropId = (itemDrop as any)._netDropId;
-    if (netDropId && (window as any).__mySocket) {
-      (window as any).__mySocket.sendItemPickup(netDropId);
-    }
     // this is async. Equips must use the numeric drop id — their
     // itemFile.nName is a Character.wz filename, not an item id. Other
     // drops (incl. mesos, id=0) keep resolving via itemFile.nName.
@@ -2718,6 +2919,16 @@ isCloseToMob = (inAllDirections = true) => {
     const itemId = isEquipDrop
       ? itemDrop.id
       : parseInt(String(itemDrop.itemFile.nName), 10);
+    const invKey = isEquipDrop ? itemDrop.id : itemDrop.itemFile.nName;
+
+    // Ask the server to arbitrate. The pickup is optimistic — the item goes
+    // into the bag now and comes back out if the server says someone else
+    // got there first (item_pickup_denied → revertPickup).
+    const netDropId = (itemDrop as any)._netDropId;
+    if (netDropId && (window as any).__mySocket) {
+      this.pendingPickups.set(netDropId, { invKey, itemId, amount: itemDrop.amount, at: Date.now() });
+      (window as any).__mySocket.sendItemPickup(netDropId);
+    }
 
     // Monster cards carry `spec/consumeOnPickup` in the WZ: they never reach
     // the inventory. Picking one up registers it in the Monster Book and the
@@ -2725,12 +2936,62 @@ isCloseToMob = (inAllDirections = true) => {
     if (this.collectMonsterCard(itemId, itemDrop.amount)) return;
 
     this.inventory.addToInventory(
-      isEquipDrop ? itemDrop.id : itemDrop.itemFile.nName,
+      invKey,
       itemDrop.amount,
       isEquipDrop ? (itemDrop as any).equipData ?? undefined : undefined,
     );
     this.logPickupMessage(itemId, itemDrop.amount);
   };
+
+  // v83 loot ownership, mirrored from the server's rule so the client does
+  // not keep lunging at loot it cannot have: a mob's drop belongs to the
+  // killer and their party for OWNER_LOCK_MS, then anyone may take it
+  static readonly OWNER_LOCK_MS = 15000;
+  pendingPickups: Map<number, { invKey: number | string; itemId: number; amount: number; at: number }> = new Map();
+
+  canPickUpDrop(itemDrop: DropItemSprite): boolean {
+    const ownerId = (itemDrop as any)._ownerId as string | null | undefined;
+    if (!ownerId) return true;
+    const myId = (window as any).__mySocket?.playerId;
+    if (ownerId === myId) return true;
+    const droppedAt = Number((itemDrop as any)._droppedAt) || 0;
+    if (Date.now() - droppedAt >= MapleCharacter.OWNER_LOCK_MS) return true;
+    const partyId = (itemDrop as any)._partyId;
+    const myParty = PartyManager.party;
+    return !!partyId && !!myParty && myParty.id === partyId;
+  }
+
+  /** The server renamed a provisional drop id (item_drop_ack) */
+  renamePendingPickup(oldId: number, newId: number) {
+    const p = this.pendingPickups.get(oldId);
+    if (p) {
+      this.pendingPickups.delete(oldId);
+      this.pendingPickups.set(newId, p);
+    }
+  }
+
+  /** Server denied a pickup we already showed — take the item back out */
+  revertPickup(dropId: number, reason: string) {
+    const p = this.pendingPickups.get(dropId);
+    this.pendingPickups.delete(dropId);
+    if (!p) return;
+    if (isMonsterCardId(p.itemId)) {
+      // The card is already in the book; a denial here is a race the book
+      // tolerates — one copy is not worth unpicking a collection entry
+      return;
+    }
+    if (Math.floor(p.itemId / 10000) === 900) {
+      this.inventory.mesos = Math.max(0, this.inventory.mesos - p.amount);
+    } else {
+      this.inventory.removeFromInventory(p.itemId, p.amount);
+    }
+    void import('./UI/UIChatLog').then((m) => {
+      const log: any = m.default ?? m;
+      log.system?.(reason === 'owner'
+        ? 'This item is reserved for the player who earned it.'
+        : 'Someone else picked that up first.');
+    });
+  }
 
   /**
    * Route a monster card into the Monster Book instead of the inventory.
@@ -2940,6 +3201,9 @@ isCloseToMob = (inAllDirections = true) => {
       }
     }
 
+    this.updateDashTrail(msPerTick);
+    this.updateNaturalRecovery(msPerTick);
+
     // Quest start/alert effect
     if (this.questStartActive && this.questStartFrames) {
       this.questStartDelay += msPerTick;
@@ -2995,8 +3259,14 @@ isCloseToMob = (inAllDirections = true) => {
         }
       }
       this.pos.walk_speed = 187.5;
-    } else if (this.pos.walk_speed !== 125) {
-      this.pos.walk_speed = 125;
+      this.pos.speedScale = 1;
+      this.pos.jumpScale = 1;
+    } else {
+      if (this.pos.walk_speed !== 125) this.pos.walk_speed = 125;
+      // Speed/Jump stats scale walking and take-off (100 = base; GMS caps
+      // them at 140 / 123). Gear, Haste and Dash all arrive through here.
+      this.pos.speedScale = Math.min(140, this.stats?.localSpeed ?? 100) / 100;
+      this.pos.jumpScale = Math.min(123, this.stats?.localJump ?? 100) / 100;
     }
 
     // check if hit by mob
@@ -3366,8 +3636,10 @@ isCloseToMob = (inAllDirections = true) => {
       // Two-handed weapons use the stand2/walk2 stance family
       const standStance = this.weaponStandType === 2 ? Stance.stand2 : Stance.stand1;
       const walkStance = this.weaponWalkType === 2 ? Stance.walk2 : Stance.walk1;
-      // Airborne in a swim map = swimming (fly stance), otherwise jumping
-      const airStance = this.map?.isSwimMap ? Stance.fly : Stance.jump;
+      // Airborne in water = swimming (fly stance), otherwise jumping. Read
+      // off the physics flag, not the map: swimArea maps are only water
+      // inside their rects.
+      const airStance = this.pos.swimming ? Stance.fly : Stance.jump;
       // Anything that isn't sitting still gets you out of the chair, the
       // same way the original does — walking, jumping off, crouching,
       // attacking, grabbing a rope or dying
@@ -3697,6 +3969,41 @@ isCloseToMob = (inAllDirections = true) => {
       alpha: tagAlpha,
     });
     canvas.drawText(nameOpts);
+
+    // Guild line under the name: emblem (17x17) then the guild name on its
+    // own tag, like v83. Looks come from GuildManager (own guild for the
+    // player, the server-fed look cache for remote characters).
+    const look = GuildManager.lookForCharacter(this);
+    if (look?.guildName) {
+      const emblem = getEmblemImage(look.guildMark);
+      const emblemW = emblem ? EMBLEM_SIZE + 2 : 0;
+      const guildOpts = {
+        text: look.guildName,
+        x: Math.floor(this.pos.x - camera.x + emblemW / 2),
+        y: Math.floor(this.pos.y - camera.y + offsetFromY + tagHeight + 3),
+        color: "#ffffff",
+        align: "center",
+      };
+      const guildTextW = Math.ceil(canvas.measureText(guildOpts).width + tagPadding);
+      const guildTagW = guildTextW + emblemW;
+      const guildTagX = Math.round(this.pos.x - camera.x - guildTagW / 2);
+      canvas.drawRect({
+        x: guildTagX,
+        y: Math.floor(this.pos.y - camera.y + offsetFromY + tagHeight),
+        width: guildTagW,
+        height: tagHeight,
+        color: tagColor,
+        alpha: tagAlpha,
+      });
+      if (emblem) {
+        canvas.drawImage({
+          img: emblem as any,
+          dx: guildTagX + 1,
+          dy: Math.floor(this.pos.y - camera.y + offsetFromY + tagHeight),
+        });
+      }
+      canvas.drawText(guildOpts);
+    }
   }
   drawDamageIndicator(
     canvas: GameCanvas,

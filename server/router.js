@@ -1,13 +1,13 @@
 // Message router — dispatches incoming messages to the appropriate handler
 
-const { handlePlayerInfo, handlePlayerUpdate, handlePlayerLevelUp, handlePlayerHitByMob, sendPlayerList } = require('./handlers/player');
-const { handleMonsterDamage, handleMobStateBatch, handleMobDamageRequest, handleMobDeath, handleMobRespawn } = require('./handlers/mob');
+const { handlePlayerInfo, handlePlayerUpdate, handlePlayerLevelUp, handlePlayerHitByMob, handlePlayerBuff, handleChangeChannel, sendPlayerList } = require('./handlers/player');
+const { handleMobStateBatch, handleMobDamageRequest, handleMobDeath, handleMobRespawn } = require('./handlers/mob');
 const { handleItemDrop, handleItemPickup } = require('./handlers/item');
 const { handleChatMessage, handleMegaphone } = require('./handlers/chat');
 const { handleCashBuyLog, handleGetBestItems } = require('./handlers/cashshop');
 const { handleReactorHit, handleReactorRespawn } = require('./handlers/reactor');
 const { handleRegister, handleLogin, handleGetWorlds, handleGetCharacters, handleCheckName, handleCreateCharacter, handleDeleteCharacter, handleSelectCharacter, handleSaveCharacter } = require('./handlers/auth');
-const { players } = require('./state');
+const { players, roomOf } = require('./state');
 const { sendToPlayer } = require('./network');
 const { assignMapHost } = require('./hostManager');
 const { handlePartyCreate, handlePartyInvite, handlePartyInviteResponse, handlePartyLeave, handlePartyExpel, handlePartyChangeLeader, handlePartyExp, handlePartyWarp } = require('./handlers/party');
@@ -28,7 +28,7 @@ function handleHostCheck(playerId) {
     sendToPlayer(player.ws, { type: 'reregister' });
     return;
   }
-  assignMapHost(player.mapId, playerId);
+  assignMapHost(roomOf(player), playerId);
 }
 
 /**
@@ -42,16 +42,27 @@ function handleHeartbeat(playerId) {
   if (player) player.lastUpdate = Date.now();
 }
 
+// Feature modules (trade, buddy, guild, fame, ...) register their own
+// message types here instead of growing the switch below:
+//   registerHandler('trade_request', (playerId, data) => ...)
+const extraHandlers = new Map();
+function registerHandler(type, fn) {
+  if (extraHandlers.has(type)) console.warn(`[Router] handler for '${type}' replaced`);
+  extraHandlers.set(type, fn);
+}
+
 function handleMessage(playerId, data) {
+  const extra = extraHandlers.get(data.type);
+  if (extra) {
+    extra(playerId, data.data, data);
+    return;
+  }
   switch (data.type) {
     case 'player_info':
       handlePlayerInfo(playerId, data.data);
       break;
     case 'player_update':
       handlePlayerUpdate(playerId, data.data);
-      break;
-    case 'monster_damage':
-      handleMonsterDamage(playerId, data.data);
       break;
     case 'chat_message':
       handleChatMessage(playerId, data.data);
@@ -91,6 +102,12 @@ function handleMessage(playerId, data) {
       break;
     case 'player_hit_by_mob':
       handlePlayerHitByMob(playerId, data.data);
+      break;
+    case 'player_buff':
+      handlePlayerBuff(playerId, data.data);
+      break;
+    case 'change_channel':
+      handleChangeChannel(playerId, data.data);
       break;
     case 'reactor_hit':
       handleReactorHit(playerId, data.data);
@@ -165,4 +182,4 @@ function handleMessage(playerId, data) {
   }
 }
 
-module.exports = { handleMessage };
+module.exports = { handleMessage, registerHandler };

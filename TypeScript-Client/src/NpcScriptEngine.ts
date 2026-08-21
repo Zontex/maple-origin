@@ -1,4 +1,5 @@
 import { npcNames, mobNames, QuestState, ensureItemNames, ensureMapNames, getMapNameSync, collapseBlankLines } from './Quest/QuestData';
+import GuildManager, { getIncreaseGuildCost as guildIncreaseCost } from './Guild/GuildManager';
 import { cachedFetch } from './AssetDownloader';
 import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
@@ -128,6 +129,9 @@ export function createScriptJavaShim(cm?: any) {
             getShop: (id: number) => ({ sendShop: () => cm?.openShopNPC?.(id) }),
           }),
         };
+      // Heracle's capacity quote: Guild.getIncreaseGuildCost(capacity)
+      case 'net.server.guild.Guild':
+        return { getIncreaseGuildCost: (size: number) => guildIncreaseCost(Number(size) || 0) };
       case 'java.awt.Point':
         return function (x: number, y: number) { return { x, y, getX: () => x, getY: () => y }; };
       case 'java.awt.Rectangle':
@@ -371,6 +375,23 @@ export default class NpcScriptEngine {
     return { getX() { return x; }, getY() { return y; }, x, y };
   }
 
+  /** Cosmic Guild object shim — null when the player has no guild. */
+  private static guildApi() {
+    const g = GuildManager.guild;
+    if (!g) return null;
+    return makeSafeScriptApi({
+      getId() { return g.id; },
+      getName() { return g.name; },
+      getCapacity() { return g.capacity; },
+      getLeaderId() { return g.leaderId; },
+      getGP() { return g.gp; },
+      getAllianceId() { return 0; },
+      getNotice() { return g.notice; },
+      getSize() { return g.members.length; },
+      getRankTitle(rank: number) { return g.ranks[rank - 1] ?? ""; },
+    }, "NpcScript guild");
+  }
+
   /** The map shim scripts reach through cm.getMap() / player.getMap(). */
   private mapApi() {
     const character = this.character;
@@ -461,8 +482,19 @@ export default class NpcScriptEngine {
       // Systems that don't exist yet return null so scripts take their
       // authentic "you don't have X" branches instead of chaining into stubs
       getParty() { return null; },
-      getGuild() { return null; },
-      getGuildId() { return 0; },
+      // Guild API (Heracle 2010007 / Lea 2010008 / Lenario 2010009). Backed
+      // by GuildManager, the client mirror of the server guild record.
+      getGuild() { return NpcScriptEngine.guildApi(); },
+      getGuildId() { return GuildManager.guild?.id ?? 0; },
+      getGuildRank() { return GuildManager.myRank() || 5; },
+      getMGC() { return null; }, // alliance membership — no alliances yet
+      genericGuildMessage(code: number) {
+        // 1 = "enter guild name", 17 = emblem designer (Cosmic packet codes)
+        if (code === 1) GuildManager.promptGuildName();
+        else if (code === 17) GuildManager.promptEmblem();
+      },
+      disbandGuild() { GuildManager.disband(); },
+      increaseGuildCapacity() { GuildManager.expand(); },
       getEventInstance() {
         return HenesysPQ.isRegistered()
           ? makeSafeScriptApi(HenesysPQ.getInstanceApi(), 'EventInstance:HenesysPQ')
@@ -766,7 +798,9 @@ export default class NpcScriptEngine {
       openNpc(npcId: number) { /* stub — open another NPC's dialog */ },
       openShopNPC(shopId: number) { ShopUI.show(shopId); },
       openShop(shopId: number) { ShopUI.show(shopId); },
-      getGuild() { return null; },
+      getGuild() { return NpcScriptEngine.guildApi(); },
+      getGuildId() { return GuildManager.guild?.id ?? 0; },
+      getAllianceCapacity() { return 0; },
     };
 
     // Safety net: unimplemented cm.* calls warn instead of killing the dialog

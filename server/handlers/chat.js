@@ -1,7 +1,7 @@
 // Chat message handler
 
 const { players } = require('../state');
-const { broadcastToMap, broadcastToAll } = require('../network');
+const { broadcastToMap, broadcastToWorld } = require('../network');
 
 function handleChatMessage(playerId, chatData) {
   const player = players.get(playerId);
@@ -10,7 +10,7 @@ function handleChatMessage(playerId, chatData) {
   broadcastToMap(chatData.mapId, {
     type: 'chat_message',
     message: { playerId, message: chatData.message, mapId: chatData.mapId }
-  });
+  }, null, player);
 }
 
 // Cash Shop megaphones — world-wide, INCLUDING the sender (the original
@@ -22,7 +22,7 @@ function handleMegaphone(playerId, data) {
   const message = String(data?.message ?? '').slice(0, 120);
   if (!message.trim()) return;
 
-  broadcastToAll({
+  broadcastToWorld(player.worldId, {
     type: 'megaphone',
     data: {
       playerId,

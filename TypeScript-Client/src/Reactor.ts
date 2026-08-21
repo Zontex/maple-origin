@@ -422,7 +422,7 @@ export default class Reactor {
           this.map.addItemDrop(dropItem);
           // Broadcast non-quest drops to other players; quest drops stay local
           if (drop.questId <= 0 && (window as any).__mySocket) {
-            (window as any).__mySocket.sendItemDrop(drop.itemId, 1, this.x + offsetX, this.y, 0, 0, dropId);
+            (window as any).__mySocket.sendItemDrop(drop.itemId, 1, this.x + offsetX, this.y, 0, 0, dropId, (window as any).__mySocket.playerId);
           }
         }
       } catch (e) {

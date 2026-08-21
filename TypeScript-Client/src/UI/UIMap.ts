@@ -3,6 +3,7 @@ import UIMobGage from './UIMobGage';
 import WZManager from "../wz-utils/WZManager";
 import UICommon from "./UICommon";
 import MapleInput from "./MapleInput";
+import BuddyManager from "../Buddy/BuddyManager";
 import MapleMap from "../MapleMap";
 import config from "../Config";
 import { MapleStanceButton } from "./MapleStanceButton";
@@ -18,6 +19,7 @@ import UISystemOption from "./UISystemOption";
 import UIGameOption from "./UIGameOption";
 import UIKeyConfig from "./UIKeyConfig";
 import UIWorldMap from "./UIWorldMap";
+import UITrade from "./UITrade";
 import CashShopUI from "./CashShopUI";
 
 export interface UIMapInterface {
@@ -188,11 +190,12 @@ UIMap.addButtons = function (canvas) {
   void UIGameOption.initialize(canvas);
   void UIKeyConfig.initialize(canvas);
   void UIWorldMap.initialize(canvas);
-  // No server-side channels yet, so switching is a local selection only: the
-  // player is told, and the choice is remembered for when the server grows
-  // real channel support.
+  void UITrade.initialize(canvas);
+  // The server keys every room by (world, channel, map): switching channel
+  // leaves this map's room and joins the same map on the new channel. The
+  // notice is printed when the server confirms (mysocket: channel_changed).
   UIChannelSelect.onChanged = (channel) => {
-    UIChatLog.notice(`[Channel] Moved to channel ${channel + 1}.`);
+    (window as any).__mySocket?.sendChangeChannel?.(channel);
   };
   UIGameMenu.onAction = (action) => {
     switch (action) {
@@ -339,7 +342,18 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
       const msg = this.chat!.input.value;
       this.chat!.input.value = "";
       
-      if (msg.trim()) {
+      // Party chat: "/p message" or a leading "{" — goes to every party
+      // member on any map through the server, never into a balloon
+      const partyText = msg.startsWith('/p ') || msg === '/p'
+        ? msg.slice(2)
+        : msg[0] === '{' ? msg.slice(1) : null;
+      if (partyText !== null) {
+        if (partyText.trim()) {
+          import('../Party/PartyManager').then(({ default: PartyManager }) => {
+            PartyManager.sendChat(partyText.trim());
+          }).catch(() => {});
+        }
+      } else if (msg.trim()) {
         if (msg[0] === "!") {
           // Handle command inputs
           const [command, ...commandArgs] = msg.split(" ");
@@ -365,9 +379,16 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
               break;
             }
             default: {
+              // Not a dev command: "!text" is guild chat (delivered to every
+              // online member by the server, echoed back to us too)
+              import('../Guild/GuildManager').then(({ default: GuildManager }) => {
+                GuildManager.chat(msg.slice(1));
+              }).catch(() => {});
               break;
             }
           }
+        } else if (BuddyManager.handleChatCommand(msg)) {
+          // /w, /r, /find and @name — whispers never go out as map chat
         } else {
           // Regular chat message - show in a chat balloon
           this.showPlayerChatBalloon(msg);
@@ -414,6 +435,7 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
     const open = UIChatLog.expanded || UIChatLog.typing;
     this.chat.input.style.display = open ? '' : 'none';
   }
+  UITrade.update(msPerTick);
   UICommon.doUpdate(msPerTick);
 };
 

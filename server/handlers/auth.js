@@ -85,7 +85,12 @@ function handleSelectCharacter(playerId, data) {
   }
   player.characterId = charData.id;
   player.characterName = charData.name;
-  sendToPlayer(player.ws, { type: 'select_character_result', success: true, character: charData });
+  // The character's world is fixed by its row; the channel is the one the
+  // client picked on the world-select scroll (0-based, default 0)
+  player.worldId = Number(charData.worldId) || 0;
+  const channel = Number(data.channel);
+  player.channel = Number.isFinite(channel) && channel >= 0 ? Math.floor(channel) : 0;
+  sendToPlayer(player.ws, { type: 'select_character_result', success: true, character: charData, channel: player.channel });
   console.log(`[Char] Selected: ${charData.name} (lv${charData.level} ${charData.stats.jobId})`);
 }
 
@@ -142,7 +147,7 @@ function autoSaveCharacter(player) {
       delete player.lastSaveData.posX;
       delete player.lastSaveData.posY;
     }
-    const result = Character.saveCharacter(player.characterId, player.lastSaveData);
+    const result = Character.saveCharacter(player.characterId, player.lastSaveData, { serverOriginated: true });
     if (result.success) {
       console.log(`[Save] Auto-saved ${player.characterName || player.characterId} (full data)`);
     }
@@ -176,10 +181,25 @@ function autoSaveCharacter(player) {
   } else {
     console.warn(`[Save] No valid mapId for ${player.characterName || player.characterId} — keeping stored map`);
   }
-  const result = Character.saveCharacter(player.characterId, saveData);
+  const result = Character.saveCharacter(player.characterId, saveData, { serverOriginated: true });
   if (result.success) {
     console.log(`[Save] Auto-saved ${player.characterName || player.characterId} (fallback)`);
   }
+}
+
+/** Save every connected character — the last thing the process does on its way out */
+function saveAllConnected() {
+  let n = 0;
+  for (const player of players.values()) {
+    if (!player.characterId) continue;
+    try {
+      autoSaveCharacter(player);
+      n++;
+    } catch (e) {
+      console.error(`[Save] shutdown save failed for ${player.characterName || player.characterId}:`, e);
+    }
+  }
+  return n;
 }
 
 module.exports = {
@@ -193,4 +213,5 @@ module.exports = {
   handleSelectCharacter,
   handleSaveCharacter,
   autoSaveCharacter,
+  saveAllConnected,
 };

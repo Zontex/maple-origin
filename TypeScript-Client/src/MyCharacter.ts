@@ -50,6 +50,7 @@ MyCharacter.monsterBook = new MonsterBook();
 
 // Initialize buff manager — buff apply/expire recalculates effective stats.
 (MyCharacter as any).buffManager = new BuffManager(() => MyCharacter.recalcLocalStats());
+(MyCharacter as any).buffManager.isLocal = true;
 MyCharacter.recalcLocalStats();
 
 declare global {

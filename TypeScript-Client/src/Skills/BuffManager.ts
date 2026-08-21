@@ -15,6 +15,15 @@ export default class BuffManager {
   activeBuffs: Map<number, ActiveBuff> = new Map();
   // Fired whenever a buff is applied or removed so stats can recalc
   onChange: (() => void) | null = null;
+  // The local player's manager relays every change to the room so remote
+  // clients play the cast and know the active set (party buffs ride on it)
+  isLocal: boolean = false;
+
+  private relay(skillId: number, durationMs: number, on: boolean) {
+    if (!this.isLocal) return;
+    const level = (window as any).charecter?.skillManager?.getSkillLevel?.(skillId) ?? 1;
+    (window as any).__mySocket?.sendBuff?.(skillId, durationMs, on, level);
+  }
 
   constructor(onChange?: () => void) {
     this.onChange = onChange || null;
@@ -33,6 +42,7 @@ export default class BuffManager {
     });
 
     console.log(`[Buff] Applied ${info?.name || skillId} for ${effect.time}s`);
+    this.relay(skillId, durationMs, true);
     this.onChange?.();
   }
 
@@ -42,6 +52,7 @@ export default class BuffManager {
       const name = SkillData.getSkillName(skillId);
       console.log(`[Buff] Expired: ${name}`);
       this.activeBuffs.delete(skillId);
+      this.relay(skillId, 0, false);
       this.onChange?.();
     }
   }

@@ -1,4 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
+import { XY_STAT_SKILLS } from '../Constants/CombatSkills';
 
 export interface SkillLevelEffect {
   mpCon: number;
@@ -62,6 +63,11 @@ export interface SkillInfo {
   /** Prerequisite skills from the WZ `req` node: skillId -> level needed */
   req: { id: number; level: number }[];
   action: string | null; // Body stance to play (e.g., 'alert2', 'alert4') from WZ action node
+  /**
+   * Required weapon class from the WZ `weapon` int — the item-id prefix minus
+   * 100 (Double Shot carries 49: guns, 149xxxx). null = any weapon.
+   */
+  weapon: number | null;
   element: string | null; // WZ elemAttr char: F/I/L/S/H/D/P (fire/ice/lightning/poison/holy/dark/physical)
 }
 
@@ -180,6 +186,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   let invisible = false;
   let actionStance: string | null = null;
   let element: string | null = null;
+  let weapon: number | null = null;
 
   let icon: HTMLImageElement | null = null;
   let iconMouseOver: HTMLImageElement | null = null;
@@ -187,7 +194,9 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   const effects: SkillLevelEffect[] = [];
 
   for (const child of skillNode.nChildren || []) {
-    const name = child.nName;
+    // Trimmed: Double Shot's requirement is keyed "weapon " (trailing space)
+    // in the v83 WZ — the one such node among 75 — and it must still bind
+    const name = String(child.nName).trim();
 
     if (name === 'icon' && child.nTagName === 'canvas' && child.nGetImage) {
       icon = child.nGetImage() as HTMLImageElement;
@@ -216,6 +225,9 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
       invisible = true;
     } else if (name === 'elemAttr') {
       if (child.nValue) element = String(child.nValue).toUpperCase();
+    } else if (name === 'weapon') {
+      const w = Number(child.nValue);
+      if (Number.isFinite(w) && w > 0) weapon = w;
     } else if (name === 'level') {
       // Parse each level
       const levelChildren = (child.nChildren || []).slice();
@@ -227,6 +239,14 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     }
   }
 
+  // Stats parked in x/y (Bullet Time, Dash) onto the named fields
+  const xy = XY_STAT_SKILLS[skillId];
+  if (xy) {
+    for (const e of effects) {
+      (e as any)[xy.x] = e.x;
+      (e as any)[xy.y] = e.y;
+    }
+  }
   // Push the skill-root ball/hit down onto each level, without clobbering the
   // per-level nodes that skills like Three Snails define themselves
   if (rootBallNode || rootHitNode) {
@@ -299,6 +319,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     helpStrings: skillHelp.get(skillId) || new Map(),
     req,
     action: actionStance,
+    weapon,
     element,
   };
 }

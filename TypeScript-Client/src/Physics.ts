@@ -30,9 +30,7 @@ const shoe_swim_speed_h = 1;
 const shoe_swim_speed_v = 1;
 const shoe_walk_acc = 1;
 const shoe_walk_drag = 1;
-const shoe_walk_jump = 1.0;
 const shoe_walk_slant = 0.9;
-const shoe_walk_speed = 1.0;
 const slip_force = 60000;
 const slip_speed = 120;
 const swim_force = 120000;
@@ -42,6 +40,10 @@ const swim_speed_dec = 0.9;
 const walk_drag = 80000;
 const walk_force = 140000;
 const default_walk_speed = 125;
+// Mob-hit knockback, from JourneyClient's Player::damage (1.5 and 3.5 px per
+// 8ms tick) — see Physics.hitKnockback
+const hit_knockback_vx = 187.5;
+const hit_knockback_vy = 437.5;
 // Sliding down used to be twice the climbing speed, which made descents feel
 // like dropping rather than climbing. Both directions move at one rate now.
 const slide_up_speed = 150;
@@ -53,8 +55,6 @@ const slide_down_speed = slide_up_speed;
 // ladder instead of dribbling back onto it.
 const rope_jump_v = 0.85;
 const rope_jump_h = 1.4;
-
-const speedFactor = 90;
 
 class Physics {
   left: boolean = false;
@@ -76,19 +76,25 @@ class Physics {
   isClimbing: boolean = false;
   flying: boolean = false;
   swimming: boolean = false; // in a swim map — airborne physics become water physics
+  // The character's Speed/Jump stats as factors of the base (100 = 1.0) —
+  // the `shoe_walk_speed` / `shoe_walk_jump` terms of the original formula.
+  // Owned by the entity: MapleCharacter feeds them from its local stats,
+  // mobs and pets keep the base.
+  speedScale: number = 1.0;
+  jumpScale: number = 1.0;
   walk_speed: number = default_walk_speed;
   landingImpactVy: number = 0; // Records vy at moment of landing for fall damage
   fallStartY: number = 0; // Y position when player left a foothold
   fallDistance: number = 0; // Total Y distance fallen on landing
 
-  constructor(x = 0, y = 0, walkSpeed = default_walk_speed, exactSpeed = false) {
+  // `walkSpeed` is taken as given. The old fourth argument selected between
+  // that and `walkSpeed + 90` — a hack from before the Speed stat reached
+  // physics (see speedScale); every caller passed exact speeds, so it is
+  // accepted and ignored for signature compatibility.
+  constructor(x = 0, y = 0, walkSpeed = default_walk_speed, _exactSpeed = true) {
     this.x = x;
     this.y = y;
-    this.walk_speed = exactSpeed
-      ? walkSpeed
-      : walkSpeed === default_walk_speed
-        ? default_walk_speed
-        : walkSpeed + speedFactor;
+    this.walk_speed = walkSpeed;
   }
   /**
    * Whether down + jump has anywhere to drop to: standing on a foothold that
@@ -121,7 +127,7 @@ class Physics {
    * only have come from a take-off.
    */
   isRisingFromJump(): boolean {
-    return this.vy < -(this.walk_speed * shoe_walk_speed);
+    return this.vy < -(this.walk_speed * this.speedScale);
   }
 
   jump() {
@@ -134,11 +140,11 @@ class Physics {
     let y = this.y;
     if (this.isClimbing) {
       flying = true;
-      vy = shoe_walk_jump * jump_speed * -rope_jump_v;
+      vy = this.jumpScale * jump_speed * -rope_jump_v;
       // Set outright rather than clamped against the current vx: climbing
       // leaves vx at 0, so clamping could only ever reach the low end of the
       // range and the push-off barely left the rope.
-      const fmax = this.walk_speed * shoe_walk_speed * rope_jump_h;
+      const fmax = this.walk_speed * this.speedScale * rope_jump_h;
       vx = this.left ? -fmax : this.right ? fmax : vx;
       // Pushing off leaves the character airborne, so drop the foothold the
       // way the grounded branch does. It was kept, and since climbing never
@@ -152,10 +158,10 @@ class Physics {
         vx = 0;
         vy = -jump_speed * down_jump_multiplier;
       } else {
-        vy = shoe_walk_jump * jump_speed * (flying ? -0.7 : -1);
+        vy = this.jumpScale * jump_speed * (flying ? -0.7 : -1);
         let fx = fh.x2 - fh.x1,
           fy = fh.y2 - fh.y1,
-          fmax = this.walk_speed * shoe_walk_speed;
+          fmax = this.walk_speed * this.speedScale;
         (this.left && fy < 0) || (this.right && fy > 0)
           ? (fmax *= 1 + (fy * fy) / (fx * fx + fy * fy))
           : 0;
@@ -215,30 +221,36 @@ class Physics {
     this.isClimbing = false;
   }
 
-  applyKnockback(directionX = 1, directionY = 1, force = 250) {
-    // Ensure the player is not climbing
-    if (this.isClimbing) {
-      this.stopClimb();
-    }
+  /**
+   * Knockback from being hit by a mob. Returns false when the hit lands but
+   * cannot move the character.
+   *
+   * Numbers and rules follow JourneyClient's Player::damage (the v83 C++
+   * client): `hspeed = ±1.5`, `vforce -= 3.5` in px per 8ms tick, i.e.
+   * 187.5 px/s back and a 437.5 px/s hop — about 48px high, 0.44s in the
+   * air, landing ~80px back with the walk drag killing the rest in a few
+   * frames. The old ±250/-250 was made up: a 16px skim followed by a long
+   * slide, which read as being shoved across the floor rather than bounced.
+   *
+   * - The hop is only given from the ground. Airborne, JourneyClient drops
+   *   vforce entirely and only the sideways push applies, so a character in
+   *   the air keeps falling instead of being re-popped (no juggling).
+   * - On a ladder or rope the damage lands but the grip holds — `immovable`
+   *   there, and how v83 plays: mobs don't knock you off ropes.
+   */
+  hitKnockback(directionX: 1 | -1): boolean {
+    if (this.isClimbing) return false;
 
-    // check if direction is in gravity direction, if so make force less strong
-    if (directionY > 0) {
-      force = force / 2;
-    }
+    this.vx = directionX * hit_knockback_vx;
 
-    // Apply knockback force in the specified direction
-    this.vx = directionX * force;
-    this.vy = directionY * force;
-
-    // Knockback must actually leave the ground: with fh still set the
-    // grounded branch keeps the character snapped to the foothold and both
-    // velocities are ignored — jump() drops fh for the same reason. Only
-    // for an UPWARD launch, though: dropping fh with downward velocity
-    // starts the fall on the foothold line moving down, which the crossing
-    // check never catches — the entity tunnels through the floor.
-    if (directionY < 0) {
+    if (this.fh) {
+      this.vy = -hit_knockback_vy;
+      // Must actually leave the ground: with fh still set the grounded
+      // branch keeps the character snapped to the foothold and both
+      // velocities are ignored — jump() drops fh for the same reason.
       this.fh = null;
     }
+    return true;
   }
 
   applyKnockbackX(directionX = 1, force = 150) {
@@ -259,9 +271,13 @@ class Physics {
     // Track when player becomes airborne for fall damage calculation
     const wasOnGround = !!this.fh;
 
-    // Swim maps switch airborne physics to water physics for everything
-    // that isn't a flying mob (fly mobs steer themselves)
-    this.swimming = !this.flying && !!getMapleMap()?.isSwimMap;
+    // Water switches airborne physics to water physics for everything that
+    // isn't a flying mob (fly mobs steer themselves). It's either the whole
+    // map (info/swim=1) or a swimArea rect the position is currently inside —
+    // leave the rect and ordinary gravity takes over again, which is how you
+    // bob out at the surface and why the Generator Room's ladder foot sits
+    // just above the waterline.
+    this.swimming = !this.flying && !!getMapleMap()?.isInWater(this.x, this.y);
 
     let mleft = this.left && !this.right;
     let mright = !this.left && this.right;
@@ -298,7 +314,7 @@ class Physics {
         let mvr = (vx * len) / fx;
         mvr -= fh.force;
         let fs = (1 / shoe_mass) * delta;
-        let maxf = 1 * this.walk_speed * shoe_walk_speed;
+        let maxf = 1 * this.walk_speed * this.speedScale;
         let drag =
           Math.max(Math.min(shoe_walk_drag, max_friction), min_friction) *
           walk_drag;

@@ -5,6 +5,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased] - 2026-08-21
+
+### Added
+- **Natural HP/MP recovery** — the v83 ten-second tick: HP +10 while standing still, plus Improving HP Recovery's bonus (3..50); MP +3, plus `floor(skillLv/10 × level)` with Improving MP Recovery; Endure restores HP on ropes every 31→10 seconds; chairs keep their own recovery. Beginners no longer sit at 10 HP forever without potions.
+- **Server drop ledger** — drops get server-issued ids, the first pickup wins, mob and reactor loot is locked to the killer and their party for 15 seconds (v83), drops evaporate after three minutes and late joiners see what is already on the floor. Clients loot optimistically and put the item back on `item_pickup_denied`. Two players on one drop can no longer both keep it.
+- **Save sequencing + shutdown save** — every accepted save bumps `characters.save_seq`; a stale save arriving late is rejected and the client fast-forwards. SIGINT/SIGTERM save every connected character before the process exits.
+- **Rooms** — the eight worlds no longer share one physical world: broadcasts, mob hosts, drops and the host-gap buffer are keyed by (world, channel, map); the channel picked on the login scroll is real, and the in-game channel window moves you between copies of the map.
+- **Buff relay** — remote players play the cast art and sound of every buff and carry its active set (`player_buff`), the transport party buffs ride on.
+- **Host-gap damage buffering** — damage requests sent while a map has no host are replayed to the next host instead of vanishing.
+- **Trade** — the v83 TradingRoom: request from Character Info, drag items in, set mesos, both confirm, the server settles (nothing leaves a bag before completion) and takes the fee table baked into the window art (0.8%–6%).
+- **Buddy list and whispers** — the BUDDY tab (R): add by name with accept/decline, online/where, 20 slots, `/w name`, `@name`, `/r`, `/find`, delivered even when the target was offline.
+- **Guilds** — Heracle creates them for 1.5M, Lea sells the emblem designer, the GUILD window (G) shows members with rank titles and notice; invite, expel, promote/demote, titles, leader transfer, expand to 100, disband; `!text` guild chat; emblem and guild name under the name tag. Alliances, BBS and GP are deferred.
+- **Fame** — click the FAME row of another player's Character Info to raise or drop it, with the v83 limits (Lv. 15+, once a day, same target once a month).
+- **Party** — parties survive reconnects (2-minute grace), HP gauges in the window and the floating HP MARK panel, `/p` party chat, and party buffs (Bless, Haste, Holy Symbol, Hyper Body, Rage, Meditation, Maple Warrior, Sharp Eyes, Speed Infusion…) reaching members inside the skill's range with the `affected` art.
+- **swimArea maps** — the Nautilus Generator Room, the sea under Nautilus Harbor and the fishing pond have water only inside their `swimArea` rects; physics now reads the rect, so you can swim back up to the Generator Room's ladder.
+- **Pirate 1st job, done properly** — Double Shot fires two real bullets at 61-80% with its own ball/hit art and gun gate (its WZ requirement is keyed `"weapon "` with a trailing space); Bullet Time and Dash read their `x`/`y` stats; Speed/Jump stats now reach physics (Haste, speed gear and Dash all work); Dash is double-tap ←/→ with its dust trail; attack skills connect on the frame the body's negative-delay wind-up marker points at; guns attack with the body's `shot` stance. Pirate 1st-job cast sounds come from the weapon clips because `Sound.wz/Skill.img/5001000-5001007` is the pre-pirate GM job's block (Flash Fist's "Use" is Haste's clip, Double Shot's is Bless's).
+
+### Fixed
+- **Hidden quest guide arrows** — map objects with `hide=1` (the 50 job-advancement arrow trails) were always drawn; they now honour the flag.
+- **Mob-touch knockback** uses JourneyClient's v83 numbers (a real hop, no floor slide), only from the ground, and never knocks you off a rope.
+- **Skill sounds** — skills play their own `Hit` clip and no longer layer the weapon swing over their `Use` clip; caster effects mirror with facing.
+- `checkForLadder` no longer throws on maps without ladders; the `speedFactor = 90` physics hack and the `createHitEffect` placeholder are gone.
+
 ## [Unreleased] - 2026-08-18
 
 ### Added

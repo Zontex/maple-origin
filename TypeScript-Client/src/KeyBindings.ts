@@ -26,6 +26,8 @@ export type BindableAction =
   | "miniMap"
   | "worldMap"
   | "party"
+  | "buddy"
+  | "guild"
   | "monsterBook"
   | "keyConfig"
   | "face1"
@@ -60,6 +62,8 @@ export const ACTIONS: ActionInfo[] = [
   { action: "miniMap", icon: 7, label: "Mini Map" },
   { action: "worldMap", icon: 5, label: "World Map" },
   { action: "party", icon: 19, label: "Party" },
+  { action: "guild", icon: 17, label: "Guild" },
+  { action: "buddy", icon: 4, label: "Buddy" },
   { action: "monsterBook", icon: 22, label: "Monster Book" },
   { action: "keyConfig", icon: 9, label: "Set Key" },
   // Face emotes — the v83 client maps keymap face actions to the Face.wz
@@ -130,6 +134,8 @@ export const DEFAULT_BINDINGS: Record<number, BindableAction> = {
   50: "miniMap",    // M
   17: "worldMap",   // W
   25: "party",      // P
+  34: "guild",      // G
+  19: "buddy",      // R — v83's default for the buddy list
   // The MONSTER BOOK plate is icon 22 of the KeyConfig strip, so the action is
   // v83's own — but Nexon shipped it unbound, sitting in the palette for the
   // player to place. B is ours, purely so the window is reachable out of the

@@ -2,6 +2,9 @@ import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import MyCharacter from '../MyCharacter';
 import SkillData, { SkillInfo } from '../Skills/SkillData';
+import { playSkillSound as playSkillSoundClip } from '../Skills/SkillSound';
+import { usesWeaponSound } from '../Constants/CombatSkills';
+import { playSkillCastEffect } from '../Skills/SkillCastEffect';
 import WZManager from '../wz-utils/WZManager';
 import PLAY_AUDIO from '../Audio/PlayAudio';
 import { FACE_COUPON_EXPRESSIONS } from '../Shop/CashShopData';
@@ -274,7 +277,8 @@ const UIHotkeyBar = {
       // only consume MP/HP/cooldown when it actually fires
       const casted = await MyCharacter.useSkill?.(skillId, effect);
       if (!casted) return;
-      this.playSkillSound(skillId);
+      // Pirate 1st-job attacks play their weapon's clip inside useSkill
+      if (!usesWeaponSound(skillId)) this.playSkillSound(skillId);
       // Attack skills carry a caster animation too — Magic Claw's claw swipe
       // lives in its `effect` node, and only buffs were ever playing it
       this.playSkillEffect(skillId);
@@ -483,41 +487,11 @@ const UIHotkeyBar = {
   },
 
   async playSkillSound(skillId: number) {
-    try {
-      const paddedSkillId = String(skillId).padStart(7, '0');
-      const soundNode = await WZManager.get('Sound.wz/Skill.img');
-      if (soundNode) {
-        let skillSound = (soundNode as any).nGet?.(paddedSkillId);
-        if (skillSound?.nChildren?.length > 0) {
-          let useNode = skillSound.nChildren[0];
-          if (useNode.nTagName === 'uol') {
-            useNode = useNode.nResolveUOL();
-          }
-          if (useNode?.nGetAudio) {
-            PLAY_AUDIO(useNode.nGetAudio());
-            return;
-          }
-        }
-      }
-    } catch (e) { /* ignore sound errors */ }
+    await playSkillSoundClip(skillId, 'Use');
   },
 
   async playSkillEffect(skillId: number) {
-    try {
-      const jobFileId = Math.floor(skillId / 10000);
-      const paddedJobId = String(jobFileId).padStart(3, '0');
-      const skillNode = await WZManager.get(`Skill.wz/${paddedJobId}.img`);
-      if (!skillNode) return;
-
-      const effectNode = (skillNode as any).nGet?.('skill')?.nGet?.(String(skillId).padStart(7, '0'))?.nGet?.('effect');
-      if (!effectNode?.nChildren || effectNode.nChildren.length === 0) return;
-
-      // Set up animation frames on the character
-      MyCharacter.skillEffectFrames = effectNode.nChildren;
-      MyCharacter.skillEffectFrame = 0;
-      MyCharacter.skillEffectDelay = 0;
-      MyCharacter.skillEffectActive = true;
-    } catch (e) { /* ignore */ }
+    await playSkillCastEffect(MyCharacter, skillId);
   },
 
   // Serialize for DB save

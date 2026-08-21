@@ -1,7 +1,7 @@
 // WebSocket connection handler — manages per-client lifecycle
 
 const { v4: uuidv4 } = require('uuid');
-const { players, mapHosts } = require('./state');
+const { players, mapHosts, roomOf } = require('./state');
 const { sendToPlayer, broadcastToMap } = require('./network');
 const { handleMessage } = require('./router');
 const { assignMapHost } = require('./hostManager');
@@ -61,7 +61,7 @@ function onConnection(ws) {
     console.error(`WebSocket error for player ${playerId}:`, error);
     const player = players.get(playerId);
     if (player && player.info) {
-      broadcastToMap(player.info.mapId, { type: 'player_left', id: playerId }, playerId);
+      broadcastToMap(player.info.mapId, { type: 'player_left', id: playerId }, playerId, player);
     }
     handlePartyDisconnect(playerId);
     players.delete(playerId);
@@ -83,11 +83,13 @@ function onConnection(ws) {
 
     if (player && player.info) {
       const playerMapId = Number(player.info.mapId);
-      broadcastToMap(playerMapId, { type: 'player_left', id: playerId }, playerId);
+      // The record is gone, so the scope has to travel explicitly
+      broadcastToMap(playerMapId, { type: 'player_left', id: playerId }, playerId, player);
 
-      if (mapHosts.get(playerMapId) === playerId) {
-        mapHosts.delete(playerMapId);
-        assignMapHost(playerMapId);
+      const room = roomOf(player, playerMapId);
+      if (mapHosts.get(room) === playerId) {
+        mapHosts.delete(room);
+        assignMapHost(room);
       }
     }
   });

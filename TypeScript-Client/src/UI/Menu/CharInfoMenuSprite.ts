@@ -4,6 +4,8 @@ import ClickManager from '../ClickManager';
 import GameCanvas from '../../GameCanvas';
 import { CameraInterface } from '../../Camera';
 import { ensureItemNames, getItemNameSync } from '../../Quest/QuestData';
+import UIFameDialog from '../UIFameDialog';
+import UIChatLog from '../UIChatLog';
 import {
   ensureMobNames,
   ensureMonsterBookData,
@@ -51,10 +53,26 @@ interface BtnDef {
 const TOP_BUTTONS: BtnDef[] = [
   { key: 'BtFamily', x: 110, y: 20, w: 40, h: 37, disabled: true },
   { key: 'BtParty', x: 153, y: 21, w: 59, h: 17 },
-  { key: 'BtTrade', x: 153, y: 39, w: 59, h: 17, disabled: true },
+  { key: 'BtTrade', x: 153, y: 39, w: 59, h: 17 },
   { key: 'BtItem', x: 212, y: 20, w: 60, h: 18, disabled: true },
   { key: 'BtWish', x: 212, y: 39, w: 60, h: 18, disabled: true },
 ];
+
+// The FAME row: v83 has no fame button — clicking the row itself on another
+// player's window opens the raise/drop prompt. The pink plate is baked into
+// backgrnd at x 106..151, y 113..126 (measured off the art); the hit box runs
+// across the value too.
+const FAME_ROW = { x: 106, y: 112, w: W - 10 - 106, h: 16 };
+
+// v83 GiveFameResponse texts, keyed by the server's fame_result error
+const FAME_ERRORS: Record<string, string> = {
+  not_found: 'Unable to find the character.',
+  level: "You can't fame at your level (Lv. 15+)",
+  today: 'You have already given fame today.',
+  month: 'You have already famed that character this month.',
+  self: "You can't raise or drop your own fame.",
+  error: 'The fame has not been raised or dropped due to an unexpected error.',
+};
 
 class CharInfoMenuSprite extends DragableMenu {
   opts: any;
@@ -66,6 +84,8 @@ class CharInfoMenuSprite extends DragableMenu {
   private btClose: HTMLImageElement | null = null;
   private buttons: Record<string, BtnSprites> = {};
   expanded = true;
+  fameDialog: UIFameDialog | null = null;
+  private static fameHooked = false;
 
   static async fromOpts(opts: any) {
     const obj = new CharInfoMenuSprite(opts);
@@ -112,6 +132,83 @@ class CharInfoMenuSprite extends DragableMenu {
     ensureMonsterBookData().catch(() => {});
     ensureMobNames().catch(() => {});
     ClickManager.addDragableMenu(this);
+
+    if (this.GameCanvas) {
+      try {
+        this.fameDialog = await UIFameDialog.fromOpts({ canvas: this.GameCanvas });
+      } catch (e) {
+        console.error('[CharInfo] Failed to load fame dialog:', e);
+      }
+    }
+    this.hookFameMessages();
+  }
+
+  // ---- fame ------------------------------------------------------------
+  /**
+   * Socket subscriptions for the fame flow. Module-wide (one socket), so they
+   * are installed once and look the live window up through MapStateInstance.
+   */
+  private hookFameMessages() {
+    const sock = (window as any).__mySocket;
+    if (!sock?.on || CharInfoMenuSprite.fameHooked) return;
+    CharInfoMenuSprite.fameHooked = true;
+
+    const remoteChar = (id: string) => sock.otherPlayers?.get?.(id);
+    const liveDialog = (): UIFameDialog | null =>
+      (window as any).MapStateInstance?.charInfoMenu?.fameDialog ?? null;
+
+    // Giver's answer
+    sock.on('fame_result', (msg: any) => {
+      const d = msg?.data ?? {};
+      if (d.ok) {
+        const ch = remoteChar(String(d.targetId));
+        if (ch) ch.fame = Number(d.fame) || 0;
+        UIChatLog.system(
+          `You have ${d.mode === 1 ? 'raised' : 'dropped'} ${d.targetName}'s level of fame.`,
+        );
+      } else {
+        const text = FAME_ERRORS[d.error] ?? FAME_ERRORS.error;
+        const dlg = liveDialog();
+        if (dlg) dlg.showMessage(text); else UIChatLog.system(text);
+      }
+    });
+
+    // Target's side: take the server's value so the next client save (which
+    // still carries fame) writes the same number back
+    sock.on('fame_changed', (msg: any) => {
+      const d = msg?.data ?? {};
+      const me = (window as any).charecter;
+      if (me) me.fame = Number(d.fame) || 0;
+      UIChatLog.system(`You have ${d.mode === 1 ? 'gained' : 'lost'} fame from ${d.fromName}.`);
+    });
+
+    // Reply to the fame_query sent when the window opens on another player
+    sock.on('fame_info', (msg: any) => {
+      const d = msg?.data ?? {};
+      const ch = remoteChar(String(d.targetId));
+      if (ch) ch.fame = Number(d.fame) || 0;
+    });
+  }
+
+  /** Another player's character — a remote MapleCharacter with a socket id */
+  private isRemoteTarget(): boolean {
+    const t = this.target;
+    return !!t && t !== (window as any).charecter && !!t.id;
+  }
+
+  isFameDialogOpen(): boolean {
+    return !!this.fameDialog && !this.fameDialog.isHidden;
+  }
+
+  private openFameDialog() {
+    if (!this.fameDialog || !this.isRemoteTarget()) return;
+    const target = this.target;
+    this.fameDialog.show(String(target.name ?? ''), (raise: boolean) => {
+      (window as any).__mySocket?.sendMessage?.({
+        type: 'fame_give',
+        data: { targetId: String(target.id), mode: raise ? 1 : 0 },
+      });
+    });
   }
 
   getRect(_camera: CameraInterface) {
@@ -131,6 +228,14 @@ class CharInfoMenuSprite extends DragableMenu {
   show(target: any) {
     this.target = target;
     this.isHidden = false;
+    // player_info never carried fame — ask the server for the real number
+    if (this.isRemoteTarget()) {
+      this.hookFameMessages();
+      (window as any).__mySocket?.sendMessage?.({
+        type: 'fame_query',
+        data: { targetId: String(target.id) },
+      });
+    }
   }
 
   private get height(): number {
@@ -153,6 +258,8 @@ class CharInfoMenuSprite extends DragableMenu {
   }
 
   onMouseDown(mouseX: number, mouseY: number): boolean {
+    // The fame prompt sits over the window — its clicks are its own
+    if (this.fameDialog?.containsPoint(mouseX, mouseY)) return true;
     if (this.isHidden || !this.ownsPoint(mouseX, mouseY)) return false;
 
     // Close button
@@ -176,6 +283,13 @@ class CharInfoMenuSprite extends DragableMenu {
           });
           return true;
         }
+        if (def.key === 'BtTrade') {
+          // REQ TRADE: ask the inspected player to open a trade window
+          void import('../../Trade/TradeManager').then(({ default: TradeManager }) => {
+            TradeManager.request(String(this.target.id));
+          });
+          return true;
+        }
         if (def.key.startsWith('BtBook') || def.key.startsWith('BtCollection')) {
           this.expanded = !this.expanded;
         }
@@ -183,12 +297,22 @@ class CharInfoMenuSprite extends DragableMenu {
       }
     }
 
+    // FAME row on another player's window: raise/drop prompt
+    if (
+      this.isRemoteTarget() &&
+      mouseX >= this.x + FAME_ROW.x && mouseX < this.x + FAME_ROW.x + FAME_ROW.w &&
+      mouseY >= this.y + FAME_ROW.y && mouseY < this.y + FAME_ROW.y + FAME_ROW.h
+    ) {
+      this.openFameDialog();
+      return true;
+    }
+
     return false; // anywhere else on the window: let the drag begin
   }
 
   /** REQ PARTY only works on other players (a remote character with an id) */
   private isDisabled(def: BtnDef): boolean {
-    if (def.key === 'BtParty') {
+    if (def.key === 'BtParty' || def.key === 'BtTrade') {
       const t = this.target;
       return !t || t === (window as any).charecter || !t.id;
     }
@@ -222,11 +346,15 @@ class CharInfoMenuSprite extends DragableMenu {
     return ids;
   }
 
-  update(_msPerTick: number, _camera?: any, _canvas?: GameCanvas) {
-    // Static window — nothing animates per frame
+  update(msPerTick: number, _camera?: any, _canvas?: GameCanvas) {
+    // Static window — only the fame prompt (if up) reads input per frame
+    this.fameDialog?.update(msPerTick);
   }
 
-  draw(canvas: GameCanvas, _camera: CameraInterface, _lag: number, _ms: number, _t: number) {
+  draw(canvas: GameCanvas, camera: CameraInterface, lag: number, ms: number, tdelta: number) {
+    // The prompt outlives the window it was opened from (closing the window
+    // doesn't cancel a pending question), so it draws regardless
+    this.fameDialog?.draw(canvas, camera, lag, ms, tdelta);
     if (this.isHidden || !this.target) return;
     const bg = this.expanded ? this.bgFull : this.bgMin;
     if (!bg?.width) return;

@@ -34,13 +34,50 @@ import EquipMenuSprite from "./UI/Menu/EquipMenuSprite";
 import SkillMenuSprite from "./UI/Menu/SkillMenuSprite";
 import CharInfoMenuSprite from "./UI/Menu/CharInfoMenuSprite";
 import PartyMenuSprite from "./UI/Menu/PartyMenuSprite";
+import GuildMenuSprite from "./UI/Menu/GuildMenuSprite";
+import BuddyMenuSprite from "./UI/Menu/BuddyMenuSprite";
 import MonsterBookMenuSprite from "./UI/Menu/MonsterBookMenuSprite";
 import UIHotkeyBar from "./UI/UIHotkeyBar";
+import { DASH_SKILL_ID } from "./Constants/CombatSkills";
+
+// Dash (Pirate 1st job) is not cast from a key in v83 — "press left or right
+// arrow twice" is the whole activation. A tap is a fresh key-down; two taps
+// of the same arrow inside the window fire it through the ordinary skill
+// path, which owns the MP check, the buff, the sound and the burst.
+const DASH_DOUBLE_TAP_MS = 300;
+const dashTap = {
+  left: { held: false, lastTap: 0 },
+  right: { held: false, lastTap: 0 },
+};
+function checkDashDoubleTap(canvas: GameCanvas) {
+  for (const dir of ["left", "right"] as const) {
+    const down = canvas.isKeyDown(dir);
+    const s = dashTap[dir];
+    if (down && !s.held) {
+      const now = Date.now();
+      if (now - s.lastTap < DASH_DOUBLE_TAP_MS) {
+        s.lastTap = 0;
+        if (
+          MyCharacter.skillManager?.hasSkill(DASH_SKILL_ID) &&
+          !MyCharacter.isInClimbingRope &&
+          !MyCharacter.isRiding &&
+          !MyCharacter.isDead
+        ) {
+          void UIHotkeyBar.activateSkill(DASH_SKILL_ID);
+        }
+      } else {
+        s.lastTap = now;
+      }
+    }
+    s.held = down;
+  }
+}
 import PetManager from "./Pet/PetManager";
 import TouchControls, { isTouchDevice as isTouchDeviceTC } from "./UI/TouchControls";
 import MobileHUD from "./UI/MobileHUD";
 import UIGameMenu from "./UI/UIGameMenu";
 import UIChannelSelect from "./UI/UIChannelSelect";
+import UITrade from "./UI/UITrade";
 import UISystemOption from "./UI/UISystemOption";
 import UIGameOption from "./UI/UIGameOption";
 import UIKeyConfig from "./UI/UIKeyConfig";
@@ -129,6 +166,8 @@ export interface MapState extends UIState {
   skillMenu: SkillMenuSprite;
   charInfoMenu: CharInfoMenuSprite;
   partyMenu: PartyMenuSprite;
+  guildMenu: GuildMenuSprite;
+  buddyMenu: BuddyMenuSprite;
   monsterBookMenu: MonsterBookMenuSprite;
   UIMenus: any[];
   closeAllMenus: () => void;
@@ -498,6 +537,21 @@ MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
     canvas: ClickManager.GameCanvas,
   });
 
+  // Same UserList frame as the party window, BUDDY tab lit
+  this.buddyMenu = await BuddyMenuSprite.fromOpts({
+    x: 244,
+    y: 90,
+    isHidden: true,
+    canvas: ClickManager.GameCanvas,
+  });
+
+  this.guildMenu = await GuildMenuSprite.fromOpts({
+    x: 200,
+    y: 90,
+    isHidden: true,
+    canvas: ClickManager.GameCanvas,
+  });
+
   // 475x349 — the widest window here, so it starts centred rather than tucked
   // into a corner where half of it would sit off a 800x600 canvas
   this.monsterBookMenu = await MonsterBookMenuSprite.fromOpts({
@@ -508,7 +562,7 @@ MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
     book: (MyCharacter as any).monsterBook,
   });
 
-  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu, this.charInfoMenu, this.partyMenu, this.monsterBookMenu];
+  this.UIMenus = [this.statsMenu, this.inventoryMenu, this.equipMenu, this.questLog, this.skillMenu, this.charInfoMenu, this.partyMenu, this.buddyMenu, this.guildMenu, this.monsterBookMenu];
   // Same array, same order as the draw pass — so "later in the list" means
   // "drawn on top", which is what click ownership is decided on.
   DragableMenu.setStack(this.UIMenus);
@@ -715,13 +769,15 @@ MapStateInstance.doUpdate = function (
         CashShopUI.isVisible || UIAvatarMegaphone.isDialogOpen || questDialogOpen ||
         DirectionScene.isActive || UIGameMenu.isVisible ||
         UISystemOption.isVisible || UIGameOption.isVisible ||
-        UIChannelSelect.isVisible || UIKeyConfig.isVisible || UIWorldMap.isVisible;
+        UIChannelSelect.isVisible || UIKeyConfig.isVisible || UIWorldMap.isVisible ||
+        !!this.charInfoMenu?.isFameDialogOpen?.() || UITrade.isVisible;
 
       // While a dialog has the screen, touch controls stop claiming (their
       // touches would block the dialog's own buttons) and release holds
       TouchControls.claimSuppressed = dialogOpen;
 
       if (!dialogOpen) {
+        checkDashDoubleTap(canvas);
         if (canvas.isKeyDown("up")) {
           MyCharacter.upClick();
         }
@@ -782,6 +838,12 @@ MapStateInstance.doUpdate = function (
       }
       if (actionPressed(canvas, "party") && !DirectionScene.isActive) {
         this.partyMenu.setIsHidden(!this.partyMenu.isHidden);
+      }
+      if (actionPressed(canvas, "guild") && !DirectionScene.isActive) {
+        this.guildMenu.setIsHidden(!this.guildMenu.isHidden);
+      }
+      if (actionPressed(canvas, "buddy") && !DirectionScene.isActive) {
+        this.buddyMenu.setIsHidden(!this.buddyMenu.isHidden);
       }
       if (actionPressed(canvas, "monsterBook") && !DirectionScene.isActive) {
         this.monsterBookMenu.setIsHidden(!this.monsterBookMenu.isHidden);

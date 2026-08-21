@@ -158,3 +158,75 @@ No server allocation; compared with `===`.
 | player id | `id` (player_id/joined/left/party) · `playerId` (data blobs) · `sourcePlayerId` (relayed damage) |
 | quantity | `quantity` (inventory) · `amount` (item_drop) |
 | name check | `valid`/`taken` (NOT `success`) |
+
+
+## Additions 2026-08-21
+
+### Rooms
+Every broadcast, host election and drop ledger is scoped to a **room** =
+`(worldId, channel, mapId)`. `select_character` data now carries `channel`
+(0-based; default 0) and the result carries `channel` back. In game,
+`{"type":"change_channel","data":{channel}}` → `{"type":"channel_changed",
+success,channel}`; the client must drop every remote player it knows (the
+following `player_list` is the new room) and expects a fresh `mob_host_assign`.
+
+### Drops (server ledger)
+- C→S `item_drop` data: `{dropId:<client provisional>, itemId, amount, x, y, vx, vy,
+  ownerId:<playerId|null>, mapId}`. Owner = killer for mob/reactor loot, null for
+  bag drops.
+- S→C to the dropper: `{"type":"item_drop_ack","data":{clientDropId, dropId, mapId}}`
+  — rename the local drop to the server id. Pickups sent under the provisional id
+  within 30s still resolve.
+- S→C to others: `item_drop` data `{dropId, mapId, itemId, amount, x, y, vx, vy,
+  ownerId, partyId, droppedAt, dropperId, playerId}`.
+- C→S `item_pickup {dropId, mapId}` → either `item_pickup` fan-out to others or
+  `{"type":"item_pickup_denied","data":{dropId, mapId, reason:"gone"|"owner"}}` to
+  the picker (owner lock: 15s for killer/party).
+- S→C `item_expire {dropId, mapId}` after 180s; `item_drops_on_map {mapId, drops:[...]}`
+  on every join/map change (alongside `player_list`).
+
+### Saves
+`save_character` data carries `saveSeq` (monotonic; start from
+`select_character_result.character.saveSeq`, +1 per save). Reply
+`save_character_result {success, saveSeq}` or `{success:false, error:"stale_save",
+currentSeq}` → set counter to `currentSeq` and resend.
+
+### Buffs
+C→S `{"type":"player_buff","data":{skillId, durationMs, on, level}}` on every local
+buff apply/expire. S→C `player_buff` data `{playerId, skillId, on, durationMs, level}`.
+`player_info`/`player_list`/`player_joined` infos carry `buffs:[{skillId, expiresAt}]`.
+
+### Removed
+`monster_damage` / `monster_update` (dead pre-host-model path).
+
+### Buddy list + whispers (server/handlers/buddy.js)
+
+Per world, any channel/map. Keyed by CHARACTER id; DB table
+`buddies(character_id, buddy_id, group_name, pending, PRIMARY KEY(character_id,
+buddy_id))` — `pending=1` on a row means buddy_id has asked character_id and is
+awaiting an answer. Capacity 20. Presence is mutual-only (you see a buddy online
+only if they also hold you as a non-pending buddy); the server polls `players`
+every 2s and re-pushes `buddy_list` to every online owner of a changed buddy.
+
+- C→S: `buddy_sync` (no data; send on every map load — answers with the list and
+  re-delivers pending `buddy_request`s), `buddy_add {data:{name}}`,
+  `buddy_accept {data:{characterId}}`, `buddy_decline {data:{characterId}}`,
+  `buddy_delete {data:{characterId}}`, `buddy_find {data:{name}}`,
+  `whisper {data:{to,message}}` (message capped at 120 chars).
+- S→C: `buddy_list {data:{capacity,buddies:[{characterId,name,level,job,online,
+  mapId,channel(-1 offline),group}]}}`, `buddy_request {data:{characterId,name,
+  level,job}}`, `buddy_notice {data:{text}}`, `buddy_find_result {data:{name,
+  online,mapId?,channel?}}`, `whisper {data:{from,message}}`, `whisper_sent
+  {data:{to,message}}`, `whisper_fail {data:{to}}`.
+- Messages from a socket with no selected character are ignored.
+
+### Feature modules (2026-08-21)
+Trade, guild, fame and party-extension messages are documented at the top of
+their server modules — `server/handlers/trade.js` (trade_request/response/offer/
+confirm/cancel/chat ↔ trade_open/update/locked/complete/cancelled/notice),
+`server/handlers/guild.js` (guild_sync/create/disband/expand/emblem/invite/
+invite_response/leave/expel/rank/change_leader/notice/titles/chat/look_request ↔
+guild_update/invite/notice/result/chat/looks), `server/handlers/fame.js`
+(fame_give/fame_query ↔ fame_result/fame_changed/fame_info) and
+`server/handlers/party.js` (party_sync/party_hp/party_chat ↔ party_update with
+charId/online/hp, party_hp_update, party_chat). All payloads sit under `data`.

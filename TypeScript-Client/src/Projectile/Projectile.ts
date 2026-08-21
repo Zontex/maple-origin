@@ -13,6 +13,7 @@ import Monster from "../Monster";
 import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
 import { SINGLE_TARGET_REACH } from "../Skills/SkillData";
+import { playSkillSound } from "../Skills/SkillSound";
 
 // bullets locations
 // Item.wz/Consume/206.img/ID/bullet - arrow
@@ -62,6 +63,8 @@ class Projectile {
   // Skill that fired this projectile (0 = plain weapon shot) — carried so a
   // killing blow can be credited to the right skill-tutorial quest
   skillId: number = 0;
+  // Skill damage multiplier on a weapon shot (Double Shot: 0.61..0.80)
+  damagePercent: number = 1;
   hitEffectActive: boolean = false;
   hitEffectX: number = 0;
   hitEffectY: number = 0;
@@ -167,6 +170,16 @@ class Projectile {
     this.stance = projectileFile.bullet;
     this.setFrame(projectileFile.bullet, 0);
 
+    // A weapon skill (Double Shot) fires real ammo but shows the skill's own
+    // `ball` art, and carries its hit art, multiplier and id for the sound
+    this.skillId = opts.skillId || 0;
+    this.damagePercent = opts.damagePercent ?? 1;
+    this.hitNode = opts.hitNode || null;
+    if (opts.ballNode?.nChildren?.length) {
+      this.stance = opts.ballNode;
+      this.setFrame(opts.ballNode, 0);
+    }
+
     this.checkIfFindTarget();
   }
 
@@ -271,7 +284,9 @@ class Projectile {
       );
       this.finalDamangeAfterTargetDefense = isMiss
         ? 0
-        : Stats.getRandomAttackDamageFromAttackRange(attackRange);
+        : Math.floor(
+            Stats.getRandomAttackDamageFromAttackRange(attackRange) * this.damagePercent
+          );
 
       // Critical Shot / Critical Throw roll for ranged weapons
       if (this.finalDamangeAfterTargetDefense > 0) {
@@ -330,6 +345,9 @@ class Projectile {
   }
 
   startHitEffect() {
+    // A skill's shot lands with its own Hit clip (plain ammo stays silent
+    // here, as before — the mob's own hit sound covers it)
+    if (this.skillId) void playSkillSound(this.skillId, 'Hit');
     if (!this.hitNode?.nChildren) return;
     // Hit node structure: hit/0/{0,1,2,3,4,5} — first child is the frame set
     const frameSet = this.hitNode.nChildren[0];

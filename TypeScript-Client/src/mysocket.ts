@@ -11,6 +11,10 @@ import config from "./Config";
 import PartyManager from "./Party/PartyManager";
 import { serializeFullKeymap } from "./KeyBindings";
 import PetManager from "./Pet/PetManager";
+import UIChannelSelect from "./UI/UIChannelSelect";
+import UIChatLog from "./UI/UIChatLog";
+import { playSkillCastEffect } from "./Skills/SkillCastEffect";
+import { playSkillSound } from "./Skills/SkillSound";
 
 let nextDropId = 1;
 
@@ -61,6 +65,12 @@ interface PlayerState {
   hp: number;
   maxHp: number;
   attacking: boolean;
+  fame?: number;
+  equipped?: { slot: number; itemId: number }[];
+  buffs?: { skillId: number; expiresAt: number }[];
+  pets?: any;
+  monsterBook?: any;
+  noHost?: boolean;
 }
 
 interface PlayerUpdate {
@@ -82,13 +92,6 @@ interface MonsterUpdate {
   flipped: boolean;
   hp: number;
   maxHp: number;
-  mapId: number;
-}
-
-interface DamageEvent {
-  sourceId: string;
-  targetId: number;
-  damage: number;
   mapId: number;
 }
 
@@ -291,11 +294,15 @@ class MySocket {
   }
 
   // Select a character (load full data)
-  selectCharacter(characterId: number): Promise<any> {
+  // Channel chosen on the world-select scroll (0-based); travels with
+  // select_character so the server can place us in the right room
+  channel: number = 0;
+
+  selectCharacter(characterId: number, channel: number = this.channel): Promise<any> {
     this._resumeCharId = characterId;
     return this._withTimeout(new Promise((resolve) => {
       this._selectCharCallback = resolve;
-      this.sendMessage({ type: 'select_character', data: { characterId } });
+      this.sendMessage({ type: 'select_character', data: { characterId, channel } });
     }), 'select_character');
   }
 
@@ -344,6 +351,10 @@ class MySocket {
   }
 
   _saveDebounce: ReturnType<typeof setTimeout> | null = null;
+  // Monotonic save counter, continued from the DB's value at character
+  // select. The server rejects anything not above what it last stored, so
+  // a save that arrives late can never roll a newer one back.
+  _saveSeq: number = 0;
 
   /**
    * Coalesced event-driven save. Every gameplay change (item/meso pickup,
@@ -431,6 +442,7 @@ class MySocket {
     this.sendMessage({
       type: 'save_character',
       data: {
+        saveSeq: ++this._saveSeq,
         level: MyCharacter.stats?.level ?? 1,
         exp: MyCharacter.exp ?? 0,
         str: MyCharacter.stats?.str ?? 12,
@@ -629,12 +641,6 @@ class MySocket {
         case "player_update":
           this.handlePlayerUpdate(data);
           break;
-        case "monster_update":
-          this.handleMonsterUpdate(data);
-          break;
-        case "monster_damage":
-          this.handleMonsterDamage(data);
-          break;
         case "chat_message":
           this.handleChatMessage(data);
           break;
@@ -671,6 +677,18 @@ class MySocket {
         case "item_pickup":
           this.handleItemPickup(data.data);
           break;
+        case "item_drop_ack":
+          this.handleItemDropAck(data.data);
+          break;
+        case "item_pickup_denied":
+          this.handleItemPickupDenied(data.data);
+          break;
+        case "item_expire":
+          this.handleItemExpire(data.data);
+          break;
+        case "item_drops_on_map":
+          void this.handleItemDropsOnMap(data.data);
+          break;
         case "mob_host_assign":
           this.handleMobHostAssign(data);
           break;
@@ -685,6 +703,12 @@ class MySocket {
           break;
         case "mob_respawn":
           this.handleMobRespawn(data.data);
+          break;
+        case "player_buff":
+          this.handlePlayerBuff(data.data);
+          break;
+        case "channel_changed":
+          this.handleChannelChanged(data);
           break;
         case "player_hit_by_mob":
           this.handlePlayerHitByMob(data.data);
@@ -733,6 +757,13 @@ class MySocket {
           }
           break;
         case "select_character_result":
+          if (data.success && data.character) {
+            this._saveSeq = Number(data.character.saveSeq) || 0;
+            if (Number.isFinite(Number(data.channel))) {
+              this.channel = Number(data.channel);
+              UIChannelSelect.currentChannel = this.channel;
+            }
+          }
           if (this._selectCharCallback) {
             this._selectCharCallback(data);
             this._selectCharCallback = null;
@@ -744,6 +775,12 @@ class MySocket {
         case "save_character_result":
           if (data.success === false) {
             console.error('[Save] Server REJECTED save:', data.error);
+            if (data.error === 'stale_save' && Number.isFinite(Number(data.currentSeq))) {
+              // The server moved on without us (a disconnect save bumped the
+              // counter) — continue from its number and resend current state
+              this._saveSeq = Number(data.currentSeq);
+              this.requestSave();
+            }
             if (data.error === 'not_authenticated') {
               // Server restarted/reconnected under us — rebuild the session,
               // which ends by re-saving the current state
@@ -751,12 +788,26 @@ class MySocket {
             }
           }
           break;
-        default:
-          console.warn("Unknown message type:", data.type);
+        default: {
+          const extra = this.extraHandlers.get(data.type);
+          if (extra) extra(data);
+          else console.warn("Unknown message type:", data.type);
+        }
       }
     } catch (error) {
       console.error("Error handling WebSocket message:", error);
     }
+  }
+
+  // Feature modules (trade, buddy list, guild, fame, ...) subscribe to their
+  // own message types here instead of growing the switch above:
+  //   mySocket.on('trade_request', (msg) => ...)   — msg is the whole message
+  private extraHandlers: Map<string, (msg: any) => void> = new Map();
+  on(type: string, handler: (msg: any) => void) {
+    this.extraHandlers.set(type, handler);
+  }
+  off(type: string) {
+    this.extraHandlers.delete(type);
   }
   
   /**
@@ -891,8 +942,13 @@ class MySocket {
       job: MyCharacter.stats.jobId,
       hp: MyCharacter.hp,
       maxHp: MyCharacter.maxHp,
+      fame: (MyCharacter as any).fame ?? 0,
       attacking: false,
       equipped: equippedItems,
+      buffs: [...(MyCharacter.buffManager?.activeBuffs?.values?.() ?? [])].map((b: any) => ({
+        skillId: b.skillId,
+        expiresAt: b.expiresAt,
+      })),
     };
 
     // Summoned-pet roster: joiners see already-out pets via player_joined/
@@ -1021,25 +1077,6 @@ class MySocket {
     this.sendMessage({ type: "get_best_items", data: {} });
   }
 
-  sendMonsterDamage(monsterId: number, damage: number) {
-    if (!this.playerId) return;
-    
-    // Always convert mapId to number
-    const mapId = Number(MapleMap.id);
-    
-    const damageEvent: DamageEvent = {
-      sourceId: this.playerId,
-      targetId: monsterId,
-      damage: damage,
-      mapId: mapId
-    };
-    
-    this.sendMessage({
-      type: "monster_damage",
-      data: damageEvent
-    });
-  }
-  
   // Server clock minus ours, captured at connect — station clocks add this
   // to Date.now() so every player's board shows the same time
   serverTimeOffset: number = 0;
@@ -1247,6 +1284,10 @@ class MySocket {
 
         // Add to tracking
         this.otherPlayers.set(playerId, character);
+        // Buffs already up on them when we arrived (no cast art for those)
+        for (const b of playerData.buffs || []) {
+          if (Number(b.expiresAt) > Date.now()) character.remoteBuffs.set(Number(b.skillId), Number(b.expiresAt));
+        }
         this._loadingPlayers.delete(playerId);
 
         // Add to map characters
@@ -1437,35 +1478,6 @@ class MySocket {
     character.monsterBookInfo = playerData.monsterBook ?? null;
   }
   
-  handleMonsterUpdate(data: any) {
-    const monsterData = data.monster;
-    
-    // Skip monsters in other maps
-    if (Number(monsterData.mapId) !== Number(MapleMap.id)) return;
-    
-    // Find the monster in our map
-    const monster = MapleMap.monsters.find(m => m.id === monsterData.id);
-    
-    if (monster) {
-      // Update position and state
-      monster.pos.x = monsterData.x;
-      monster.pos.y = monsterData.y;
-      monster.hp = monsterData.hp;
-      
-      // If the monster was killed, mark it for destruction
-      if (monsterData.hp <= 0) {
-        monster.dying = true;
-        setTimeout(() => {
-          monster.destroyed = true;
-        }, 1000);
-      }
-    }
-  }
-  
-  handleMonsterDamage(data: any) {
-    // Deprecated — mob damage is now handled via host model (mob_state_batch + mob_damage_request)
-  }
-  
   handleChatMessage(data: any) {
     const chatMessage = data.message;
     
@@ -1501,8 +1513,11 @@ class MySocket {
   
   // --- Item Drop Sync ---
 
-  // Broadcast a drop to other players
-  sendItemDrop(itemId: number, amount: number, x: number, y: number, vx: number, vy: number, dropId: number) {
+  // Register a drop with the server (which broadcasts it). `dropId` is our
+  // provisional id — the server answers item_drop_ack with the real one.
+  // `ownerId` is the killer for mob/reactor loot (owner-locked for 15s,
+  // party included); null for items dropped from a bag, free for anyone.
+  sendItemDrop(itemId: number, amount: number, x: number, y: number, vx: number, vy: number, dropId: number, ownerId: string | null = null) {
     this.sendMessage({
       type: 'item_drop',
       data: {
@@ -1510,9 +1525,39 @@ class MySocket {
         itemId,
         amount,
         x, y, vx, vy,
+        ownerId,
         mapId: Number(MapleMap.id),
       }
     });
+  }
+
+  // The server's id for a drop we registered under a provisional one
+  handleItemDropAck(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    const drop = MapleMap.itemDrops.find((d: DropItemSprite) => (d as any)._netDropId === data.clientDropId);
+    if (drop) (drop as any)._netDropId = data.dropId;
+    MyCharacter.renamePendingPickup?.(data.clientDropId, data.dropId);
+  }
+
+  // Someone else got there first, or the loot is still owner-locked
+  handleItemPickupDenied(data: any) {
+    MyCharacter.revertPickup?.(data.dropId, data.reason);
+  }
+
+  // Evaporated on the server's clock (3 minutes) — remove it here too
+  handleItemExpire(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    const drop = MapleMap.itemDrops.find((d: DropItemSprite) => (d as any)._netDropId === data.dropId);
+    if (drop && !drop.isAlreadyPickedUp) drop.destroy();
+  }
+
+  // What was already lying on the map when we entered it
+  async handleItemDropsOnMap(data: any) {
+    if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    for (const d of data.drops || []) {
+      const known = MapleMap.itemDrops.some((x: DropItemSprite) => (x as any)._netDropId === d.dropId);
+      if (!known) await this.spawnNetworkedDrop({ ...d, vx: 0, vy: 0 });
+    }
   }
 
   // Broadcast that we picked up a drop
@@ -1529,7 +1574,10 @@ class MySocket {
   // Receive a drop from another player
   async handleItemDrop(data: any) {
     if (Number(data.mapId) !== Number(MapleMap.id)) return;
+    await this.spawnNetworkedDrop(data);
+  }
 
+  async spawnNetworkedDrop(data: any) {
     try {
       const dropItem = await DropItemSprite.fromOpts({
         id: data.itemId,
@@ -1541,6 +1589,11 @@ class MySocket {
 
       if (!dropItem.destroyed) {
         (dropItem as any)._netDropId = data.dropId;
+        // Ownership, so the client can decline to loot what isn't its own
+        // yet instead of bouncing off a server denial every time
+        (dropItem as any)._ownerId = data.ownerId ?? null;
+        (dropItem as any)._partyId = data.partyId ?? null;
+        (dropItem as any)._droppedAt = Number(data.droppedAt) || Date.now();
         MapleMap.addItemDrop(dropItem);
       }
     } catch (e) {
@@ -1558,6 +1611,58 @@ class MySocket {
     if (drop) {
       drop.goToPlayer(0, 0);  // goToPlayer sets isAlreadyPickedUp internally
     }
+  }
+
+  // --- Buff relay ---
+
+  /** The local BuffManager reports every buff going up or down */
+  sendBuff(skillId: number, durationMs: number, on: boolean, level: number = 1) {
+    if (!this.playerId) return;
+    this.sendMessage({ type: 'player_buff', data: { skillId, durationMs, on, level } });
+  }
+
+  handlePlayerBuff(data: any) {
+    const character = this.otherPlayers.get(data.playerId);
+    if (!character) return;
+    const skillId = Number(data.skillId);
+    if (data.on) {
+      character.remoteBuffs.set(skillId, Date.now() + (Number(data.durationMs) || 0));
+      // The cast as seen from across the map: art on the caster, its Use clip
+      void playSkillCastEffect(character, skillId);
+      void playSkillSound(skillId, 'Use');
+      // Party buffs (Haste, Bless, HS...) reach members through the party
+      (PartyManager as any).onMemberBuff?.(data.playerId, skillId, Number(data.level) || 1, Number(data.durationMs) || 0, character);
+    } else {
+      character.remoteBuffs.delete(skillId);
+    }
+  }
+
+  // --- Channels ---
+
+  sendChangeChannel(channel: number) {
+    if (!this.playerId) return;
+    this.sendMessage({ type: 'change_channel', data: { channel } });
+  }
+
+  /**
+   * The server moved us to another channel's copy of this map: everyone we
+   * could see belongs to the old room. Clear them — the player_list that
+   * follows repopulates the new room, and mob_host_assign re-seats the mobs.
+   */
+  handleChannelChanged(data: any) {
+    if (data.success === false) {
+      UIChatLog.notice('[Channel] Could not change channel.');
+      UIChannelSelect.currentChannel = this.channel;
+      return;
+    }
+    this.channel = Number(data.channel) || 0;
+    UIChannelSelect.currentChannel = this.channel;
+    for (const [id, player] of this.otherPlayers.entries()) {
+      const index = MapleMap.characters.indexOf(player);
+      if (index !== -1) MapleMap.characters.splice(index, 1);
+      this.otherPlayers.delete(id);
+    }
+    UIChatLog.notice(`[Channel] Moved to channel ${this.channel + 1}.`);
   }
 
   // --- Player Effects Sync ---

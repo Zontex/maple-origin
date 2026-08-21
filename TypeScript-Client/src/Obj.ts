@@ -23,6 +23,15 @@ class Obj {
   cy: number = 0;
   ry: number = 0;
   layer: number = 0;
+  // `hide=1` objects start invisible — the job-advancement guide arrows
+  // (signboard/market/arrow tagged sordQuest/bowQuest/magicQuest/thiefQuest/
+  // pirateQuest) are the only ones in v83, switched on by the server's
+  // field-effect tag toggle for the duration of that quest. Drawing them
+  // regardless scattered arrows over Henesys, Nautilus and Lith Harbor that
+  // pointed wherever the hidden stage of the trail happened to go.
+  hide: boolean = false;
+  tags: string[] = [];
+  visible: boolean = true;
 
   static async fromWzNode(wzNode: any) {
     const obj = new Obj(wzNode);
@@ -67,6 +76,12 @@ class Obj {
     this.zM = wzNode.zM.nValue;
     this.zid = parseInt(wzNode.nName);
     this.flipped = wzNode.f.nValue;
+    this.hide = !!wzNode.nGet("hide").nGet("nValue", 0);
+    this.visible = !this.hide;
+    this.tags = String(wzNode.nGet("tags").nGet("nValue", ""))
+      .split(";")
+      .map((t: string) => t.trim())
+      .filter(Boolean);
 
     this.flow = wzNode.nGet("flow").nGet("nValue", 0);
     this.cx = wzNode.nGet("cx").nGet("nValue", 0);

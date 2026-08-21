@@ -12,7 +12,7 @@ import config from '../Config';
  * yellow notices, white player chat, gray system lines, pink warnings.
  */
 
-export type ChatMessageType = 'player' | 'system' | 'notice' | 'warning';
+export type ChatMessageType = 'player' | 'system' | 'notice' | 'warning' | 'party' | 'whisper' | 'guild';
 
 interface ChatRow {
   text: string;        // one wrapped line
@@ -25,6 +25,9 @@ const COLORS: Record<ChatMessageType, string> = {
   system: '#dcdcdc',
   notice: '#ffff00',
   warning: '#ff8484',
+  whisper: '#9cf59c', // v83 whispers are the lime-green lines
+  party: '#ffc864',    // v83 party chat — the warm orange line
+  guild: '#d2b4ff',    // guild chat — the pale violet line
 };
 
 const LINE_H = 13;
@@ -83,6 +86,7 @@ const UIChatLog = {
   system(text: string) { this.addMessage(text, 'system'); },
   notice(text: string) { this.addMessage(text, 'notice'); },
   warning(text: string) { this.addMessage(text, 'warning'); },
+  whisper(text: string) { this.addMessage(text, 'whisper'); },
 
   // GMS-style gained/lost line with the item name resolved from String.wz
   async logItemChange(itemId: number, count: number) {

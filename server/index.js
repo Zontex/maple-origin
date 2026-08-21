@@ -7,9 +7,13 @@ const path = require('path');
 const { getDb } = require('./db');
 const { onConnection } = require('./connection');
 const { startCleanupTasks } = require('./cleanup');
+const { saveAllConnected } = require('./handlers/auth');
+const { closeDb } = require('./db');
 
 // Initialize database
 getDb();
+// Feature modules register their message handlers on load
+require('./features');
 
 // Express app for static files
 const app = express();
@@ -21,10 +25,29 @@ const wss = new WebSocket.Server({ server });
 wss.on('connection', onConnection);
 startCleanupTasks(wss);
 
-// No SIGINT/SIGTERM handlers — nodemon manages the process lifecycle,
-// and per-player auto-save already runs on WebSocket close (connection.js).
-// Adding signal handlers here closes file descriptors before nodemon's
-// pstree cleanup can spawn, causing EBADF errors.
+// Graceful shutdown: a kill or restart used to lose everything since each
+// client's last save. Saves are synchronous SQLite writes, so they complete
+// before the process exits; the sockets are then closed so clients reconnect
+// instead of lingering on a dead server. Guarded so a second signal during
+// the save does not re-enter.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const n = saveAllConnected();
+  console.log(`[Shutdown] ${signal}: saved ${n} character(s)`);
+  try {
+    for (const client of wss.clients) {
+      try { client.close(1012, 'server_restart'); } catch (e) { /* closing anyway */ }
+    }
+    closeDb();
+  } catch (e) {
+    console.error('[Shutdown] cleanup error:', e);
+  }
+  process.exit(0);
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {

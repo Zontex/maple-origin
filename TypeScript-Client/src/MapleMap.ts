@@ -36,6 +36,13 @@ export interface MapleMap {
   wzNode: any;
   isTown: boolean;
   isSwimMap: boolean;
+  // Partial water: `swimArea/<name>` rects (x1,y1)-(x2,y2) in maps whose
+  // info/swim is 0 — the Nautilus Generator Room's flooded lower deck, the
+  // sea under Nautilus Harbor, the fishing pond. Airborne physics become
+  // water physics only while the character's position is inside one.
+  swimAreas: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  isInWater: (x: number, y: number) => boolean;
+  setTaggedObjectsVisible: (tag: string, visible: boolean) => number;
   footholds: any;
   // Pre-flattened footholds. Physics scans every foothold per entity per
   // substep; Object.values() there allocated a fresh array each time.
@@ -201,7 +208,13 @@ MapleMap.load = async function (id: number | string) {
   this.isTown = !!this.wzNode.info.town.nValue;
   // Swim maps (info/swim=1) switch airborne physics to water physics
   this.isSwimMap = !!this.wzNode.info.nGet("swim").nGet("nValue", 0);
-  console.log(`is town: ${this.isTown}, swim: ${this.isSwimMap}`);
+  this.swimAreas = this.wzNode.nGet("swimArea").nChildren.map((r: any) => ({
+    x1: r.nGet("x1").nGet("nValue", 0),
+    y1: r.nGet("y1").nGet("nValue", 0),
+    x2: r.nGet("x2").nGet("nValue", 0),
+    y2: r.nGet("y2").nGet("nValue", 0),
+  }));
+  console.log(`is town: ${this.isTown}, swim: ${this.isSwimMap}, swimAreas: ${this.swimAreas.length}`);
   console.log("Map WZ Node:", this.wzNode);
 
   if (!this.PlayerCharacter) {
@@ -897,6 +910,37 @@ MapleMap.loadNPCs = async function (wzNode, mapId) {
   }
 };
 
+/**
+ * Show or hide every map object carrying `tag` — the v83 field-effect
+ * environment toggle that scripts use to light up a guide-arrow trail for one
+ * quest and put it away afterwards. Returns how many objects it touched.
+ */
+MapleMap.setTaggedObjectsVisible = function (tag: string, visible: boolean): number {
+  let n = 0;
+  for (const obj of this.objects as Obj[]) {
+    if (obj.tags?.includes(tag)) {
+      obj.visible = visible;
+      n++;
+    }
+  }
+  return n;
+};
+
+/**
+ * Whether a world position is in water: the whole map when info/swim=1,
+ * otherwise only inside one of the map's swimArea rects.
+ */
+MapleMap.isInWater = function (x: number, y: number): boolean {
+  if (this.isSwimMap) return true;
+  const areas = this.swimAreas;
+  if (!areas) return false;
+  for (let i = 0; i < areas.length; i++) {
+    const a = areas[i];
+    if (x >= a.x1 && x <= a.x2 && y >= a.y1 && y <= a.y2) return true;
+  }
+  return false;
+};
+
 MapleMap.loadBoundaries = function (wzNode, footholds) {
   if ("VRLeft" in wzNode.info) {
     return {
@@ -1128,6 +1172,9 @@ MapleMap.render = function (
   // One entity's draw error must not abort the frame — everything drawn
   // after it (mobs, portals, HUD) would silently vanish
   const draw = (obj: any) => {
+    // Map objects flagged hide=1 (quest guide arrows) stay out of the scene
+    // until their tag is switched on — see Obj.visible
+    if (obj.visible === false) return;
     try {
       obj.draw(canvas, camera, lag, msPerTick, tdelta);
     } catch (e) {
@@ -1199,22 +1246,44 @@ MapleMap.render = function (
   }
 
   // Draw character effects (level-up, quest clear, quest start, EXP gain)
-  const drawEffect = (c: MapleCharacter, frames: any, frameIndex: number) => {
+  // Skill art is authored for a left-facing character (the WZ default), so
+  // anything tied to facing — a punch, a muzzle flash, a dash burst — is
+  // mirrored about its anchor when the character faces right. Symmetric
+  // overlays (level up, quest) never flip: their lettering would read backwards.
+  const drawEffectAt = (
+    x: number,
+    y: number,
+    frames: any,
+    frameIndex: number,
+    flipped = false
+  ) => {
     const frame = frames?.[frameIndex];
     if (!frame || !frame.nGetImage) return;
     const img = frame.nGetImage();
     if (!img || (img instanceof HTMLImageElement && !img.complete)) return;
     const ox = frame.origin?.nX ?? 0;
     const oy = frame.origin?.nY ?? 0;
+    const w = frame.nWidth ?? img.width;
     canvas.drawImage({
       img,
-      dx: c.pos.x - ox - camera.x,
-      dy: c.pos.y - oy - camera.y,
+      dx: (flipped ? x - (w - ox) : x - ox) - camera.x,
+      dy: y - oy - camera.y,
+      flipped,
     });
   };
+  const drawEffect = (c: MapleCharacter, frames: any, frameIndex: number, flipped = false) =>
+    drawEffectAt(c.pos.x, c.pos.y, frames, frameIndex, flipped);
 
   const drawLevelUp = (c: MapleCharacter) => {
     drawEffect(c, c.levelUpFrames, c.levelUpFrame);
+  };
+
+  // Other players' cast art (relayed buffs, level-ups) draws in the same
+  // overlay pass as our own, after their sprites
+  const drawRemoteEffects = () => {
+    for (const c of this.characters as any[]) {
+      if (c && c !== this.PlayerCharacter && c.isRemote) drawPlayerEffects(c);
+    }
   };
 
   const drawPlayerEffects = (pc: any) => {
@@ -1224,7 +1293,10 @@ MapleMap.render = function (
     if (pc.questStartActive) drawEffect(pc, pc.questStartFrames, pc.questStartFrame);
     if (pc.cardGetActive) drawEffect(pc, pc.cardGetFrames, pc.cardGetFrame);
     if (pc.incExpActive) drawEffect(pc, pc.incExpFrames, pc.incExpFrame);
-    if (pc.skillEffectActive) drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame);
+    if (pc.skillEffectActive) drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
+    for (const puff of pc.dashTrail ?? []) {
+      drawEffectAt(puff.x, puff.y, puff.frames, puff.frame, puff.flipped);
+    }
     if (pc.afterimage?.active) pc.afterimage.draw(canvas, camera);
   };
 
@@ -1266,6 +1338,7 @@ MapleMap.render = function (
       draw(this.PlayerCharacter);
       drawPlayerEffects(this.PlayerCharacter);
     }
+    drawRemoteEffects();
     drawPets(true);
   } else {
     // Normal/jumping: draw up to player's layer, then player, then higher layers
@@ -1276,6 +1349,7 @@ MapleMap.render = function (
       draw(this.PlayerCharacter);
       drawPlayerEffects(this.PlayerCharacter);
     }
+    drawRemoteEffects();
     // Remote climbers' hanging pets ride in front of their owner too
     drawPets(true);
 

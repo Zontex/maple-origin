@@ -220,7 +220,10 @@ const WEAPON_CONFIG: Record<number, WeaponConfig> = {
     meleeRange: 75,
     stances: {
       melee: [Stance.swingP1, Stance.swingP2],
-      ranged: [Stance.shoot1],
+      // Guns fire from `shot` (alias: shoot2 wind-up, stabO1 recoil) — the
+      // body's own stance for weapon attack type 9, identical to `handgun`.
+      // `shoot1` is the bow draw.
+      ranged: [Stance.shot],
     },
   },
 };

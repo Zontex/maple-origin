@@ -26,6 +26,32 @@ export const CRITICAL_SKILLS: Record<number, number[]> = {
   [WeaponType.CLAW]: [4100001],                // Critical Throw
 };
 
+// Skills whose level data keeps its stat in the generic `x`/`y` slots rather
+// than named fields — the original client special-cases these by id, and so
+// does every v83 server. Mapped onto the named fields at parse time so the
+// passive/buff aggregators see them.
+export const XY_STAT_SKILLS: Record<number, { x: string; y: string }> = {
+  5000000: { x: 'acc', y: 'eva' },     // Bullet Time: accuracy / avoidability
+  5001005: { x: 'speed', y: 'jump' },  // Dash: speed / jump
+};
+
+export const DASH_SKILL_ID = 5001005;
+
+// Pirate 1st-job attack skills whose cast sound is the WEAPON's Attack clip,
+// not Sound.wz/Skill.img/<id>/Use. Verified against the raw v83 Sound.wz:
+// 5001000-5001007 is the pre-pirate GM job's block (GMs were job 500 before
+// 900; 9001xxx is a byte-identical copy), so Flash Fist's "Use" is Haste's
+// clip, Sommersault Kick's is Holy Symbol's, Double Shot's is Bless's, Dash's
+// is Shining Ray's. Nexon authored real Hit clips for 5001001-3 but never
+// replaced the Use ones. knuckle/Attack and gun/Attack (one per bullet) are
+// the only pirate cast sounds the WZ has; Dash keeps its Use — the clip is a
+// sustained whoosh and the WZ offers nothing else.
+export const WEAPON_SOUND_SKILLS = new Set([5001001, 5001002, 5001003]);
+export const usesWeaponSound = (skillId: number) => WEAPON_SOUND_SKILLS.has(skillId);
+
+// Gap between the bullets of a multi-bullet gun skill (Double Shot)
+export const SKILL_BULLET_STAGGER_MS = 150;
+
 // Weapon booster buffs — effect.x lowers attack speed stage (negative value)
 export const BOOSTER_SKILL_IDS = [
   1101004, 1101005, // Sword / Axe Booster (Fighter)
@@ -38,3 +64,22 @@ export const BOOSTER_SKILL_IDS = [
   5101006,          // Knuckler Booster
   5201003,          // Gun Booster
 ];
+
+// v83 party buffs — cast by one member, applied to every member inside the
+// skill's `lt`/`rb` box on the same map (PartyManager.onMemberBuff). Heal
+// (2301002) and Dispel are attack-shaped and excluded; Mystic Door and Time
+// Leap are not buffs.
+export const PARTY_BUFF_SKILLS = new Set([
+  1101006,          // Rage
+  1301006,          // Iron Will
+  1301007,          // Hyper Body
+  2101001, 2201001, // Meditation (F/P, I/L)
+  2301004,          // Bless
+  2311003,          // Holy Symbol
+  4101004, 4201003, // Haste (Assassin, Bandit)
+  3121002, 3221002, // Sharp Eyes
+  5121009,          // Speed Infusion
+  1121000, 1221000, 1321000, 2121000, 2221000, 2321000, // Maple Warrior
+  3121000, 3221000, 4121000, 4221000, 5121000, 5221000,
+]);
+export const isPartyBuffSkill = (skillId: number) => PARTY_BUFF_SKILLS.has(skillId);

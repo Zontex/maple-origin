@@ -1,9 +1,18 @@
 // Player-related message handlers
 
-const { players } = require('../state');
+const { players, roomOf, roomKey } = require('../state');
 const { sendToPlayer, broadcastToMap } = require('../network');
 const { assignMapHost } = require('../hostManager');
 const { refreshPartyOf } = require('./party');
+const { dropsOnMap } = require('./item');
+const { WORLDS } = require('../worlds');
+
+// Buffs a player reports (player_buff) are kept on its info so a late joiner
+// sees them; expired entries are dropped whenever the list is touched
+function liveBuffs(info) {
+  const now = Date.now();
+  return (info?.buffs || []).filter((b) => Number(b.expiresAt) > now);
+}
 
 function handlePlayerInfo(playerId, playerInfo) {
   const player = players.get(playerId);
@@ -25,7 +34,7 @@ function handlePlayerInfo(playerId, playerInfo) {
     playerInfo.mapId = lastKnown;
   }
 
-  player.info = { ...playerInfo, id: playerId };
+  player.info = { ...playerInfo, id: playerId, buffs: liveBuffs(playerInfo) };
   player.mapId = playerInfo.mapId;
 
   broadcastToMap(player.mapId, {
@@ -34,7 +43,61 @@ function handlePlayerInfo(playerId, playerInfo) {
   }, playerId);
 
   sendPlayerList(playerId);
-  assignMapHost(player.mapId, playerId);
+  assignMapHost(roomOf(player), playerId);
+}
+
+/**
+ * A buff went up or came down on the player. Relayed to the room (remote
+ * characters play the cast art and keep the active set — party buffs ride
+ * on this) and remembered on the info for joiners.
+ */
+function handlePlayerBuff(playerId, data) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const skillId = Number(data?.skillId);
+  if (!Number.isFinite(skillId)) return;
+  const on = !!data?.on;
+  const level = Math.max(1, Math.min(Math.floor(Number(data?.level)) || 1, 30));
+  const durationMs = Math.max(0, Math.min(Number(data?.durationMs) || 0, 3 * 60 * 60 * 1000));
+  const buffs = liveBuffs(player.info).filter((b) => b.skillId !== skillId);
+  if (on) buffs.push({ skillId, expiresAt: Date.now() + durationMs });
+  player.info.buffs = buffs;
+  broadcastToMap(player.mapId, {
+    type: 'player_buff',
+    data: { playerId, skillId, on, durationMs, level },
+  }, playerId);
+}
+
+/**
+ * Channel change (the in-game channel window). Same shape as a map change:
+ * leave the old room, join the new one, re-elect both hosts.
+ */
+function handleChangeChannel(playerId, data) {
+  const player = players.get(playerId);
+  if (!player || !player.info) return;
+  const world = WORLDS.find((w) => Number(w.id) === (Number(player.worldId) || 0));
+  const channelCount = Number(world?.channelCount) || 20;
+  const channel = Math.floor(Number(data?.channel));
+  if (!Number.isFinite(channel) || channel < 0 || channel >= channelCount) {
+    sendToPlayer(player.ws, { type: 'channel_changed', success: false, channel: player.channel });
+    return;
+  }
+  if (channel === (Number(player.channel) || 0)) {
+    sendToPlayer(player.ws, { type: 'channel_changed', success: true, channel });
+    return;
+  }
+  const mapId = Number(player.mapId);
+  const oldRoom = roomOf(player);
+  broadcastToMap(mapId, { type: 'player_left', id: playerId }, playerId);
+  player.channel = channel;
+  const newRoom = roomOf(player);
+  console.log(`Player ${playerId} changed channel: ${oldRoom} -> ${newRoom}`);
+  sendToPlayer(player.ws, { type: 'channel_changed', success: true, channel });
+  broadcastToMap(mapId, { type: 'player_joined', player: player.info }, playerId);
+  sendPlayerList(playerId);
+  assignMapHost(oldRoom);
+  assignMapHost(newRoom, playerId);
+  refreshPartyOf(playerId);
 }
 
 function handlePlayerUpdate(playerId, updateData) {
@@ -81,8 +144,8 @@ function handlePlayerUpdate(playerId, updateData) {
     broadcastToMap(newMapId, { type: 'player_joined', player: updatedInfo }, playerId);
     sendPlayerList(playerId);
 
-    assignMapHost(currentMapId);
-    assignMapHost(newMapId, playerId);
+    assignMapHost(roomKey(player.worldId, player.channel, currentMapId));
+    assignMapHost(roomOf(player), playerId);
 
     // Party rosters show each member's map — keep them fresh
     refreshPartyOf(playerId);
@@ -121,12 +184,17 @@ function sendPlayerList(playerId) {
   const player = players.get(playerId);
   if (!player || !player.ws) return;
 
-  const playerMapId = Number(player.mapId);
+  // What is lying on the floor of the room being entered — sent alongside
+  // the player list, which goes out on every join and map change
+  const floor = dropsOnMap(player);
+  if (floor.length) sendToPlayer(player.ws, { type: 'item_drops_on_map', data: { mapId: Number(player.mapId), drops: floor } });
+
+  const room = roomOf(player);
   const playerList = [];
 
   for (const [, p] of players.entries()) {
-    if (p.info && Number(p.mapId) === playerMapId) {
-      playerList.push(p.info);
+    if (p.info && roomOf(p) === room) {
+      playerList.push({ ...p.info, buffs: liveBuffs(p.info) });
     }
   }
 
@@ -138,5 +206,7 @@ module.exports = {
   handlePlayerUpdate,
   handlePlayerLevelUp,
   handlePlayerHitByMob,
+  handlePlayerBuff,
+  handleChangeChannel,
   sendPlayerList,
 };

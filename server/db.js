@@ -187,6 +187,14 @@ function initSchema() {
     // Column already exists — ignore
   }
 
+  // Migration: save sequence. Every accepted save bumps it; a save carrying
+  // an older number is a stale one arriving late and must not roll back.
+  try {
+    db.exec(`ALTER TABLE characters ADD COLUMN save_seq INTEGER DEFAULT 0`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+
   console.log('[DB] SQLite schema initialized');
 }
 

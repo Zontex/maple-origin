@@ -374,6 +374,10 @@ class Monster {
  * Enhanced version of the addDrops method for the Monster class
  * This should be integrated into your existing Monster class
  */
+// Net id of whoever landed the killing blow — the drops are theirs (and
+// their party's) for the owner-lock window; see server/handlers/item.js
+_killerNetId: string | null = null;
+
 async addDrops() {
   try {
     // Get random drop items from the monster's drop table
@@ -419,7 +423,7 @@ async addDrops() {
           const dropId = Date.now() + Math.floor(Math.random() * 10000) + i;
           (dropItem as any)._netDropId = dropId;
           this.map.addItemDrop(dropItem);
-          MySocket.sendItemDrop(monsterDropEntry.itemId, monsterDropEntry.chosenAmount, baseX + offsetX, baseY, this.pos.vx / 2, this.pos.vy, dropId);
+          MySocket.sendItemDrop(monsterDropEntry.itemId, monsterDropEntry.chosenAmount, baseX + offsetX, baseY, this.pos.vx / 2, this.pos.vy, dropId, this._killerNetId);
         }
       } catch (err) {
         console.error(`Error creating drop for item ${monsterDropEntry.itemId}:`, err);
@@ -457,7 +461,7 @@ async addDrops() {
                 const qDropId = Date.now() + Math.floor(Math.random() * 10000);
                 (dropItem as any)._netDropId = qDropId;
                 this.map.addItemDrop(dropItem);
-                MySocket.sendItemDrop(item.id, 1, baseX + offsetX, baseY, this.pos.vx / 2, this.pos.vy, qDropId);
+                MySocket.sendItemDrop(item.id, 1, baseX + offsetX, baseY, this.pos.vx / 2, this.pos.vy, qDropId, this._killerNetId);
               }
             } catch {}
           }
@@ -516,6 +520,9 @@ async addDrops() {
 
     // Only host spawns drops, awards EXP, and broadcasts death
     if (!this.isRemote) {
+      // A kill credited through a damage request belongs to that player;
+      // otherwise the host (us) did it
+      this._killerNetId = attackerNetId ?? MySocket.playerId ?? null;
       if (!this._noDrops) {
         setTimeout(() => {
           this.addDrops();

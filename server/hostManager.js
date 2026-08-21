@@ -1,8 +1,9 @@
-// Mob host assignment — one player per map runs mob AI
+// Mob host assignment — one player per room (world/channel/map) runs mob AI
 
 const WebSocket = require('ws');
-const { players, mapHosts } = require('./state');
+const { players, mapHosts, roomOf } = require('./state');
 const { sendToPlayer } = require('./network');
+const { flushPendingDamage } = require('./handlers/mob');
 
 // A host whose game loop has stalled (backgrounded tab, crashed page) keeps
 // its socket open and its setInterval mob broadcasts running, but stops
@@ -25,21 +26,25 @@ function canHost(player) {
   return !!player?.info && !player.info.noHost;
 }
 
-function assignMapHost(mapId, newJoinerId) {
-  mapId = Number(mapId);
-
+/**
+ * (Re)elect the mob host of a room. `room` is a state.roomKey string;
+ * `newJoinerId` is a player who just arrived and must be told its role
+ * even when nothing changes.
+ */
+function assignMapHost(room, newJoinerId) {
+  const inRoom = (p) => roomOf(p) === room;
   const liveCandidateExists = [...players.values()].some(
-    (p) => Number(p.mapId) === mapId && canHost(p) && isLive(p)
+    (p) => inRoom(p) && canHost(p) && isLive(p)
   );
 
   // Check if current host is still valid
-  const currentHost = mapHosts.get(mapId);
+  const currentHost = mapHosts.get(room);
   if (currentHost) {
     const hostPlayer = players.get(currentHost);
     const hostValid =
       hostPlayer &&
       hostPlayer.ws.readyState === WebSocket.OPEN &&
-      Number(hostPlayer.mapId) === mapId &&
+      inRoom(hostPlayer) &&
       canHost(hostPlayer) &&
       // A stale host keeps hostship only while no live player can take over
       (isLive(hostPlayer) || !liveCandidateExists);
@@ -64,7 +69,7 @@ function assignMapHost(mapId, newJoinerId) {
   // Find a new host — prefer players with a live game loop
   let newHost = null;
   for (const [id, player] of players.entries()) {
-    if (Number(player.mapId) === mapId && player.ws.readyState === WebSocket.OPEN && canHost(player)) {
+    if (inRoom(player) && player.ws.readyState === WebSocket.OPEN && canHost(player)) {
       if (isLive(player)) {
         newHost = id;
         break;
@@ -77,25 +82,27 @@ function assignMapHost(mapId, newJoinerId) {
     // Re-send even when the winner is unchanged: reaching here means the
     // previous assignment was found invalid, so the client's view of it
     // cannot be trusted either.
-    mapHosts.set(mapId, newHost);
+    mapHosts.set(room, newHost);
     const hostPlayer = players.get(newHost);
     if (hostPlayer) {
       sendToPlayer(hostPlayer.ws, { type: 'mob_host_assign', isHost: true });
     }
-    // Tell all other players on this map they are NOT the host
+    // Tell all other players in this room they are NOT the host
     for (const [id, player] of players.entries()) {
-      if (id !== newHost && Number(player.mapId) === mapId && player.ws.readyState === WebSocket.OPEN) {
+      if (id !== newHost && inRoom(player) && player.ws.readyState === WebSocket.OPEN) {
         sendToPlayer(player.ws, { type: 'mob_host_assign', isHost: false });
       }
     }
+    // Hits that landed during the host gap go to the new host now
+    flushPendingDamage(room, newHost);
     const age = Date.now() - (players.get(newHost)?.lastUpdate || 0);
     console.log(
-      `Map ${mapId}: assigned mob host to ${newHost} ` +
+      `Room ${room}: assigned mob host to ${newHost} ` +
         `(was ${currentHost || 'none'}, heartbeat ${age}ms ago, live=${isLive(players.get(newHost))})`
     );
   } else {
-    if (currentHost) console.log(`Map ${mapId}: no eligible mob host, clearing ${currentHost}`);
-    mapHosts.delete(mapId);
+    if (currentHost) console.log(`Room ${room}: no eligible mob host, clearing ${currentHost}`);
+    mapHosts.delete(room);
   }
 }
 

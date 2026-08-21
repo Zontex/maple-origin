@@ -492,6 +492,7 @@ UILogin.initialize = async function (canvas: GameCanvas) {
         uiLoginRef._lastChannelClickTime = now;
 
         this.selectedChannelIndex = i;
+        MySocket.channel = i;
         this.channelSelectAnimation = new FrameAnimation(
           this.uiLogin.nGet('WorldSelect')?.nGet('channel').nGet('chSelect'),
           -145 + col * 92 - 10,

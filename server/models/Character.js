@@ -244,6 +244,8 @@ class Character {
       skin: char.skin,
       gender: char.gender,
       fame: char.fame,
+      // Save sequence the client must continue from (see saveCharacter)
+      saveSeq: char.save_seq || 0,
       // Monster Book: card id -> copies held, and the registered cover card.
       // Null for characters saved before the column existed — the client then
       // starts them with an empty book.
@@ -260,7 +262,14 @@ class Character {
     };
   }
 
-  static saveCharacter(characterId, data) {
+  /**
+   * Persist a save payload. `opts.serverOriginated` marks saves the server
+   * makes on the player's behalf (disconnect, shutdown): they take the next
+   * sequence number themselves. Client saves must carry `data.saveSeq`
+   * greater than the stored one — three full-replace paths with no ordering
+   * meant a stale save arriving late could roll progress back.
+   */
+  static saveCharacter(characterId, data, opts = {}) {
     const db = getDb();
 
     const updateChar = db.prepare(`
@@ -269,7 +278,7 @@ class Character {
         hp = ?, max_hp = ?, mp = ?, max_mp = ?,
         job_id = ?, map_id = ?, pos_x = ?, pos_y = ?,
         mesos = ?, nx = ?, fame = ?, hair = ?, face = ?, skin = ?,
-        monsterbook = ?, monsterbook_cover = ?
+        monsterbook = ?, monsterbook_cover = ?, save_seq = ?
       WHERE id = ?
     `);
 
@@ -303,6 +312,23 @@ class Character {
     const current = db.prepare('SELECT * FROM characters WHERE id = ?').get(characterId);
     if (!current) {
       return { success: false, error: 'Character not found' };
+    }
+
+    const storedSeq = Number(current.save_seq) || 0;
+    let nextSeq;
+    if (opts.serverOriginated) {
+      nextSeq = storedSeq + 1;
+    } else {
+      const seq = Number(data.saveSeq);
+      if (!Number.isFinite(seq)) {
+        // Pre-sequencing client — accept, and start counting from here
+        nextSeq = storedSeq + 1;
+      } else if (seq <= storedSeq) {
+        console.warn(`[DB] Stale save for character ${characterId}: seq ${seq} <= stored ${storedSeq} — rejected`);
+        return { success: false, error: 'stale_save', currentSeq: storedSeq };
+      } else {
+        nextSeq = seq;
+      }
     }
 
     // Characters can never level down in v83 — a save carrying a lower level
@@ -377,6 +403,7 @@ class Character {
         // stamping an empty object over a collection
         data.monsterBook ? JSON.stringify(data.monsterBook) : current.monsterbook,
         data.monsterBookCover ?? current.monsterbook_cover ?? 0,
+        nextSeq,
         characterId
       );
 
@@ -437,7 +464,7 @@ class Character {
 
     try {
       saveTransaction();
-      return { success: true };
+      return { success: true, saveSeq: nextSeq };
     } catch (err) {
       console.error('[DB] Save character error:', err);
       return { success: false, error: 'Failed to save character' };
