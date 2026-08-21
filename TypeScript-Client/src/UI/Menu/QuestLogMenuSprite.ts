@@ -8,6 +8,7 @@ import GameCanvas from '../../GameCanvas';
 import QuestData, { mobNames, resolveItemCodes, getItemNameSync, ensureMapNames } from '../../Quest/QuestData';
 import type MapleCharacter from '../../MapleCharacter';
 import { drawSelectionBar } from '../UISelectionBar';
+import { loadItemIcon, getItemIconSync } from '../../Quest/ItemIcon';
 
 enum QuestTab {
   AVAILABLE = 0,
@@ -44,6 +45,8 @@ const SB_W = 15;
 // Detail panel text area
 const BLUE_AREA_H = 120;
 const DETAIL_LINE_H = 14;
+// Item-requirement rows carry the item's 32px icon, so they are taller
+const DETAIL_ICON_ROW_H = 34;
 const DETAIL_MAX_LINES = 14;
 
 // Area ID to region name mapping (from WZ data)
@@ -794,7 +797,7 @@ class QuestLogMenuSprite extends DragableMenu {
 
     // Build the full line list (word-wrapped description + progress), then
     // render the slice selected by the right-panel scrollbar
-    const lines: { text: string; color: string }[] = [];
+    const lines: { text: string; color: string; iconId?: number }[] = [];
     let line = '';
     for (const word of description.split(' ')) {
       const test = line ? `${line} ${word}` : word;
@@ -830,9 +833,13 @@ class QuestLogMenuSprite extends DragableMenu {
           const have = qm?.getItemCount(item.id) ?? 0;
           const done = have >= item.count;
           const name = getItemNameSync(item.id) || `Item #${item.id}`;
+          // The item's own icon beside the count — fetched once, drawn as
+          // soon as it has loaded (the panel redraws every frame)
+          void loadItemIcon(item.id);
           lines.push({
             text: `${name}: ${have}/${item.count}`,
             color: done ? '#00AA00' : '#CC0000',
+            iconId: item.id,
           });
         }
       }
@@ -841,8 +848,16 @@ class QuestLogMenuSprite extends DragableMenu {
     this.detailScrollOffset = Math.max(0, Math.min(this.detailScrollOffset, lines.length - DETAIL_MAX_LINES));
     const end = Math.min(this.detailScrollOffset + DETAIL_MAX_LINES, lines.length);
     for (let i = this.detailScrollOffset; i < end; i++) {
-      if (lines[i].text) {
-        canvas.drawText({ text: lines[i].text, color: lines[i].color, x: rx + DETAIL_PAD, y: dy, fontSize: 11 });
+      const line = lines[i];
+      if (line.iconId) {
+        const icon = getItemIconSync(line.iconId);
+        if (icon && icon.width > 0) canvas.drawImage({ img: icon, dx: rx + DETAIL_PAD, dy });
+        canvas.drawText({ text: line.text, color: line.color, x: rx + DETAIL_PAD + 36, y: dy + 10, fontSize: 11 });
+        dy += DETAIL_ICON_ROW_H;
+        continue;
+      }
+      if (line.text) {
+        canvas.drawText({ text: line.text, color: line.color, x: rx + DETAIL_PAD, y: dy, fontSize: 11 });
       }
       dy += DETAIL_LINE_H;
     }
