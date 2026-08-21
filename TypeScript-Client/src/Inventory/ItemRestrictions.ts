@@ -84,5 +84,19 @@ export async function getItemFlags(itemId: number): Promise<ItemFlags> {
  */
 export async function canDropItem(itemId: number): Promise<boolean> {
   const f = await getItemFlags(itemId);
-  return !(f.tradeBlock || f.quest);
+  return !f.quest;
 }
+
+/**
+ * v83: an untradeable item (tradeBlock) CAN be dropped, but the client first
+ * warns that it will be gone, and the drop vanishes instead of landing on
+ * the floor (the emulator's "disappearing item drop"). Quest items never get
+ * that far — canDropItem refuses them outright.
+ */
+export async function dropVanishes(itemId: number): Promise<boolean> {
+  const f = await getItemFlags(itemId);
+  return f.tradeBlock && !f.quest;
+}
+
+export const UNTRADEABLE_DROP_WARNING =
+  'This item cannot be traded. If you drop it, it will disappear. Are you sure you want to drop it?';

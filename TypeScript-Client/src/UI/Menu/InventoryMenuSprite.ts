@@ -17,6 +17,7 @@ import { Position } from "../../Effects/DamageIndicator";
 import GameCanvas from "../../GameCanvas";
 import DropItemSprite from "../../DropItem/DropItemSprite";
 import Item from "../../Inventory/Item";
+import UIConfirmDialog from '../UIConfirmDialog';
 import UIMesoDropDialog from "../UIMesoDropDialog";
 import QuestData from "../../Quest/QuestData";
 import PLAY_AUDIO from "../../Audio/PlayAudio";
@@ -62,6 +63,9 @@ class InventoryMenuSprite extends DragableMenu {
   // Reference to GameCanvas for mouse position tracking
   GameCanvas: GameCanvas;
   mesoDropDialog: UIMesoDropDialog | null = null;
+  // "This item will disappear" prompt for untradeable drops (shared with the
+  // equip window, which reaches it through MapStateInstance.inventoryMenu)
+  confirmDialog: UIConfirmDialog | null = null;
   // Double-click tracking
   lastClickSlot: number = -1;
   lastClickTime: number = 0;
@@ -129,6 +133,7 @@ class InventoryMenuSprite extends DragableMenu {
     } catch (e) { /* sound optional */ }
 
     // Load the meso drop dialog (auto-centers on screen)
+    this.confirmDialog = await UIConfirmDialog.fromOpts({ canvas: this.GameCanvas });
     this.mesoDropDialog = await UIMesoDropDialog.fromOpts({
       canvas: this.GameCanvas,
     });
@@ -208,7 +213,7 @@ class InventoryMenuSprite extends DragableMenu {
   }
 
   // Drop an item from the inventory
-  async dropItem(item: any, quantity: number, slotIndex: number) {
+  async dropItem(item: any, quantity: number, slotIndex: number, vanish: boolean = false) {
     if (!item || quantity <= 0) {
       console.warn("Invalid item or quantity");
       return;
@@ -282,11 +287,18 @@ class InventoryMenuSprite extends DragableMenu {
         actualItem.quantity -= quantity;
       }
 
-      // Add the drop to the map
-      const dropId = Date.now() + Math.floor(Math.random() * 10000);
-      (itemDrop as any)._netDropId = dropId;
-      this.charecter.map.addItemDrop(itemDrop);
-      mySocket.sendItemDrop(item.itemId, quantity, this.charecter.pos.x, this.charecter.pos.y - 20, 0, 0, dropId);
+      // Add the drop to the map. An untradeable item's drop is local and
+      // short-lived — nobody can pick it up, so the room never hears of it
+      if (vanish) {
+        itemDrop.vanishing = true;
+        itemDrop.isAlreadyPickedUp = true;
+        this.charecter.map.addItemDrop(itemDrop);
+      } else {
+        const dropId = Date.now() + Math.floor(Math.random() * 10000);
+        (itemDrop as any)._netDropId = dropId;
+        this.charecter.map.addItemDrop(itemDrop);
+        mySocket.sendItemDrop(item.itemId, quantity, this.charecter.pos.x, this.charecter.pos.y - 20, 0, 0, dropId);
+      }
       const { default: UIChatLog } = await import('../UIChatLog');
       const itemName = getItemNameSync(item.itemId) || `Item #${item.itemId}`;
       UIChatLog.system(`You have lost an item (${itemName})`);
@@ -1254,9 +1266,22 @@ class InventoryMenuSprite extends DragableMenu {
     // much in orange — nothing was enforcing it, so a Relaxer chair
     // (tradeBlock=1) could be thrown on the floor. This covers every item
     // carrying the flags, not just chairs.
-    const { canDropItem } = await import('../../Inventory/ItemRestrictions');
+    const { canDropItem, dropVanishes, UNTRADEABLE_DROP_WARNING } = await import('../../Inventory/ItemRestrictions');
     if (!(await canDropItem(item.itemId))) {
-      console.log(`[Inventory] #${item.itemId} cannot be dropped (untradeable or quest item)`);
+      console.log(`[Inventory] #${item.itemId} cannot be dropped (quest item)`);
+      return;
+    }
+
+    // Untradeable: v83 lets it go, but warns that it will be gone — the drop
+    // then vanishes where it lands rather than staying on the floor
+    const vanish = await dropVanishes(item.itemId);
+    if (vanish && !(this as any)._dropConfirmed) {
+      if (!this.confirmDialog || !this.confirmDialog.isHidden) return;
+      this.confirmDialog.show(UNTRADEABLE_DROP_WARNING, (yes: boolean) => {
+        if (!yes) return;
+        (this as any)._dropConfirmed = true;
+        void this.showItemDropDialog(item, slotIndex).finally(() => { (this as any)._dropConfirmed = false; });
+      });
       return;
     }
 
@@ -1269,14 +1294,14 @@ class InventoryMenuSprite extends DragableMenu {
 
     if (maxQuantity <= 1) {
       // Single item — drop immediately, no dialog
-      this.dropItem(item, 1, slotIndex);
+      this.dropItem(item, 1, slotIndex, vanish);
       return;
     }
 
     // Stackable item — show quantity dialog
     if (!this.mesoDropDialog || !this.mesoDropDialog.isHidden) return;
     this.mesoDropDialog.show(maxQuantity, (quantity: number) => {
-      this.dropItem(item, quantity, slotIndex);
+      this.dropItem(item, quantity, slotIndex, vanish);
     }, 'item', item.name || '');
   }
 
@@ -1510,6 +1535,10 @@ class InventoryMenuSprite extends DragableMenu {
     this.drawTooltip(canvas);
 
     // Draw meso drop dialog on top
+    if (this.confirmDialog) {
+      this.confirmDialog.update(msPerTick);
+      this.confirmDialog.draw(canvas, camera, lag, msPerTick, tdelta);
+    }
     if (this.mesoDropDialog) {
       this.mesoDropDialog.update(msPerTick);
       this.mesoDropDialog.draw(canvas, camera, lag, msPerTick, tdelta);

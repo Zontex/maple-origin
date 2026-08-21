@@ -48,6 +48,10 @@ class DropItemSprite {
   // Flag to prevent items from being destroyed immediately
   hasLanded: boolean = false;
   lifeTime: number = 120000; // 2 minutes item life
+  // Untradeable drop: plays the toss, then fades out where it lands instead
+  // of staying on the floor; never pickable, never broadcast
+  vanishing: boolean = false;
+  vanishAfterMs: number = 900;
   currentLifeTime: number = 0;
 
   // needed to enable await on constructor
@@ -243,6 +247,10 @@ class DropItemSprite {
     // Update lifetime for all items
     this.currentLifeTime += msPerTick;
     if (this.currentLifeTime >= this.lifeTime) {
+      this.destroy();
+      return;
+    }
+    if (this.vanishing && this.currentLifeTime >= this.vanishAfterMs) {
       this.destroy();
       return;
     }

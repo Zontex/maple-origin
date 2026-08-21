@@ -3106,6 +3106,7 @@ isCloseToMob = (inAllDirections = true) => {
   pendingPickups: Map<number, { invKey: number | string; itemId: number; amount: number; at: number }> = new Map();
 
   canPickUpDrop(itemDrop: DropItemSprite): boolean {
+    if (itemDrop.vanishing) return false;
     const ownerId = (itemDrop as any)._ownerId as string | null | undefined;
     if (!ownerId) return true;
     const myId = (window as any).__mySocket?.playerId;

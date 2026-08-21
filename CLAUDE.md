@@ -408,7 +408,7 @@ Use `Math.floor(itemId / 1000000)` to determine inventory tab:
 - Toggle: M key, auto-loads on map change via `MapleMap.load()` → `UIMiniMap.loadMapData()`
 
 ### Quest Item Rules
-- Only TRUE quest items — flagged `quest=1` in the item's own WZ `info` node — are undroppable (enforced by `ItemRestrictions.canDropItem`, alongside `tradeBlock`)
+- Only TRUE quest items — flagged `quest=1` in the item's own WZ `info` node — are undroppable (`ItemRestrictions.canDropItem`). **Untradeable items (`tradeBlock=1`) DO drop in v83**: the client warns "it will disappear" (`UI/UIConfirmDialog`, the YesNo3 panel) and the drop is a local `DropItemSprite.vanishing` toss that fades where it lands — never pickable, never broadcast (the emulator's "disappearing item drop"). `ItemRestrictions.dropVanishes` decides; both the inventory and equip windows go through it.
 - A common item that an active quest merely requires (Branch, Stone, ...) stays droppable, like GMS — do NOT block drops by scanning active quests' `reqs.start/complete.items`
 
 ### v83 Beginner Stats

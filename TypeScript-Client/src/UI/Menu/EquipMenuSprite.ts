@@ -393,10 +393,22 @@ class EquipMenuSprite extends DragableMenu {
   }
 
   /** Detach a worn item and drop it on the ground (keeps scroll data) */
-  async dropEquippedItem(slot: number) {
+  async dropEquippedItem(slot: number, confirmed: boolean = false) {
     const itemId = this.charecter.equippedItemIds[slot];
     if (!itemId) return;
     const equipData = this.charecter.equippedItemData?.[slot];
+
+    // Same v83 rules as the inventory: quest items never drop; untradeable
+    // ones drop after a warning and vanish where they land
+    const { canDropItem, dropVanishes, UNTRADEABLE_DROP_WARNING } = await import('../../Inventory/ItemRestrictions');
+    if (!(await canDropItem(itemId))) return;
+    const vanish = await dropVanishes(itemId);
+    if (vanish && !confirmed) {
+      const dialog = (window as any).MapStateInstance?.inventoryMenu?.confirmDialog;
+      if (!dialog || !dialog.isHidden) return;
+      dialog.show(UNTRADEABLE_DROP_WARNING, (yes: boolean) => { if (yes) void this.dropEquippedItem(slot, true); });
+      return;
+    }
 
     try {
       // Create the ground drop first — only detach once the drop exists,
@@ -421,10 +433,16 @@ class EquipMenuSprite extends DragableMenu {
 
       this.charecter.detachEquip(slot);
 
-      const dropId = Date.now() + Math.floor(Math.random() * 10000);
-      (itemDrop as any)._netDropId = dropId;
-      this.charecter.map.addItemDrop(itemDrop);
-      mySocket.sendItemDrop(itemId, 1, this.charecter.pos.x, this.charecter.pos.y - 20, 0, 0, dropId);
+      if (vanish) {
+        itemDrop.vanishing = true;
+        itemDrop.isAlreadyPickedUp = true;
+        this.charecter.map.addItemDrop(itemDrop);
+      } else {
+        const dropId = Date.now() + Math.floor(Math.random() * 10000);
+        (itemDrop as any)._netDropId = dropId;
+        this.charecter.map.addItemDrop(itemDrop);
+        mySocket.sendItemDrop(itemId, 1, this.charecter.pos.x, this.charecter.pos.y - 20, 0, 0, dropId);
+      }
       console.log(`[EquipMenu] Dropped equipped item ${itemId} from slot ${slot}`);
     } catch (e) {
       console.error('[EquipMenu] Error dropping equipped item:', e);
