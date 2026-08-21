@@ -49,6 +49,13 @@ interface UIChannelSelectInterface {
   buttons: MapleStanceButton[];
   _canvas: GameCanvas | null;
   onChanged: ((channel: number) => void) | null;
+  // Click edge detection (canvas.clicked is level-triggered) and the
+  // double-click memory: plate index + time of the last fresh press
+  _mouseWasDown: boolean;
+  _lastPlateClick: number;
+  _lastPlateClickAt: number;
+  /** Apply the picked channel: close, and change if it differs from the current one */
+  commit: (picked: number) => void;
   initialize: (canvas: GameCanvas) => Promise<void>;
   show: () => void;
   hide: () => void;
@@ -76,6 +83,17 @@ UIChannelSelect.frame = { t: null, c: null, s: null };
 UIChannelSelect.buttons = [];
 UIChannelSelect._canvas = null;
 UIChannelSelect.onChanged = null;
+UIChannelSelect._mouseWasDown = false;
+UIChannelSelect._lastPlateClick = -1;
+UIChannelSelect._lastPlateClickAt = 0;
+
+UIChannelSelect.commit = function (picked: number) {
+  this.hide();
+  if (picked !== this.currentChannel) {
+    this.currentChannel = picked;
+    this.onChanged?.(picked);
+  }
+};
 
 function plateRect(index: number) {
   const col = index % COLS;
@@ -128,12 +146,7 @@ UIChannelSelect.initialize = async function (canvas: GameCanvas) {
     isPartOfUI: true,
     isHidden: true,
     onClick: () => {
-      const picked = this.selectedChannel;
-      this.hide();
-      if (picked !== this.currentChannel) {
-        this.currentChannel = picked;
-        this.onChanged?.(picked);
-      }
+      this.commit(this.selectedChannel);
     },
   });
   const cancel = new MapleStanceButton(canvas, {
@@ -177,15 +190,29 @@ UIChannelSelect.doUpdate = function (canvas: GameCanvas) {
   const mx = canvas.mouseX;
   const my = canvas.mouseY;
   this.hoveredChannel = -1;
+  // canvas.clicked stays true for the whole time the button is held — only
+  // the press edge counts, so a held click is one click, not sixty
+  const pressed = canvas.clicked && !this._mouseWasDown;
+  this._mouseWasDown = canvas.clicked;
 
   for (let i = 0; i < CHANNEL_COUNT; i++) {
     const r = plateRect(i);
     if (mx >= r.x && mx <= r.x + r.width && my >= r.y && my <= r.y + r.height) {
       this.hoveredChannel = i;
-      // canvas.clicked stays true for the whole time the button is held, so
-      // this runs on every frame of one click — assigning the same value is
-      // idempotent, unlike anything that would advance state.
-      if (canvas.clicked) this.selectedChannel = i;
+      if (pressed) {
+        const now = Date.now();
+        // Second press on the same plate within the double-click window
+        // changes channel outright, like the login scroll (CHANGE still works)
+        if (this._lastPlateClick === i && now - this._lastPlateClickAt < 400) {
+          this._lastPlateClick = -1;
+          this._lastPlateClickAt = 0;
+          this.commit(i);
+          return;
+        }
+        this.selectedChannel = i;
+        this._lastPlateClick = i;
+        this._lastPlateClickAt = now;
+      }
       break;
     }
   }
