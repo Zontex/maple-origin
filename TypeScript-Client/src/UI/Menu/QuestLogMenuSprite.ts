@@ -21,10 +21,16 @@ const RIGHT_W = 305;
 const TOTAL_W = LEFT_W + RIGHT_W;
 const TOTAL_H = 396;
 
-const TAB_X = 7;
-const TAB_Y = 22;
+const TAB_X = 4;
+// The tab band is the same one the inventory has: pale strip y=24..41, red
+// underline y=42..44 (measured off Quest/backgrnd, identical to Item/backgrnd).
+// Plates hang from that line; the list starts under it with the same breathing
+// room the inventory grid gets.
+const TAB_STRIP_BOTTOM = 42;
+const TAB_PAD = 16;   // plate = label width + this
+const TAB_GAP = 1;
 const LIST_X = 12;
-const LIST_Y = 42;
+const LIST_Y = 48;
 const LIST_W = LEFT_W - 24;
 const ENTRY_H = 18;
 const MAX_VISIBLE = 18;
@@ -100,6 +106,12 @@ class QuestLogMenuSprite extends DragableMenu {
   private summaryLbl: any = null;
   private tabLblEnabled: any[] = [];
   private tabLblDisabled: any[] = [];
+  // Tab plates — UIWindow.img/Item/New/Tab1/0 (pink, selected) and Tab0/0
+  // (grey). v83 ships them only at 34px, so they are 3-sliced to the quest
+  // labels' width: their middle columns (9..26) are identical, so the plate
+  // stretches cleanly. Same plates the inventory window uses.
+  private tabPlateOn: HTMLImageElement | null = null;
+  private tabPlateOff: HTMLImageElement | null = null;
   /** Basic.img/CheckBox 0 (empty) / 1 (red check) — category fold toggles */
   private checkBoxOff: HTMLImageElement | null = null;
   private checkBoxOn: HTMLImageElement | null = null;
@@ -175,6 +187,11 @@ class QuestLogMenuSprite extends DragableMenu {
         this.tabLblEnabled[i] = this.questUINode?.Tab?.enabled?.[i]?.nGetImage?.() || null;
         this.tabLblDisabled[i] = this.questUINode?.Tab?.disabled?.[i]?.nGetImage?.() || null;
       }
+      try {
+        const newNode: any = await WZManager.get('UI.wz/UIWindow.img/Item/New');
+        this.tabPlateOn = newNode?.Tab1?.nGet?.('0')?.nGetImage?.() || null;
+        this.tabPlateOff = newNode?.Tab0?.nGet?.('0')?.nGetImage?.() || null;
+      } catch (e) { /* labels alone still read */ }
       // Quest row icons (available / in progress / completed)
       this.rowIcons = [
         this.questUINode?.icon0?.nGetImage?.() || null,
@@ -516,19 +533,46 @@ class QuestLogMenuSprite extends DragableMenu {
     }
   }
 
+  /** 3-slice a tab plate to `w`: 9px left cap, stretched middle, 7px right cap */
+  private drawTabPlate(canvas: GameCanvas, plate: HTMLImageElement, x: number, y: number, w: number) {
+    const L = 9, R = 7;
+    const h = plate.height;
+    canvas.drawImage({ img: plate, sx: 0, sy: 0, sw: L, sh: h, dx: x, dy: y });
+    canvas.drawImage({ img: plate, sx: L, sy: 0, sw: plate.width - L - R, sh: h, dx: x + L, dy: y, dw: Math.max(1, w - L - R), dh: h });
+    canvas.drawImage({ img: plate, sx: plate.width - R, sy: 0, sw: R, sh: h, dx: x + w - R, dy: y });
+  }
+
   private drawTabs(canvas: GameCanvas) {
-    // v83 ships byte-identical Tab/enabled and Tab/disabled label sprites,
-    // so the active tab is the full-strength label and inactive ones are dimmed
-    let tx = this.x + TAB_X + 6;
+    // Plates sit on the band and hang from its red underline, the pink one a
+    // pixel taller than the grey (19 vs 18) so it reads as "in front" — the
+    // inventory's rule. The lit plate is drawn last so it overlaps its
+    // neighbours. Quest/Tab ships byte-identical enabled/disabled labels, so
+    // the plate colour alone carries the selected state.
+    let tx = this.x + TAB_X;
     this._tabRects = [];
+    const slots: { i: number; x: number; w: number }[] = [];
     for (let i = 0; i < 3; i++) {
-      const active = i === this.currentTab;
       const lblImg = this.tabLblEnabled[i] || this.tabLblDisabled[i];
-      if (!lblImg) continue;
-      const ly = this.y + TAB_Y + 3;
-      canvas.drawImage({ img: lblImg, dx: tx, dy: ly, alpha: active ? 1 : 0.4 });
-      this._tabRects.push({ x: tx, y: ly, w: lblImg.width, h: lblImg.height, tab: i });
-      tx += lblImg.width + 14;
+      const w = (lblImg?.width || 45) + TAB_PAD;
+      slots.push({ i, x: tx, w });
+      tx += w + TAB_GAP;
+    }
+    const order = [...slots.filter((s) => s.i !== this.currentTab), ...slots.filter((s) => s.i === this.currentTab)];
+    for (const slot of order) {
+      const active = slot.i === this.currentTab;
+      const plate = active ? this.tabPlateOn : this.tabPlateOff;
+      const lblImg = active ? (this.tabLblEnabled[slot.i] || this.tabLblDisabled[slot.i]) : (this.tabLblDisabled[slot.i] || this.tabLblEnabled[slot.i]);
+      const plateH = plate?.height || (active ? 19 : 18);
+      const plateY = this.y + TAB_STRIP_BOTTOM - plateH;
+      if (plate && plate.width > 0) this.drawTabPlate(canvas, plate, slot.x, plateY, slot.w);
+      if (lblImg && lblImg.width > 0) {
+        canvas.drawImage({
+          img: lblImg,
+          dx: slot.x + Math.round((slot.w - lblImg.width) / 2),
+          dy: plateY + Math.round((plateH - lblImg.height) / 2),
+        });
+      }
+      this._tabRects.push({ x: slot.x, y: plateY, w: slot.w, h: plateH, tab: slot.i });
     }
   }
   private _tabRects: { x: number; y: number; w: number; h: number; tab: number }[] = [];
