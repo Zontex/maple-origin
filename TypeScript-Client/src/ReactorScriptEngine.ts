@@ -130,6 +130,8 @@ export async function spawnReactorDrops(reactor: any, map: any, opts: ReactorDro
 
   const baseX = opts.posX ?? reactor.x;
   const baseY = opts.posY ?? reactor.y;
+  // Loot flies out of the reactor itself to its spread slot (v83 arc)
+  const originX = baseX;
   let dropX = baseX - 12 * rolled.length;
   let delay = 0;
   const socket = (window as any).__mySocket;
@@ -142,7 +144,7 @@ export async function spawnReactorDrops(reactor: any, map: any, opts: ReactorDro
       try {
         const dropItem = await DropItemSprite.fromOpts({
           id: d.itemId,
-          monster: { pos: { x, y: baseY, vx: 0, vy: 0 } },
+          monster: { pos: { x: originX, y: baseY, vx: 0, vy: 0, destX: x } },
           amount,
         });
         if (dropItem && !dropItem.destroyed) {

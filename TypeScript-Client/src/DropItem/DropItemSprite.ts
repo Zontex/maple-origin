@@ -15,6 +15,14 @@ const AnimationStates = {
 
 // Increased to make items jump higher
 const dropItemJumpVelocity = 600;
+// Time for the toss to come back to its launch height (2·v/g with g=2000):
+// a drop given a landing spot covers the distance in exactly this
+const DROP_FLIGHT_S = (2 * dropItemJumpVelocity) / 2000;
+// v83 drops tumble as they fly out of a mob and settle flat on landing
+const DROP_SPIN_DEG_PER_S = 720;
+// An untradeable drop spirals and fades away in the air — it never lands
+const VANISH_SPIN_DEG_PER_S = 1080;
+const VANISH_MS = 700;
 
 class DropItemSprite {
   id: number = 0;
@@ -51,7 +59,9 @@ class DropItemSprite {
   // Untradeable drop: plays the toss, then fades out where it lands instead
   // of staying on the floor; never pickable, never broadcast
   vanishing: boolean = false;
-  vanishAfterMs: number = 900;
+  vanishAfterMs: number = VANISH_MS;
+  // Tumble while airborne (degrees); 0 once settled
+  spinAngle: number = 0;
   currentLifeTime: number = 0;
 
   // needed to enable await on constructor
@@ -70,12 +80,20 @@ class DropItemSprite {
     this.id = opts.id;
     this.monster = opts.monster;
     this.destroyed = false;
+    // A landing spot (destX) turns the pop into an arc that comes down
+    // there — mob loot fans out from the mob's body the way v83 spreads it;
+    // without one the drop inherits half the thrower's speed as before
+    const destX = this.monster.pos.destX;
+    const vx = typeof destX === 'number'
+      ? (destX - this.monster.pos.x) / DROP_FLIGHT_S
+      : (this.monster.pos.vx || 0) / 2;
     this.pos = new DropItemPhysics({
       x: this.monster.pos.x,
       y: this.monster.pos.y,
-      vx: this.monster.pos.vx / 2,
+      vx,
       vy: -dropItemJumpVelocity,
     });
+    this.spinAngle = 0;
     this.animationState = AnimationStates.None;
     this.stance = null;
     this.frame = null;
@@ -281,6 +299,17 @@ class DropItemSprite {
       this.pos.update(msPerTick);
     }
 
+    // Tumble in the air; flat on the ground. A vanishing drop keeps spinning
+    // (faster) for its whole, short life
+    if (this.vanishing) {
+      this.spinAngle = (this.spinAngle + VANISH_SPIN_DEG_PER_S * (msPerTick / 1000)) % 360;
+    } else if (this.pos && !this.hasLanded && this.pos.vy !== 0) {
+      const dir = this.pos.vx < 0 ? -1 : 1;
+      this.spinAngle = (this.spinAngle + dir * DROP_SPIN_DEG_PER_S * (msPerTick / 1000)) % 360;
+    } else {
+      this.spinAngle = 0;
+    }
+
     if (this.isFirstUpdateFinished && !this.isSecondUpdateFinished) {
       this.isSecondUpdateFinished = true;
     }
@@ -331,10 +360,12 @@ class DropItemSprite {
         (this.animationTime / this.animationMovementTime);
     }
 
-    // Calculate alpha for fade-out during pickup
+    // Calculate alpha for fade-out during pickup, or the vanishing spiral
     let alpha = 1;
     if (this.isInPickupAnimation) {
       alpha = 1 - this.pickupAnimationTime / this.pickAnimtionMaxTime;
+    } else if (this.vanishing) {
+      alpha = Math.max(0, 1 - this.currentLifeTime / this.vanishAfterMs);
     }
 
     // Determine which image to draw
@@ -368,6 +399,7 @@ class DropItemSprite {
         dy: this.pos.y - camera.y - currentFrame.nHeight + yOffset,
         flipped: this.flipped,
         alpha,
+        angle: this.spinAngle,
       });
       
       // Store last position for pickup detection

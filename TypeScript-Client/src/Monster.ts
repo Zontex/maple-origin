@@ -476,7 +476,8 @@ async addDrops() {
           monster: {
             ...this,
             pos: {
-              x: baseX + offsetX,
+              x: baseX,
+              destX: baseX + offsetX,
               y: baseY,
               vx: this.pos.vx / 2,
               vy: this.pos.vy
@@ -520,7 +521,8 @@ async addDrops() {
                 id: item.id,
                 monster: {
                   ...this,
-                  pos: { x: baseX + offsetX, y: baseY, vx: this.pos.vx / 2, vy: this.pos.vy }
+                  pos: { x: baseX,
+              destX: baseX + offsetX, y: baseY, vx: this.pos.vx / 2, vy: this.pos.vy }
                 },
                 amount: 1,
               });
