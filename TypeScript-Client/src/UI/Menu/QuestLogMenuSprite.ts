@@ -747,10 +747,26 @@ class QuestLogMenuSprite extends DragableMenu {
       this.loadNpcSprite(npcId);
     }
     if (this.cachedNpcSprite && this.cachedNpcSprite.complete && this.cachedNpcSprite.naturalWidth > 0) {
+      // The portrait's own box: backgrnd2's blue header is x=16..297, y=26..118
+      // with a baked divider at x=189..190 — the NPC lives right of it. A long
+      // NPC (the whalian prince is ~190px) can't hang off a fixed right margin,
+      // so it is fitted to the box: centred, standing on its floor, scaled down
+      // only when it would not fit, and clipped to the box either way.
       const spriteImg = this.cachedNpcSprite;
-      const spriteX = rx + RIGHT_W - spriteImg.width - 30;
-      const spriteY = this.y + BLUE_AREA_H - spriteImg.height - 5;
-      canvas.drawImage({ img: spriteImg, dx: spriteX, dy: spriteY });
+      const boxX = rx + 191, boxY = this.y + 26, boxW = 297 - 191, boxH = 118 - 26;
+      const pad = 3;
+      const scale = Math.min(1, (boxW - pad * 2) / spriteImg.width, (boxH - pad * 2) / spriteImg.height);
+      const dw = Math.round(spriteImg.width * scale);
+      const dh = Math.round(spriteImg.height * scale);
+      const spriteX = boxX + Math.round((boxW - dw) / 2);
+      const spriteY = boxY + boxH - pad - dh;
+      const ctx = canvas.context;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(boxX, boxY, boxW, boxH);
+      ctx.clip();
+      canvas.drawImage({ img: spriteImg, dx: spriteX, dy: spriteY, dw, dh });
+      ctx.restore();
     }
 
     // --- Description text below blue area ---
