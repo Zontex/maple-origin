@@ -1,8 +1,8 @@
 /**
- * v83 equip tooltip rendered from UI.wz/UIToolTip.img/Item sprites:
- * Frame top/line/bottom/cover/dotline, ItemIcon/base backplate, Equip
- * requirement labels + pixel digit glyphs (Can = met/yellow, Cannot =
- * unmet/grey) and the job-class bar (Job/normal + Job/enable overlays).
+ * v83 equip tooltip: the shared translucent navy plate (UIToolTipPlate),
+ * UI.wz/UIWindow.img/ToolTip/Equip requirement labels + pixel digit glyphs
+ * (Can = met/yellow, Cannot = unmet/grey), the per-class job words, and the
+ * UIToolTip.img/Item/ItemIcon/base backplate under the 2x icon.
  *
  * Equip WZ info (reqLevel, incPAD, tuc, ...) is loaded lazily per item and
  * cached — draw() renders nothing on the first hover frames until ready.
@@ -14,6 +14,7 @@ import { getItemNameSync } from '../Quest/QuestData';
 import { formatRemaining } from '../Shop/CashShopData';
 import MyCharacter from '../MyCharacter';
 import { JOB_REQ_BITS } from '../Constants/Jobs';
+import { drawPlate } from './UIToolTipPlate';
 
 interface EquipInfo {
   reqLevel: number;
@@ -41,6 +42,8 @@ interface TooltipAssets {
   dot: HTMLImageElement | null;
   can: GlyphSet;
   cannot: GlyphSet;
+  /** ItemIcon/base — the bevelled grey square the 2x icon sits on */
+  iconBase: HTMLImageElement | null;
 }
 
 // Job bar order, matching the WZ sprite names under Can/Cannot
@@ -161,6 +164,16 @@ async function loadAssets() {
       return out;
     };
 
+    // The icon backplate is the one piece v83's own ToolTip/Equip lacks (the
+    // pre-BB client carried it in the EXE). UIToolTip.img/Item/ItemIcon/base
+    // from the later dump is the same 82x82 bevelled grey square, which is
+    // what ICON_PLATE was already sized to.
+    let iconBase: HTMLImageElement | null = null;
+    try {
+      const base: any = await WZManager.get('UI.wz/UIToolTip.img/Item/ItemIcon/base');
+      iconBase = base?.nGetImage?.() || null;
+    } catch { /* optional — the icon still draws on the plate */ }
+
     assets = {
       can: loadGlyphs(equip.nGet('Can')),
       cannot: loadGlyphs(equip.nGet('Cannot')),
@@ -170,6 +183,7 @@ async function loadAssets() {
       weaponCategory: loadCats(equip.nGet('WeaponCategory')),
       property: loadCats(equip.nGet('Property')),
       dot: equip.nGet('Dot')?.nGet('0')?.nGetImage?.() || null,
+      iconBase,
     };
   } catch (e) {
     console.error('[UIEquipTooltip] Failed to load UIToolTip.img assets:', e);
@@ -297,18 +311,8 @@ const UIEquipTooltip = {
 
     const ctx = canvas.context;
 
-    // ---- Panel ----
-    // v83 draws this itself: a translucent navy field with a thin light rule,
-    // the map still visible through it. There is no frame sprite under
-    // ToolTip/Equip, which is the giveaway that the black rounded frame we
-    // were using came from a later client.
-    ctx.save();
-    ctx.fillStyle = 'rgba(24, 32, 84, 0.86)';
-    ctx.fillRect(tx, ty, W, H);
-    ctx.strokeStyle = 'rgba(170, 180, 220, 0.9)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(tx + 0.5, ty + 0.5, W - 1, H - 1);
-    ctx.restore();
+    // ---- Panel ---- (the shared v83 translucent navy plate; see UIToolTipPlate)
+    drawPlate(ctx, tx, ty, W, H);
 
     // ---- Name ----
     canvas.drawText({
@@ -320,11 +324,9 @@ const UIEquipTooltip = {
 
     // ---- Icon on its backplate, drawn 2x pixel-scaled ----
     const blockY = ty + BLOCK_Y;
-    // No backplate sprite in v83 — a plain lightened square stands in for it
-    ctx.save();
-    ctx.fillStyle = 'rgba(210, 214, 235, 0.92)';
-    ctx.fillRect(tx + ICON_X, blockY, ICON_PLATE, ICON_PLATE);
-    ctx.restore();
+    if (A.iconBase && A.iconBase.complete && A.iconBase.width > 0) {
+      ctx.drawImage(A.iconBase, tx + ICON_X, blockY, ICON_PLATE, ICON_PLATE);
+    }
     if (info.icon && info.icon.complete && info.icon.width > 0) {
       const prev = ctx.imageSmoothingEnabled;
       ctx.imageSmoothingEnabled = false;

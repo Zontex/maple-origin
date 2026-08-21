@@ -1,3 +1,14 @@
+/**
+ * v83 BINARY PROTOCOL REFERENCE — NOT WIRED INTO THE GAME.
+ *
+ * This is the client half of the real v83 wire protocol (4-byte MapleStory
+ * header + AES-OFB/"Maple" shuffle, opcode-prefixed packets) talking to a
+ * binary WebSocket gateway, kept as the reference point for the planned Cosmic
+ * port (ROADMAP Tier 7). Nothing imports it at runtime: the game talks JSON
+ * over `mysocket.ts`, and `main.ts` no longer pulls this module in. It stays
+ * compiling so the crypto and packet layout in `src/Net/` (see README.md
+ * there) remain verified against tsc, nothing more.
+ */
 import { Cryptography } from './Net/Cryptography';
 import { InPacketOpcode } from './Net/InPacket';
 import { OutPacket, OutPacketOpcode } from './Net/OutPacket';

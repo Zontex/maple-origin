@@ -16,6 +16,7 @@ import { getEquipWzPath } from '../Inventory/Item';
 import MapleInventory, { isPetItemId } from '../Constants/Inventory/MapleInventory';
 import UIChatLog from './UIChatLog';
 import DirectionScene from '../Effects/DirectionScene';
+import { drawPlate } from './UIToolTipPlate';
 
 /**
  * v83 Cash Shop — a full-screen overlay inside MapState (never a
@@ -51,7 +52,9 @@ const ITEMINV_X = 23;        // 4 cols, stride 35
 const ITEMINV_Y = 481;       // 3 rows, stride 35
 const INV_CELL = 31;
 const INV_STRIDE = 35;
-const ITAB_Y = 461;          // tabs sit flush on the red line at y=473
+const ITAB_BOTTOM = 473;     // Item Inventory tabs hang from the red line at y=473
+const ITAB_X0 = 18;          // that line spans x=18..173 on Base/backgrnd
+const ITAB_STRIDE = 30;      // 5 x 34px plates into 156px: 4px overlap
 // Best Item rail (right edge): five entries under the baked rank numbers
 const BEST_X = 692;
 const BEST_Y0 = 152;
@@ -247,10 +250,13 @@ const CashShopUI: any = {
         this.ptabEn[i] = cs.nGet('Base').nGet('Tab').nGet('Enable').nGet(String(i))?.nGetImage?.() || null;
         this.ptabDis[i] = cs.nGet('Base').nGet('Tab').nGet('Disable').nGet(String(i))?.nGetImage?.() || null;
       }
-      // Item Inventory tabs use the SAME plates as the in-game inventory
-      // window: UIWindow.img/Item/Tab label sprites over drawn tab shapes
+      // Item Inventory tabs are the in-game inventory window's own: Item/Tab
+      // label sprites on the Item/New/Tab1|Tab0 plates (variant 0 — the
+      // others are the new-item pulse shades)
       const itemWin: any = await WZManager.get('UI.wz/UIWindow.img/Item');
       this._invTabNode = itemWin.nGet('Tab');
+      this._invTabOn = itemWin.nGet('New')?.nGet('Tab1')?.nGet('0')?.nGetImage?.() || null;
+      this._invTabOff = itemWin.nGet('New')?.nGet('Tab0')?.nGet('0')?.nGetImage?.() || null;
       this.tabStrips = [];
       for (let i = 1; i <= CASH_TAB_COUNT; i++) {
         this.tabStrips[i] = cs.nGet('CSTab').nGet('Tab').nGet(String(i))?.nGetImage?.() || null;
@@ -974,43 +980,35 @@ const CashShopUI: any = {
 
     // ---- Item Inventory: the player's tabs; non-cash items grayed out ----
     {
-      // Tabs styled exactly like the inventory window: rounded plate (pink
-      // active / grey inactive) + the UIWindow Item/Tab label sprite
-      const tabW = 28;
-      const tabH = 16;
-      const tabY = this.oy + ITAB_Y - 4;
-      for (let i = 0; i < 5; i++) {
-        const tx = this.ox + 16 + i * tabW;
+      // Tabs exactly as the inventory window draws them: Item/New/Tab1/0
+      // (pink, 34x19) under the lit tab, Tab0/0 (grey, 34x18) under the rest,
+      // hanging from the backdrop's red underline. That line is 156px wide,
+      // which holds five 34px plates only at a 30px stride, so neighbours
+      // overlap by 4px and the lit plate is drawn last so it sits on top.
+      const tabBottom = this.oy + ITAB_BOTTOM;
+      const order = [0, 1, 2, 3, 4].filter((i) => i !== this.invTab).concat([this.invTab]);
+      for (const i of order) {
+        const tx = this.ox + ITAB_X0 + i * ITAB_STRIDE;
         const isActive = i === this.invTab;
-        ctx.save();
-        const r = 3;
-        ctx.beginPath();
-        ctx.moveTo(tx + r, tabY);
-        ctx.lineTo(tx + tabW - r, tabY);
-        ctx.arcTo(tx + tabW, tabY, tx + tabW, tabY + r, r);
-        ctx.lineTo(tx + tabW, tabY + tabH);
-        ctx.lineTo(tx, tabY + tabH);
-        ctx.lineTo(tx, tabY + r);
-        ctx.arcTo(tx, tabY, tx + r, tabY, r);
-        ctx.closePath();
-        ctx.fillStyle = isActive ? '#dd4466' : '#b8c4d8';
-        ctx.fill();
-        ctx.strokeStyle = '#8899bb';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.restore();
+        const plate = isActive ? this._invTabOn : this._invTabOff;
+        const plateH = plate?.height || (isActive ? 19 : 18);
+        const plateW = plate?.width || 34;
+        const tabY = tabBottom - plateH;
+        if (plate?.width) canvas.drawImage({ img: plate, dx: tx, dy: tabY });
         try {
           const stateNode = isActive ? this._invTabNode?.enabled : this._invTabNode?.disabled;
           const labelImg = stateNode?.nGet?.(`${i}`)?.nGetImage?.();
           if (labelImg?.width) {
             canvas.drawImage({
               img: labelImg,
-              dx: tx + Math.floor((tabW - labelImg.width) / 2),
-              dy: tabY + Math.floor((tabH - (labelImg.height || 11)) / 2),
+              dx: tx + Math.round((plateW - labelImg.width) / 2),
+              dy: tabY + Math.round((plateH - labelImg.height) / 2),
             });
           }
         } catch { /* label sprite missing — plate alone reads fine */ }
-        if (clicked && mx2 >= tx && mx2 <= tx + tabW && my2 >= tabY && my2 <= tabY + tabH) {
+        // Hit bands follow the stride (the last tab keeps its full plate)
+        const hitW = i === 4 ? plateW : ITAB_STRIDE;
+        if (clicked && mx2 >= tx && mx2 < tx + hitW && my2 >= tabY && my2 <= tabBottom) {
           this.invTab = i;
           this.invScroll = 0;
         }
@@ -1216,13 +1214,8 @@ const CashShopUI: any = {
     if (tx + w > canvas.game.width) tx = this._hoverX - w - 4;
     if (ty + h > canvas.game.height) ty = this._hoverY - h - 4;
 
-    // Classic dark tooltip plate (matches the inventory tooltip treatment)
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = '#000033';
-    ctx.fillRect(tx, ty, w, h);
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = '#8888AA';
-    ctx.strokeRect(tx + 0.5, ty + 0.5, w - 1, h - 1);
+    // The shared v83 tooltip plate (same as the inventory tooltip)
+    drawPlate(ctx, tx, ty, w, h);
     ctx.textBaseline = 'top';
     lines.forEach((line, i) => {
       ctx.fillStyle = i === 0 ? '#FFFFFF' : i === 1 ? '#FFAA00' : '#CCCCCC';

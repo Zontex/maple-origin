@@ -14,6 +14,32 @@ import { CameraInterface } from "./Camera";
 import MySocket from "./mysocket";
 import MobProjectile from "./Projectile/MobProjectile";
 import PartyManager from "./Party/PartyManager";
+import SkillData from "./Skills/SkillData";
+import { MobSkillArt, MobSkillId, MobSkillLevel } from "./Mob/MobSkillData";
+import MobSkillRunner, { MobSkillCast, MobSkillEntry, buffKeyOf } from "./Mob/MobSkillRunner";
+
+/** A timed status a mob skill put on the mob (see MobSkillRunner.buffKeyOf) */
+interface MobBuff {
+  skillId: number;
+  /** The skill's x — percent for stat buffs, fixed damage for reflects */
+  value: number;
+  /** The skill's y — 145's magic reflect amount */
+  y: number;
+  until: number;
+  /** The skill's `mob` art, carried for the duration */
+  art: MobSkillArt | null;
+  frame: number;
+  delay: number;
+}
+
+/** One-shot art drawn at the mob (cast `effect`, group `mob0`) */
+interface MobArtPlay {
+  art: MobSkillArt;
+  frame: number;
+  delay: number;
+}
+// Safety net for a cast whose stance never reports finishing
+const CAST_MAX_MS = 3000;
 
 // Aggro tuning (v83-style: firstAttack mobs charge on sight, others when hit)
 const AGGRO_RANGE_X = 250;
@@ -77,7 +103,23 @@ class Monster {
   mp: number = 0;
   acc: number = 0;
   eva: number = 0;
-  pad: number = 0;
+  // Weapon/magic attack: the WZ base, read through accessors so a mob
+  // skill's attack-up (x% of base) reaches every damage path — touch,
+  // melee, projectiles — without those paths knowing about buffs
+  _basePad: number = 0;
+  _baseMad: number = 0;
+  get pad(): number {
+    return Math.floor(this._basePad * this.mobBuffPct("padUp"));
+  }
+  set pad(v: number) {
+    this._basePad = v;
+  }
+  get mad(): number {
+    return Math.floor(this._baseMad * this.mobBuffPct("madUp"));
+  }
+  set mad(v: number) {
+    this._baseMad = v;
+  }
   mobLevel: number = 1;
   name: string = "";
   DamageIndicator: any = null;
@@ -113,7 +155,6 @@ class Monster {
   /** Scripted kills (PQ clear) suppress loot */
   _noDrops: boolean = false;
   flySpeed: number = 0;
-  mad: number = 0;
   spawnCy: number = 0;
   aggroTarget: any = null;
   /** Timestamp the current chase expires at — refreshed by every hit */
@@ -131,6 +172,26 @@ class Monster {
   nextAttackTime: number = 0;
   attackElapsed: number = 0;
   attackFired: boolean = false;
+
+  // Mob skills (Mob.wz info/skill + Skill.wz/MobSkill.img) — see src/Mob/
+  skills: MobSkillEntry[] = [];
+  /** skillId -> earliest next use (host only) */
+  skillCooldowns: Map<number, number> = new Map();
+  /** Next time the host AI considers a skill at all */
+  skillScanAt: number = 0;
+  /** A skill stance is playing (like isAttacking for attacks) */
+  isCastingSkill: boolean = false;
+  _castStance: string = "";
+  _castEndsAt: number = 0;
+  /** Cast whose effect is still waiting for `effectAfter` to elapse */
+  _pendingCast: { cast: MobSkillCast; lv: MobSkillLevel; applyAt: number } | null = null;
+  /** Timed mob statuses by buffKeyOf() key — every client keeps its own copy off the relayed cast */
+  mobBuffs: Map<string, MobBuff> = new Map();
+  _mobArts: MobArtPlay[] = [];
+  /** oId of the mob whose summon skill spawned this one (null = map spawn) */
+  summonerOId: number | null = null;
+  /** Effect.wz/Summon.img art a summon arrives with; the sprite stays hidden until `showAt` */
+  _summonEffect: { frames: any[]; frame: number; delay: number; showAt: number } | null = null;
 
   static async fromOpts(opts: any) {
     const mob = new Monster(opts);
@@ -272,6 +333,12 @@ class Monster {
         ballNode: ballNode.nChildren?.length ? ballNode : null,
       });
     }
+
+    // Mob skills: `info/skill/<n>` = {skill, level, action, effectAfter}.
+    // Spread the first scan so a freshly loaded map doesn't cast in unison.
+    this.skills = MobSkillRunner.readEntries(mobFile.info);
+    this.skillScanAt = Date.now() + 1500 + Math.random() * 3000;
+    MobSkillRunner.ensureNetHook();
 
     this.isBoss = false;
     if (mobFile.info.boss && mobFile.info.boss.nValue === 1) {
@@ -636,6 +703,14 @@ async addDrops() {
     // off the map's monster list, so it is already up before the first swing
     // and stays up between them.
 
+    // Mob-skill statuses: immunity floors the blow to 1, defense-up scales
+    // it, reflect hurts the attacker. Applied where the blow is computed —
+    // locally for our own hits; a relayed damage request arrives already
+    // adjusted by its sender (attackerNetId set), so it is not touched twice.
+    if (!attackerNetId && damage > 0) {
+      damage = this.applyMobStatusesToHit(damage, skillId, responsibleMapleCharacter);
+    }
+
     // Remote mob (non-host client): send damage request to host, show visual only
     if (this.isRemote) {
       // Send damage request to host via server
@@ -711,6 +786,215 @@ async addDrops() {
       },
       damage
     );
+  }
+
+  // ---------------------------------------------------------------------
+  // Mob skills — statuses on the mob, cast playback, art
+  // ---------------------------------------------------------------------
+
+  hasMobBuff(key: string): boolean {
+    return this.mobBuffs.has(key);
+  }
+
+  /** x/100 of a percent-valued status, 1 when it is not up */
+  mobBuffPct(key: string): number {
+    const b = this.mobBuffs?.get(key);
+    return b ? b.value / 100 : 1;
+  }
+
+  get isWeaponImmune(): boolean {
+    return this.mobBuffs.has("wImmune") || this.mobBuffs.has("wReflect") || this.mobBuffs.has("wmReflect");
+  }
+
+  get isMagicImmune(): boolean {
+    return this.mobBuffs.has("mImmune") || this.mobBuffs.has("mReflect") || this.mobBuffs.has("wmReflect");
+  }
+
+  /**
+   * Immunity, defense-up and reflect against one incoming blow. Physical or
+   * magic is decided by the skill that dealt it (a spell carries `mad`).
+   * Reflect hits the attacker with the skill's fixed x (physical) / y
+   * (magic) — the v83 emulator's counter handling.
+   */
+  applyMobStatusesToHit(damage: number, skillId: number, attacker: any): number {
+    if (this.mobBuffs.size === 0) return damage;
+    const isMagic =
+      skillId > 0 && !!SkillData.getSkillSync(skillId)?.effects?.some((e: any) => (e?.mad ?? 0) > 0);
+    let out = damage;
+    if (isMagic) {
+      out = Math.floor(out * this.mobBuffPct("mddUp"));
+      if (this.isMagicImmune) out = 1;
+      const reflect = this.mobBuffs.get("mReflect") ?? this.mobBuffs.get("wmReflect");
+      if (reflect) {
+        const amount = reflect.skillId === MobSkillId.PHYSICAL_AND_MAGIC_COUNTER ? reflect.y : reflect.value;
+        MobSkillRunner.reflectOntoAttacker(this, attacker, amount);
+      }
+    } else {
+      out = Math.floor(out * this.mobBuffPct("pddUp"));
+      if (this.isWeaponImmune) out = 1;
+      const reflect = this.mobBuffs.get("wReflect") ?? this.mobBuffs.get("wmReflect");
+      if (reflect) MobSkillRunner.reflectOntoAttacker(this, attacker, reflect.value);
+    }
+    return Math.max(1, out);
+  }
+
+  /** Put a self/group status on this mob for the skill's `time` */
+  applyMobBuff(lv: MobSkillLevel): void {
+    const key = buffKeyOf(lv.skillId);
+    if (!key || lv.timeMs <= 0) return;
+    // Immunity of one kind never overlaps the other (emulator rule)
+    if (key === "wImmune" && this.mobBuffs.has("mImmune")) return;
+    if (key === "mImmune" && this.mobBuffs.has("wImmune")) return;
+    const buff: MobBuff = {
+      skillId: lv.skillId,
+      value: lv.x,
+      y: lv.y,
+      until: Date.now() + lv.timeMs,
+      art: lv.mob,
+      frame: 0,
+      delay: 0,
+    };
+    this.mobBuffs.set(key, buff);
+  }
+
+  /** Heal (114): x HP and y MP, on the host only — non-hosts read HP off the batch */
+  healFromSkill(lv: MobSkillLevel): void {
+    if (this.isRemote || this.dying) return;
+    const amount = lv.rect
+      ? Math.floor((lv.x / 1000) * (950 + Math.random() * 1050))
+      : lv.x;
+    if (amount > 0 && this.hp < this.maxHp) {
+      const healed = Math.min(amount, this.maxHp - this.hp);
+      this.hp += healed;
+      this.DamageIndicator?.addDamageIndicator(
+        DamageIndicatorType.Recovery,
+        { x: this.centerPosition.x - this.width / 2, y: this.centerPosition.y - this.height - 20 },
+        healed
+      );
+    }
+    this.mp = Math.min(this.maxMp, this.mp + Math.max(0, lv.y));
+  }
+
+  /** One-shot art at this mob (cast `effect`, group `mob0`) */
+  playMobArt(art: MobSkillArt | null): void {
+    if (!art?.frames?.length) return;
+    this._mobArts.push({ art, frame: 0, delay: 0 });
+  }
+
+  setSummonEffect(frames: any[], delayMs: number): void {
+    this._summonEffect = { frames, frame: 0, delay: 0, showAt: Date.now() + Math.max(0, delayMs) };
+    frames.forEach((f: any) => { void f?.nPreloadImage?.(); });
+  }
+
+  /**
+   * Every client: face the way the host did, play the `skill<action>`
+   * stance (or `attack<action>` where a mob has no skill stance), start the
+   * cast art and queue the effect for `effectAfter` ms in.
+   */
+  beginSkillCast(cast: MobSkillCast, lv: MobSkillLevel): void {
+    const now = Date.now();
+    this.flipped = !!cast.flipped;
+    if (!this.isRemote) {
+      this.pos.vx = 0;
+      this.stand();
+    }
+    const stanceName = this.stances[`skill${cast.action}`]?.frames?.length
+      ? `skill${cast.action}`
+      : this.stances[`attack${cast.action}`]?.frames?.length
+        ? `attack${cast.action}`
+        : "";
+    this.isCastingSkill = true;
+    this._castStance = stanceName || String(this.stance);
+    this._castEndsAt = now + CAST_MAX_MS;
+    if (stanceName && !this.isRemote) {
+      this.setStance(stanceName, 0, () => {
+        this.isCastingSkill = false;
+      });
+    } else if (!stanceName) {
+      this._castEndsAt = now + 600;
+    }
+    if (this.sounds[`Skill${cast.action}`]) this.playAudio(`Skill${cast.action}`);
+    if (lv.effect) this.playMobArt(lv.effect);
+    this._pendingCast = { cast, lv, applyAt: now + Math.max(0, cast.effectAfter) };
+  }
+
+  updateSkillCast(msPerTick: number): void {
+    const now = Date.now();
+    if (this._pendingCast && now >= this._pendingCast.applyAt) {
+      const { cast, lv } = this._pendingCast;
+      this._pendingCast = null;
+      if (!this.dying && !this.destroyed) MobSkillRunner.apply(this, cast, lv);
+    }
+    if (this.mobBuffs.size) {
+      for (const [key, buff] of this.mobBuffs) {
+        if (now >= buff.until) {
+          this.mobBuffs.delete(key);
+          continue;
+        }
+        this._stepArt(buff, buff.art, msPerTick, true);
+      }
+    }
+    if (this._mobArts.length) {
+      this._mobArts = this._mobArts.filter((p) => !this._stepArt(p, p.art, msPerTick, false));
+    }
+    if (this._summonEffect) {
+      const s = this._summonEffect;
+      const done = this._stepArt(s, { frames: s.frames, pos: 0, repeat: false }, msPerTick, false);
+      if (done && now >= s.showAt) this._summonEffect = null;
+    }
+  }
+
+  /** Advance one art's frame; returns true once a non-looping art has finished */
+  _stepArt(holder: { frame: number; delay: number }, art: MobSkillArt | null, ms: number, loopForever: boolean): boolean {
+    if (!art?.frames?.length) return true;
+    holder.delay += ms;
+    const cur = art.frames[holder.frame];
+    const d = cur?.nGet?.("delay")?.nGet?.("nValue", 100);
+    const frameDelay = typeof d === "number" ? d : 100;
+    if (holder.delay <= frameDelay) return false;
+    holder.delay -= frameDelay;
+    holder.frame += 1;
+    if (holder.frame < art.frames.length) return false;
+    if (art.repeat || loopForever) {
+      // A status with a single still (the head icon) or a looping aura just stays
+      holder.frame = 0;
+      return false;
+    }
+    holder.frame = art.frames.length - 1;
+    return true;
+  }
+
+  /** WZ `pos` anchor → world y for this mob: 0 feet, 1/2 head top, 3 body centre */
+  _artAnchorY(pos: number): number {
+    if (pos === 3) return this.pos.y - this.height / 2;
+    if (pos === 1 || pos === 2) return this.pos.y - this.height;
+    return this.pos.y;
+  }
+
+  _drawArtFrame(canvas: GameCanvas, camera: CameraInterface, frame: any, pos: number): void {
+    if (!frame?.nGetImage) return;
+    const img = frame.nGetImage();
+    if (!img || (img instanceof HTMLImageElement && !img.complete)) return;
+    const ox = frame.nGet("origin").nGet("nX", 0);
+    const oy = frame.nGet("origin").nGet("nY", 0);
+    canvas.drawImage({
+      img,
+      dx: this.pos.x - ox - camera.x,
+      dy: this._artAnchorY(pos) - oy - camera.y,
+    });
+  }
+
+  drawMobSkillArt(canvas: GameCanvas, camera: CameraInterface): void {
+    if (this._summonEffect) {
+      const s = this._summonEffect;
+      this._drawArtFrame(canvas, camera, s.frames[s.frame], 0);
+    }
+    for (const buff of this.mobBuffs.values()) {
+      if (buff.art) this._drawArtFrame(canvas, camera, buff.art.frames[buff.frame], buff.art.pos);
+    }
+    for (const play of this._mobArts) {
+      this._drawArtFrame(canvas, camera, play.art.frames[play.frame], play.art.pos);
+    }
   }
 
   right() {
@@ -1119,6 +1403,10 @@ async addDrops() {
   update(msPerTick: number) {
     this.delay += msPerTick;
 
+    // Mob-skill bookkeeping runs on every client: the pending cast lands
+    // after effectAfter, statuses expire, art animates
+    this.updateSkillCast(msPerTick);
+
     // Remote mobs: lerp position, advance animation, skip AI
     if (this.isRemote) {
       // Advance animation frames
@@ -1172,18 +1460,27 @@ async addDrops() {
       this.isAttacking = false;
       this.currentAttack = null;
     }
+    // Same repair for a skill stance, plus a deadline for mobs whose skill
+    // stance is missing from the WZ (nothing ever reports finishing then)
+    if (this.isCastingSkill && (this.stance !== this._castStance || now > this._castEndsAt)) {
+      this.isCastingSkill = false;
+    }
 
     if (!this.dying && !this.isInHit) {
       this.updateAggro(now);
       this.tryAttack(now);
+      if (!this.isAttacking) MobSkillRunner.tryCast(this, now);
     }
+
+    // Haste-type buffs scale the walk; everything else keeps the WZ speed
+    this.pos.speedScale = 1 + (this.mobBuffs.get("speed")?.value ?? 0) / 100;
 
     if (this.dying) {
       this.setStance(MobStance.die1);
     } else if (this.isInHit) {
       // already added stance with callback in the hit function
-    } else if (this.isAttacking) {
-      // keep the attack stance until its frames finish
+    } else if (this.isAttacking || this.isCastingSkill) {
+      // keep the attack/skill stance until its frames finish
     } else if (this.moveType === "fly") {
       this.setStance(MobStance.fly);
     } else if (!this.pos.fh) {
@@ -1213,7 +1510,7 @@ async addDrops() {
     }
 
     // Movement decisions per move type
-    if (!this.isInHit && !this.dying && !this.isAttacking) {
+    if (!this.isInHit && !this.dying && !this.isAttacking && !this.isCastingSkill) {
       if (this.moveType === "fly") {
         this.updateFlying(now);
       } else if (this.aggroTarget && this.moveType !== "stationary") {
@@ -1465,18 +1762,27 @@ async addDrops() {
       if (alpha >= 1) this._spawning = false;
     }
 
-    canvas.drawImage({
-      img: currentImage,
-      dx: this.pos.x - camera.x - adjustX,
-      dy: this.pos.y - camera.y - originY,
-      flipped: drawFlipped,
-      alpha,
-    });
+    // A summon arriving with Effect.wz/Summon.img art is unseen until the
+    // art's delay has run — the effect is what is on screen until then
+    const summonHidden = !!this._summonEffect && Date.now() < this._summonEffect.showAt;
+
+    if (!summonHidden) {
+      canvas.drawImage({
+        img: currentImage,
+        dx: this.pos.x - camera.x - adjustX,
+        dy: this.pos.y - camera.y - originY,
+        flipped: drawFlipped,
+        alpha,
+      });
+    }
 
     this.height = currentFrame.nHeight;
     this.width = currentFrame.nWidth;
     this.x = this.pos.x - adjustX;
     this.y = this.pos.y - originY;
+
+    this.drawMobSkillArt(canvas, camera);
+    if (summonHidden) return;
 
     // todo :
     // this need to be displayed only few seconds after being hit

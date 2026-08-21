@@ -1,4 +1,5 @@
 import WZManager from "./wz-utils/WZManager";
+import { FieldLimit, FIELD_LIMIT_MESSAGE, MOVEMENT_SKILL_IDS } from "./Constants/FieldLimit";
 import { preloadFrames } from "./wz-utils/WZNode";
 // Static, not the dynamic import the rest of SkillData uses here: skillReach
 // is needed inside a synchronous stance callback. Safe — SkillData imports
@@ -32,6 +33,7 @@ import DamageIndicator, {
 import { AttackType } from "./Constants/AttackType";
 import Inventory from "./Inventory/Inventory";
 import Stats, { DamageRange } from "./Stats/Stats";
+import PlayerStatus from "./Status/PlayerStatus";
 import {
   BOOSTER_SKILL_IDS,
   DASH_SKILL_ID,
@@ -44,6 +46,7 @@ import { jobMeetsEquipReq } from "./Constants/Jobs";
 import { MapleMap } from "./MapleMap";
 import Monster from "./Monster";
 import Portal from "./Portal";
+import MysticDoorManager from "./Door/MysticDoor";
 import DropItemSprite from "./DropItem/DropItemSprite";
 import GameCanvas from "./GameCanvas";
 import { CameraInterface } from "./Camera";
@@ -153,10 +156,17 @@ class MapleCharacter {
   questManager: any = null;
   skillManager: any = null;
   buffManager: any = null;
+  // Mob-skill diseases (stun, seal, poison, ...) — see Status/PlayerStatus
+  status: PlayerStatus = new PlayerStatus(this);
   skillEffectActive: boolean = false;
   skillEffectFrames: any[] | null = null;
   skillEffectFrame: number = 0;
   skillEffectDelay: number = 0;
+  // Where the skill `effect` art is anchored: the feet for nearly every skill
+  // (Rage's bottom edge sits on the origin, Lucky Seven's art lives above
+  // it), the gun's `muzzle` map point for gun skills (`weapon = 49`), whose
+  // frames straddle their origin because they are authored around the barrel
+  skillEffectAnchor: 'feet' | 'muzzle' = 'feet';
   // Frame of the attack stance on which the current skill fires
   // (SKILL_TRIGGER_FRAME); null = the stance's last frame, via onLastFrame
   skillTriggerFrame: number | null = null;
@@ -185,6 +195,10 @@ class MapleCharacter {
   chairFrame: any = null;
   chairRecoveryHP: number = 0;
   chairRecoveryTimer: number = 0;
+  // Map-object seat (a town bench) being sat on — MapSeat id, null when not.
+  // Rides player_update so remotes park on the same bench; no chair sprite.
+  seatId: string | null = null;
+  seatRestoreY: number | null = null;
 
   // holds the 'sit' stance attached at the mount's navel point
   mountStance: string = "stand1";
@@ -998,6 +1012,7 @@ class MapleCharacter {
   }
 
   addExp(exp: number, showEffect: boolean = false) {
+    exp = this.status.scaleExp(exp); // Curse: half EXP
     if (exp > 0 && showEffect) this.playIncExp();
     this.exp += exp;
     // Exp (and any level-up further down) persists soon
@@ -1099,10 +1114,70 @@ class MapleCharacter {
   }
 
   /**
+   * Sit on a map-object seat (a town bench, see MapleMap.seats). The body
+   * holds the same `sit` stance a chair uses, placed at the seat point, with
+   * no chair sprite — and the same movement rules that leave a chair leave
+   * the bench (see the stance block in draw).
+   */
+  sitOnSeat(seat: { id: string; x: number; y: number }) {
+    this.seatId = seat.id;
+    this.seatRestoreY = this.pos.y;
+    this.pos.x = seat.x;
+    this.pos.y = seat.y;
+    this.pos.vx = 0;
+    this.pos.vy = 0;
+  }
+
+  /** Leave the bench. Safe to call when not seated. */
+  standUpFromSeat() {
+    if (!this.seatId) return;
+    this.seatId = null;
+    // Back onto the foothold we sat down from — a seat point can sit a few
+    // px off it, and physics keeps a grounded character at whatever y it has
+    if (this.seatRestoreY !== null && !this.isRemote && this.pos.fh) {
+      this.pos.y = this.seatRestoreY;
+    }
+    this.seatRestoreY = null;
+  }
+
+  /** Up pressed on a bench: sit at the seat point within reach, if any */
+  checkForSeat(): boolean {
+    if (this.isRemote || this.isDead || this.chairId || this.seatId) return false;
+    if (!this.pos?.fh || this.isInClimbingRope || this.isInPortal || this.isRiding || this.isInAttack) {
+      return false;
+    }
+    const seat = this.map?.getSeatNear?.(this.pos.x, this.pos.y);
+    if (!seat) return false;
+    this.sitOnSeat(seat);
+    return true;
+  }
+
+  /**
+   * Seated state received for a remote character (player_update carries
+   * chairId and seatId). The chair item's sprite is loaded the way the local
+   * chair is; the bench needs nothing drawn — the update's position already
+   * is the seat point and its stance already is `sit`.
+   */
+  applyRemoteSeat(chairId: number, seatId: any) {
+    const cid = Number(chairId) || 0;
+    if (cid !== this.chairId) {
+      if (cid > 0) {
+        // Set first so a burst of updates does not start the load twice
+        this.chairId = cid;
+        void this.sitOnChair(cid);
+      } else {
+        this.standUpFromChair();
+      }
+    }
+    this.seatId = seatId ? String(seatId) : null;
+  }
+
+  /**
    * Chairs restore info/recoveryHP every 10 seconds while seated — the
    * whole point of them in v83.
    */
   updateChair(msPerTick: number) {
+    if (this.isRemote) return; // their HP is theirs to recover
     if (!this.chairId || this.chairRecoveryHP <= 0) return;
     if (this.hp >= this.maxHp) {
       this.chairRecoveryTimer = 0;
@@ -1172,6 +1247,13 @@ class MapleCharacter {
    * exactly this mask, and the greyed-out classes are the ones refused.
    */
   canEquip(infoNode: any, itemId?: number): boolean {
+    // fieldLimit TAMINGMOB (0x200): no mounts here — a mount is "used" by
+    // equipping it (slot 19, item prefix 190/193), so this is where the map
+    // says no
+    if (itemId && [190, 193].includes(Math.floor(itemId / 10000)) && this.map?.forbids?.(FieldLimit.TAMINGMOB)) {
+      void import('./UI/UIChatLog').then(({ default: UIChatLog }) => UIChatLog.system(FIELD_LIMIT_MESSAGE));
+      return false;
+    }
     // Gender lives in the item ID, not the info node: the thousands digit of
     // an equip id is 0 = male, 1 = female, anything higher unisex (Cosmic's
     // getGenderFromId). Sophia Pants 1061006 → 1, wearable only by women.
@@ -1205,6 +1287,10 @@ class MapleCharacter {
    * rope is grabbed — by the time the character is on a ladder they are false.
    */
   canJump(sidewaysHeld: boolean): boolean {
+    // fieldLimit JUMP (0x01): the map forbids jumping outright
+    if (this.map?.forbids?.(FieldLimit.JUMP)) return false;
+    // Weakness and stun pin the feet
+    if (this.status.blocksJump) return false;
     // On a ladder or rope it takes jump + left/right to push off, which is
     // what Physics.jump()'s climbing branch does — it throws the character up
     // and away in the direction held. Jump on its own stays put, and so does
@@ -1345,6 +1431,7 @@ getAttackDelayMs(): number {
 
 async attack() {
   if (this.isInAttack) return;
+  if (this.status.blocksAttack) return; // stunned
   if (this.isRiding) return; // cannot attack while mounted (v83)
   // Nor while on a rope or ladder (v83). Without this the swing played over
   // the climb stance: the body turned to face left or right off the rope,
@@ -1593,8 +1680,14 @@ beginSkillCooldown(skillId: number, effect: any) {
 
 async useSkill(skillId: number, effect: any): Promise<boolean> {
   if (this.isInAttack) return false;
+  if (this.status.blocksAttack || this.status.isSealed) return false; // stunned / sealed
   if (this.isRiding) return false; // cannot use skills while mounted (v83)
   if (this.isInClimbingRope) return false; // nor while on a rope or ladder (v83)
+  // fieldLimit MOVEMENTSKILLS (0x02): Flash Jump / Teleport / Dash refused
+  if (MOVEMENT_SKILL_IDS.has(skillId) && this.map?.forbids?.(FieldLimit.MOVEMENTSKILLS)) {
+    void import('./UI/UIChatLog').then(({ default: UIChatLog }) => UIChatLog.system(FIELD_LIMIT_MESSAGE));
+    return false;
+  }
   // Cooldown is enforced here rather than at the caller: this is the one
   // choke point every cast goes through, so a skill fired from a hotkey, a
   // bound key or anywhere else is gated the same way and starts the same
@@ -1607,6 +1700,14 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
   // Spells need a magic weapon in hand (v83). Bail before any resource is
   // spent — activateSkill only charges MP when the cast actually happens.
   if (!this.canCastSkill(skillId, info)) return false;
+
+  // Summon skills (a `summon` imgdir in the WZ: Silver Hawk, Puppet, Octopus,
+  // Beholder...) spawn an entity instead of swinging or buffing — even when
+  // their root nodes would otherwise class them as one of those
+  if (info.hasSummon) {
+    const SummonManager = (await import('./Summon/SummonManager')).default;
+    return SummonManager.summon(this, skillId, effect);
+  }
 
   if (info.isAttack) {
     // Attack skills respect weapon attack speed like regular attacks
@@ -1746,6 +1847,20 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
     this.beginSkillCooldown(skillId, effect);
     return true;
   } else if (info.isBuff) {
+    // Mystic Door is buff-typed in the WZ (`time` + a cast action) but puts
+    // a door on the map rather than a buff on the caster; the door module
+    // decides whether the map and the inventory (Magic Rock) allow it
+    if (MysticDoorManager.isDoorSkill(skillId)) {
+      const opened = await MysticDoorManager.cast(this, effect);
+      if (!opened) return false;
+      const doorStance = info.action || 'alert2';
+      if (this.baseBody?.[doorStance]) {
+        this.isInAttack = true;
+        this.setStance(doorStance, 0, true, false, () => { this.isInAttack = false; });
+      }
+      this.beginSkillCooldown(skillId, effect);
+      return true;
+    }
     // Buff — apply the buff effect
     if (this.buffManager) {
       this.buffManager.applyBuff(skillId, effect);
@@ -1772,11 +1887,13 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
  * Fire a skill projectile using ball sprites from Skill.wz.
  */
 fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverride: number = 0, ballFrame: number | null = null, skillId: number = 0) {
+  // Gun skill balls leave the barrel; everything else spawns at chest height
+  const muzzle = this.getMuzzleWorldPosition();
   const projectile = Projectile.fromSkill({
     skillId,
     charecter: this,
-    x: this.pos.x,
-    y: this.pos.y - 26,
+    x: muzzle?.x ?? this.pos.x,
+    y: muzzle?.y ?? this.pos.y - 26,
     right: this.flipped,
     ballNode: effect.ballNode,
     hitNode: effect.hitNode,
@@ -1940,12 +2057,19 @@ async fireProjectile(
     this.recalcLocalStats();
   }
 
+  // A gun's bullet leaves the barrel — sampled now, on the recoil frame
+  // (`shot` fires on stabO1/0), not after the WZ await below has let the
+  // stance move on. Other weapons keep the chest-height spawn.
+  const muzzle = this.getMuzzleWorldPosition();
+  const spawnX = muzzle?.x ?? this.pos.x;
+  const spawnY = muzzle?.y ?? this.pos.y - 30;
+
   try {
     const projectile = await Projectile.fromOpts({
       id: projectileItemId,
       charecter: this,
-      x: this.pos.x,
-      y: this.pos.y - 30,
+      x: spawnX,
+      y: spawnY,
       right: this.flipped,
       left: !this.flipped,
       targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying) || [],
@@ -2151,8 +2275,29 @@ isCloseToMob = (inAllDirections = true) => {
     }
 
     if (!nearest) return;
-    const portal = nearest;
+    await this.enterPortal(nearest);
+  }
 
+  /**
+   * Touch portals (types 3 and 9) fire on contact, no key needed. Checked
+   * every frame for the local character; the same 1s re-entry lockout the
+   * Up path uses (isInPortal) keeps a single contact from firing twice.
+   */
+  checkForTouchPortal() {
+    if (this.isInPortal || this.isDead || !this.map?.portals) return;
+    for (const portal of this.map.portals as Portal[]) {
+      if (!portal.touchRect || !portal.isTouching(this.pos.x, this.pos.y)) continue;
+      void this.enterPortal(portal);
+      return;
+    }
+  }
+
+  /**
+   * Go through a portal: run its script (7/8/9/11) or warp to its `tm`/`tn`.
+   * Shared by the Up path (checkForPortal) and contact (checkForTouchPortal).
+   */
+  async enterPortal(portal: Portal) {
+    if (this.isInPortal) return;
     this.isInPortal = true;
 
     try {
@@ -2237,9 +2382,15 @@ isCloseToMob = (inAllDirections = true) => {
     this.pos.up = true;
 
     if (this.pos) {
+      // A Mystic Door you may use takes precedence over the portal under it
+      // (the town door stands on a `tp` portal)
+      if (await MysticDoorManager.tryUse(this)) return;
       await this.checkForPortal();
 
       this.checkForLadder(ClimbDirections.UP);
+
+      // Nothing else took the key: a bench seat within reach
+      this.checkForSeat();
     }
   }
 
@@ -3203,6 +3354,7 @@ isCloseToMob = (inAllDirections = true) => {
 
     this.updateDashTrail(msPerTick);
     this.updateNaturalRecovery(msPerTick);
+    this.status.update(msPerTick);
 
     // Quest start/alert effect
     if (this.questStartActive && this.questStartFrames) {
@@ -3265,14 +3417,23 @@ isCloseToMob = (inAllDirections = true) => {
       if (this.pos.walk_speed !== 125) this.pos.walk_speed = 125;
       // Speed/Jump stats scale walking and take-off (100 = base; GMS caps
       // them at 140 / 123). Gear, Haste and Dash all arrive through here.
-      this.pos.speedScale = Math.min(140, this.stats?.localSpeed ?? 100) / 100;
+      this.pos.speedScale = Math.min(140, this.status.applySpeed(this.stats?.localSpeed ?? 100)) / 100;
       this.pos.jumpScale = Math.min(123, this.stats?.localJump ?? 100) / 100;
     }
+    // Ice: the map's info/fs scales ground drag and walking force (El Nath,
+    // Orbis Tower ice floors, Dead Mine carry 0.2). Fed every frame like the
+    // Speed/Jump scales so a map change takes effect at once.
+    this.pos.groundFriction = this.map?.fs ?? 1;
 
     // check if hit by mob
     this.checkForMobsHit();
 
+    // Stun / seduce / reverse-input own the direction flags from here on
+    this.status.applyToPhysics(this.pos);
     this.pos.update(msPerTick);
+
+    // Touch portals fire on contact (local character only)
+    if (!this.isRemote) this.checkForTouchPortal();
 
     // Clamp player to map boundaries — prevent falling off left/right edges
     if (this.map && this.map.boundaries) {
@@ -3366,7 +3527,45 @@ isCloseToMob = (inAllDirections = true) => {
       projectile.update(msPerTick);
     });
   }
-  
+
+  /**
+   * World position of the equipped gun's barrel for the CURRENT stance and
+   * frame (alias stances like `shot`/`doublefire` resolve through
+   * getDrawableFrames), or null when no gun is worn, the pose has no weapon
+   * frame (climbing, sitting, dead) or the frame carries neither a `muzzle`
+   * nor a `hand` point.
+   *
+   * Every 149xxxx gun's `weapon` canvas maps `navel (0,0)` + `muzzle`: the
+   * composition (addFrame) seats the gun's origin on the body's navel and
+   * then registers `muzzle` at anchor + (±muzzle.x, muzzle.y), mirrored in x
+   * exactly like every other map point. So, pos-relative:
+   *   muzzle = (±(bodyNavel.x + muzzle.x), bodyNavel.y + muzzle.y)
+   * shoot2/0: navel (-6,-18), muzzle (-29,-12) → (-35,-30) facing left and
+   * (+35,-30) facing right; stabO1/0 (the recoil/fire frame): (-43,-27).
+   * Rather than re-deriving that here, the point is read back from the
+   * composition's own map, so it can never drift from what is drawn. The
+   * frame's `move` offset is added the way draw() adds it to each part.
+   */
+  getMuzzleWorldPosition(): { x: number; y: number } | null {
+    if (getEquipTypeById(this.weaponEquipId) !== WeaponType.PISTOL) return null;
+    const imgdir = this.baseBody?.[this.stance]?.[this.frame];
+    if (!imgdir) return null;
+    const imgdirFlip = !!imgdir.nGet('flip').nGet('nValue', 0);
+    const frameIsFlipped = !!this.flipped !== imgdirFlip;
+    let points: any = null;
+    try {
+      points = (this.getDrawableFrames(this.stance, this.frame, frameIsFlipped) as any)?.mapPoints;
+    } catch (e) {
+      return null;
+    }
+    const point = points?.muzzle ?? points?.hand;
+    if (!point) return null;
+    const mx = imgdir.nGet('move').nGet('nX', 0);
+    const moveX = !this.flipped ? mx : -mx;
+    const moveY = imgdir.nGet('move').nGet('nY', 0);
+    return { x: this.pos.x + point.x + moveX, y: this.pos.y + point.y + moveY };
+  }
+
   getDrawableFrames(
     stance: any,
     frame: number,
@@ -3606,6 +3805,11 @@ isCloseToMob = (inAllDirections = true) => {
 
     drawableFrames.sort((a: any, b: any) => a.z - b.z);
 
+    // Every map point the composition registered (neck, navel, hand, a gun's
+    // muzzle...), in the same pos-relative, facing-mirrored space as the
+    // frames' x/y — see getMuzzleWorldPosition
+    (drawableFrames as any).mapPoints = map;
+
     return drawableFrames;
   }
 
@@ -3644,7 +3848,7 @@ isCloseToMob = (inAllDirections = true) => {
       // same way the original does — walking, jumping off, crouching,
       // attacking, grabbing a rope or dying
       if (
-        this.chairId &&
+        (this.chairId || this.seatId) &&
         (this.isDead ||
           this.isInAttack ||
           this.isInClimbingRope ||
@@ -3653,11 +3857,12 @@ isCloseToMob = (inAllDirections = true) => {
           this.pos.left !== this.pos.right)
       ) {
         this.standUpFromChair();
+        this.standUpFromSeat();
       }
 
       if (this.isDead) {
         this.setStance(Stance.dead);
-      } else if (this.chairId) {
+      } else if (this.chairId || this.seatId) {
         this.setStance("sit");
       } else if (this.isRiding && !this.isInClimbingRope) {
         // v83 riding: the body holds 'sit' while the mount supplies the

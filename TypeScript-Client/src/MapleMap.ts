@@ -16,12 +16,13 @@ import Timer from "./Timer";
 import type MapleCharacter from "./MapleCharacter";
 import DropItemSprite from "./DropItem/DropItemSprite";
 import GameCanvas from "./GameCanvas";
-import UINpcTalk from './UI/UINpcTalk';
 import UIQuestDialog from './UI/UIQuestDialog';
 import QuestScriptEngine from './Quest/QuestScriptEngine';
 import NpcScriptEngine, { stripScriptCodes } from './NpcScriptEngine';
 import QuestData from './Quest/QuestData';
 import Reactor from './Reactor';
+import Weather from './Effects/Weather';
+import { fieldForbids } from './Constants/FieldLimit';
 import MapStateCache from './MapStateCache';
 import UIMiniMap from './UI/UIMiniMap';
 import UIShipClock from './UI/UIShipClock';
@@ -30,6 +31,20 @@ import { _setMapleMap } from './Physics';
 import { drawSkillHits, clearSkillHits } from './Effects/SkillHitEffect';
 import HenesysPQ from './Events/HenesysPQ';
 import PetManager from './Pet/PetManager';
+import MysticDoorManager from './Door/MysticDoor';
+import SummonManager from './Summon/SummonManager';
+
+/**
+ * A place to sit authored on a map object (`seat/<n>` vectors on benches,
+ * logs, fountain rims). `id` is stable across clients — it is built from the
+ * object's layer and WZ name, never from a sort position — so it can ride
+ * player_update and park remote players on the same bench.
+ */
+export interface MapSeat {
+  id: string;
+  x: number;
+  y: number;
+}
 
 export interface MapleMap {
   id: number | string;
@@ -42,6 +57,11 @@ export interface MapleMap {
   // water physics only while the character's position is inside one.
   swimAreas: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   isInWater: (x: number, y: number) => boolean;
+  // info/fs — ground friction scale (ice maps carry 0.2; 1 = normal ground)
+  fs: number;
+  // info/fieldLimit bitflags (Constants/FieldLimit) and the test for one
+  fieldLimit: number;
+  forbids: (bit: number) => boolean;
   setTaggedObjectsVisible: (tag: string, visible: boolean) => number;
   footholds: any;
   // Pre-flattened footholds. Physics scans every foothold per entity per
@@ -54,9 +74,14 @@ export interface MapleMap {
   objects: any;
   characters: any;
   portals: any;
+  // Every map-object seat in world coordinates (see MapSeat)
+  seats: MapSeat[];
+  getSeatNear: (x: number, y: number) => MapSeat | null;
   names: any;
   npcs: any;
-  npcDialog: UINpcTalk;
+  /** Legacy UINpcTalk slot — always null. NPC talk goes through questDialog
+   *  (UIQuestDialog); MapState still null-checks this before touching it. */
+  npcDialog: { isHidden: boolean; setIsHidden: (hidden: boolean) => void; draw: (...args: any[]) => void } | null;
   questDialog: UIQuestDialog;
   scriptEngine: QuestScriptEngine;
   npcScriptEngine: NpcScriptEngine;
@@ -152,6 +177,7 @@ MapleMap.load = async function (id: number | string) {
   this.tiles = [];
   this.objects = [];
   this.portals = [];
+  this.seats = [];
   this.itemDrops = [];
   this._tilesByLayer = Array.from({ length: 8 }, () => []);
   this._objectsByLayer = Array.from({ length: 8 }, () => []);
@@ -214,7 +240,10 @@ MapleMap.load = async function (id: number | string) {
     x2: r.nGet("x2").nGet("nValue", 0),
     y2: r.nGet("y2").nGet("nValue", 0),
   }));
-  console.log(`is town: ${this.isTown}, swim: ${this.isSwimMap}, swimAreas: ${this.swimAreas.length}`);
+  // Ice (info/fs, see Physics.groundFriction) and the map's fieldLimit bits
+  this.fs = parseFloat(this.wzNode.info.nGet("fs").nGet("nValue", 1)) || 1;
+  this.fieldLimit = Number(this.wzNode.info.nGet("fieldLimit").nGet("nValue", 0)) || 0;
+  console.log(`is town: ${this.isTown}, swim: ${this.isSwimMap}, swimAreas: ${this.swimAreas.length}, fs: ${this.fs}, fieldLimit: 0x${this.fieldLimit.toString(16)}`);
   console.log("Map WZ Node:", this.wzNode);
 
   if (!this.PlayerCharacter) {
@@ -241,6 +270,20 @@ MapleMap.load = async function (id: number | string) {
   this.objects = objects;
   this.portals = portals;
   this.names = names;
+
+  // Bench seats: the object's `seat` vectors are relative to its position,
+  // mirrored when the object is flipped. Id = layer:objName:seatIndex.
+  this.seats = [];
+  for (const obj of this.objects) {
+    const seats = obj.seats || [];
+    for (let i = 0; i < seats.length; i++) {
+      this.seats.push({
+        id: `${obj.layer}:${obj.zid}:${i}`,
+        x: obj.x + (obj.flipped ? -seats[i].x : seats[i].x),
+        y: obj.y + seats[i].y,
+      });
+    }
+  }
 
   // Tighten the camera's floor to the map's actually-drawn extent. The
   // synthesized boundary pads the lowest foothold by +110, but Henesys's
@@ -296,11 +339,8 @@ MapleMap.load = async function (id: number | string) {
   Timer.doReset();
 
   // Dialog/engine init in parallel (independent)
-  const [npcDialog, questDialog] = await Promise.all([
-    UINpcTalk.fromOpts({ isHidden: true, x: 300, y: 200 }),
-    UIQuestDialog.fromOpts(),
-  ]);
-  this.npcDialog = npcDialog;
+  const questDialog = await UIQuestDialog.fromOpts();
+  this.npcDialog = null;
   this.questDialog = questDialog;
   this.scriptEngine = new QuestScriptEngine();
   this.npcScriptEngine = new NpcScriptEngine();
@@ -332,6 +372,9 @@ MapleMap.load = async function (id: number | string) {
 
   // Party quest lifecycle — leaving the event's map range ends the instance
   HenesysPQ.onMapChanged(Number(id));
+
+  // Mystic Doors standing on this map (field side or town side)
+  MysticDoorManager.onMapLoaded(this);
 };
 
 MapleMap.addItemDrop = function (itemDrop) {
@@ -768,7 +811,8 @@ MapleMap.loadReactors = async function (wzNode) {
     const reactorTime = rNode.nGet?.('reactorTime')?.nValue || 0;
     const f = rNode.nGet?.('f')?.nValue || 0;
 
-    const spawnDef = { id, x, y, reactorTime, f, map: this, oId: reactorSpawnDefs.length };
+    const name = rNode.nGet?.('name')?.nValue || '';
+    const spawnDef = { id, x, y, reactorTime, f, name, map: this, oId: reactorSpawnDefs.length };
     reactorSpawnDefs.push(spawnDef);
 
     try {
@@ -926,10 +970,36 @@ MapleMap.setTaggedObjectsVisible = function (tag: string, visible: boolean): num
   return n;
 };
 
+// How close to a seat point Up has to be pressed to sit on it
+const SEAT_SNAP_X = 12;
+const SEAT_SNAP_Y = 20;
+
+/** The map-object seat within reach of a world position, nearest first */
+MapleMap.getSeatNear = function (x: number, y: number): MapSeat | null {
+  let best: MapSeat | null = null;
+  let bestDist = Infinity;
+  for (const seat of (this.seats || []) as MapSeat[]) {
+    const dx = Math.abs(seat.x - x);
+    const dy = Math.abs(seat.y - y);
+    if (dx > SEAT_SNAP_X || dy > SEAT_SNAP_Y) continue;
+    const d = dx * dx + dy * dy;
+    if (d < bestDist) {
+      bestDist = d;
+      best = seat;
+    }
+  }
+  return best;
+};
+
 /**
  * Whether a world position is in water: the whole map when info/swim=1,
  * otherwise only inside one of the map's swimArea rects.
  */
+/** Whether the map's info/fieldLimit sets `bit` (see Constants/FieldLimit) */
+MapleMap.forbids = function (bit: number): boolean {
+  return fieldForbids(Number(this.fieldLimit) || 0, bit);
+};
+
 MapleMap.isInWater = function (x: number, y: number): boolean {
   if (this.isSwimMap) return true;
   const areas = this.swimAreas;
@@ -1083,6 +1153,7 @@ MapleMap.update = function (msPerTick) {
   this.npcs.forEach((npc: NPC) => npc.update(msPerTick));
   this.monsters.forEach((mob: Monster) => mob.update(msPerTick));
   this.reactors.forEach((r: Reactor) => r.update(msPerTick));
+  Weather.update(msPerTick);
   this.characters.forEach((chr: MapleCharacter) => {
     try { chr.update(msPerTick); } catch (e) {
       console.error('[MapleMap] Character update crash:', e);
@@ -1093,8 +1164,15 @@ MapleMap.update = function (msPerTick) {
   try { PetManager.update(msPerTick); } catch (e) {
     console.error('[MapleMap] Pet update crash:', e);
   }
+  // Summons (Silver Hawk, Puppet, ...) follow their owners the same way
+  try { SummonManager.update(msPerTick); } catch (e) {
+    console.error('[MapleMap] Summon update crash:', e);
+  }
 
-  this.portals.forEach((p: Portal) => p.update(msPerTick));
+  // Hidden portals reveal themselves around the local player
+  const playerPos = this.PlayerCharacter?.pos || null;
+  this.portals.forEach((p: Portal) => p.update(msPerTick, playerPos));
+  MysticDoorManager.update(msPerTick);
 
   this.itemDrops = this.itemDrops.filter(
     (drop: DropItemSprite) => !drop.destroyed
@@ -1293,7 +1371,15 @@ MapleMap.render = function (
     if (pc.questStartActive) drawEffect(pc, pc.questStartFrames, pc.questStartFrame);
     if (pc.cardGetActive) drawEffect(pc, pc.cardGetFrames, pc.cardGetFrame);
     if (pc.incExpActive) drawEffect(pc, pc.incExpFrames, pc.incExpFrame);
-    if (pc.skillEffectActive) drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
+    if (pc.skillEffectActive) {
+      // Gun skills anchor their flash at the barrel, re-read every frame so
+      // it rides the recoil (shoot2 → stabO1 → shoot2); no gun → the feet
+      const muzzle = pc.skillEffectAnchor === 'muzzle' ? pc.getMuzzleWorldPosition?.() : null;
+      if (muzzle) drawEffectAt(muzzle.x, muzzle.y, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
+      else drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
+    }
+    // Mob-skill diseases (stun stars, darkness, seduce hearts) — see Status/PlayerStatus
+    pc.status?.drawWith?.(drawEffectAt);
     for (const puff of pc.dashTrail ?? []) {
       drawEffectAt(puff.x, puff.y, puff.frames, puff.frame, puff.flipped);
     }
@@ -1328,6 +1414,12 @@ MapleMap.render = function (
       console.error('[MapleMap] Pet draw crash:', e);
     }
   };
+  // Summons draw over their owners, after the cast art, like the original
+  const drawSummons = () => {
+    try { SummonManager.draw(canvas, camera); } catch (e) {
+      console.error('[MapleMap] Summon draw crash:', e);
+    }
+  };
 
   if (isClimbing) {
     // Climbing: draw ALL layers, then player on top (player in front of rope/chain)
@@ -1339,6 +1431,7 @@ MapleMap.render = function (
       drawPlayerEffects(this.PlayerCharacter);
     }
     drawRemoteEffects();
+    drawSummons();
     drawPets(true);
   } else {
     // Normal/jumping: draw up to player's layer, then player, then higher layers
@@ -1350,6 +1443,7 @@ MapleMap.render = function (
       drawPlayerEffects(this.PlayerCharacter);
     }
     drawRemoteEffects();
+    drawSummons();
     // Remote climbers' hanging pets ride in front of their owner too
     drawPets(true);
 
@@ -1368,6 +1462,7 @@ MapleMap.render = function (
     .forEach(drawLevelUp);
 
   this.portals.forEach(draw);
+  MysticDoorManager.draw(canvas, camera);
   drawBackgroundLayer(_backLayers[1]);
 
   this.itemDrops.forEach((drop: DropItemSprite) => {
@@ -1395,6 +1490,10 @@ MapleMap.render = function (
 
   // Station departure clock (world-space) / timed-ride countdown
   UIShipClock.draw(canvas, camera);
+
+  // Cash Shop weather (falling sprites + sender's banner), over the map,
+  // under the HUD
+  Weather.draw(canvas, camera);
 
   // v83 shows black beyond the map's VR bounds. On maps narrower than the
   // viewport (only possible at widescreen resolutions — the camera centres

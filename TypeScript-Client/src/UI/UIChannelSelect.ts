@@ -4,6 +4,8 @@ import { MapleStanceButton } from "./MapleStanceButton";
 import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
 import config from "../Config";
+import UIChatLog from "./UIChatLog";
+import { FieldLimit, FIELD_LIMIT_MESSAGE, currentMapForbids } from "../Constants/FieldLimit";
 
 // CHANGE CHANNEL window, opened from the game menu.
 // Assets: UI.wz/UIWindow.img/Channel — a vertically composed frame
@@ -150,6 +152,12 @@ UIChannelSelect.initialize = async function (canvas: GameCanvas) {
 
 UIChannelSelect.show = function () {
   if (this.isVisible) return;
+  // fieldLimit CHANGECHANNEL (0x10, Cosmic CANNOTMIGRATE): no channel change
+  // from this map (PQ rooms, Zakum, ...)
+  if (currentMapForbids(FieldLimit.CHANGECHANNEL)) {
+    UIChatLog.system(FIELD_LIMIT_MESSAGE);
+    return;
+  }
   this.isVisible = true;
   this.selectedChannel = this.currentChannel;
   this.hoveredChannel = -1;

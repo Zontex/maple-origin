@@ -7,6 +7,7 @@ import config from '../../Config';
 import { CameraInterface } from '../../Camera';
 import BuddyManager, { BuddyEntry } from '../../Buddy/BuddyManager';
 import { getJobNameById } from '../../Constants/Jobs';
+import { drawSelectionBar } from '../UISelectionBar';
 
 /**
  * Buddy list — the BUDDY tab of v83's UIWindow.img/UserList window (R key).
@@ -550,12 +551,7 @@ class BuddyMenuSprite extends DragableMenu {
     for (const row of this.visibleRows()) {
       const bd = row.buddy;
       if (bd.characterId === this.selectedId) {
-        const ctx = canvas.context;
-        ctx.save();
-        ctx.globalAlpha = 0.25;
-        ctx.fillStyle = '#3366cc';
-        ctx.fillRect(row.x + 1, row.y + 1, row.w - 2, ROW_H - 2);
-        ctx.restore();
+        drawSelectionBar(canvas.context, row.x + 1, row.y + 1, row.w - 2, ROW_H - 2);
       }
       const icon = bd.online ? onIcon : offIcon;
       if (icon?.width) canvas.drawImage({ img: icon, dx: row.x + 4, dy: row.y + 4 });

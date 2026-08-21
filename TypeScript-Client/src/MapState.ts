@@ -1106,9 +1106,14 @@ MapStateInstance.doRender = function (
       // Hotkey bar above status bar
       UIHotkeyBar.render(canvas, camera);
 
-      // Buff icons at top-right of screen
+      // Buff icons at top-right of screen; mob-skill diseases sit at the
+      // far right of the same row, buffs shift left to make room
+      const statusCount = MyCharacter.status?.count ?? 0;
+      if (statusCount > 0) {
+        MyCharacter.status.renderIcons(canvas, canvas.game.width - 30 - statusCount * 26, 5);
+      }
       if (MyCharacter.buffManager?.count > 0) {
-        const buffBarX = canvas.game.width - 30 - (MyCharacter.buffManager.count * 26);
+        const buffBarX = canvas.game.width - 30 - ((MyCharacter.buffManager.count + statusCount) * 26);
         MyCharacter.buffManager.renderBuffIcons(canvas, buffBarX, 5);
       }
 

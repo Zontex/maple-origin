@@ -17,6 +17,7 @@ import UIDevTools from '../UIDevTools';
 import PetManager from '../../Pet/PetManager';
 import { PET_EQUIP_CELLS } from '../../Pet/PetConstants';
 import { formatRemaining } from '../../Shop/CashShopData';
+import { drawPlate } from '../UIToolTipPlate';
 
 // Equipment slot definitions with pixel positions on the 175x304 background
 // Each slot is ~36x36 with 1px borders
@@ -625,14 +626,7 @@ class EquipMenuSprite extends DragableMenu {
       let ty = py + this.hoveredPetCell.y;
       if (tx + tw > config.width) tx = px + this.hoveredPetCell.x - tw - 4;
       if (ty + th > config.height) ty = config.height - th;
-      const ctx = canvas.context;
-      ctx.save();
-      ctx.fillStyle = 'rgba(20, 20, 60, 0.92)';
-      ctx.fillRect(tx, ty, tw, th);
-      ctx.strokeStyle = '#6688cc';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
-      ctx.restore();
+      drawPlate(canvas.context, tx, ty, tw, th);
       lines.forEach((l, i) => {
         canvas.drawText({
           text: l,
@@ -701,16 +695,8 @@ class EquipMenuSprite extends DragableMenu {
     if (tx + tooltipW > config.width) tx = this.x + this.hoveredSlot.x - tooltipW - 4;
     if (ty + tooltipH > config.height) ty = config.height - tooltipH;
 
-    const ctx = canvas.context;
-
-    // Background
-    ctx.save();
-    ctx.fillStyle = 'rgba(20, 20, 60, 0.92)';
-    ctx.fillRect(tx, ty, tooltipW, tooltipH);
-    ctx.strokeStyle = '#6688cc';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(tx + 0.5, ty + 0.5, tooltipW - 1, tooltipH - 1);
-    ctx.restore();
+    // Background — the shared v83 tooltip plate
+    drawPlate(canvas.context, tx, ty, tooltipW, tooltipH);
 
     // Icon
     if (icon && iconW > 0) {

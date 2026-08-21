@@ -11,6 +11,7 @@ import { FACE_COUPON_EXPRESSIONS } from '../Shop/CashShopData';
 import { isPetItemId, isPetFoodItemId } from '../Constants/Inventory/MapleInventory';
 import config from '../Config';
 import DragManager, { DragType } from './DragManager';
+import { MYSTIC_DOOR_SKILL_ID } from '../Door/MysticDoor';
 
 // Hotkey slot definition
 interface HotkeySlot {
@@ -272,7 +273,15 @@ const UIHotkeyBar = {
     const info = SkillData.getSkillSync(skillId);
     if (!info) return;
 
-    if (info.isAttack) {
+    if (skillId === MYSTIC_DOOR_SKILL_ID) {
+      // Mystic Door is buff-typed in the WZ but opens a door on the map (and
+      // costs a Magic Rock) — useSkill routes it to the door module, which
+      // can refuse (town, fieldLimit, no rock, recast too soon)
+      const casted = await MyCharacter.useSkill?.(skillId, effect);
+      if (!casted) return;
+      this.playSkillSound(skillId);
+      this.playSkillEffect(skillId);
+    } else if (info.isAttack) {
       // Attack skill — cast may fail (attack delay, missing snail shells);
       // only consume MP/HP/cooldown when it actually fires
       const casted = await MyCharacter.useSkill?.(skillId, effect);

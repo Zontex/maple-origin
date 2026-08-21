@@ -11,6 +11,7 @@ import Item from '../Inventory/Item';
 import ItemConstants from '../Constants/Inventory/ItemConstants';
 import UIMesoDropDialog from './UIMesoDropDialog';
 import Config from '../Config';
+import { drawPlate } from './UIToolTipPlate';
 
 interface LoadedShopItem {
   itemId: number;
@@ -628,11 +629,7 @@ const ShopUI: any = {
     if (ty + H > canvas.game.height) ty = canvas.game.height - H - 2;
     if (ty < 0) ty = 0;
 
-    ctx.fillStyle = 'rgba(68, 74, 125, 0.9)';
-    ctx.fillRect(tx, ty, W, H);
-    ctx.strokeStyle = 'rgba(150, 158, 200, 0.85)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(tx + 0.5, ty + 0.5, W - 1, H - 1);
+    drawPlate(ctx, tx, ty, W, H);
 
     ctx.textAlign = 'left';
     let y = ty + PAD + 10;

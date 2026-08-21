@@ -46,15 +46,19 @@ const STATUS_BAR_H = 71;
 
 type MenuAction =
   | "channel"
-  | "skin"
   | "gameOption"
   | "systemOption"
   | "quit";
 
 // Top-to-bottom, matching the order of the WZ nodes.
-const MENU_ITEMS: { node: string; action: MenuAction }[] = [
+//
+// CHANGE SKIN (BtSkin) is drawn from its `disabled` frame and never activates:
+// v83 GMS shipped no UI skins — UI.wz holds a single UIWindow.img and nothing
+// else named "skin" besides this one button — so the entry had nothing to open.
+// The art ships the greyed frame for exactly that state.
+const MENU_ITEMS: { node: string; action: MenuAction | null }[] = [
   { node: "BtChannel", action: "channel" },
-  { node: "BtSkin", action: "skin" },
+  { node: "BtSkin", action: null },
   { node: "BtGameOpt", action: "gameOption" },
   { node: "BtSysOpt", action: "systemOption" },
   { node: "BtQuit", action: "quit" },
@@ -126,6 +130,7 @@ UIGameMenu.initialize = async function (canvas: GameCanvas) {
   this.y = config.height - STATUS_BAR_H - PANEL_H - 2;
 
   MENU_ITEMS.forEach((item, i) => {
+    const action = item.action;
     const button = new MapleStanceButton(canvas, {
       x: this.x + BTN_X_INSET,
       y: this.y + buttonY(i, MENU_ITEMS.length),
@@ -133,13 +138,17 @@ UIGameMenu.initialize = async function (canvas: GameCanvas) {
       isRelativeToCamera: true,
       isPartOfUI: true,
       isHidden: true,
+      stance: action ? BUTTON_STANCE.NORMAL : "disabled",
       onClick: () => {
+        if (!action) return;
         // v83 closes the menu as soon as an entry is chosen.
         this.hide();
-        this.onAction?.(item.action);
+        this.onAction?.(action);
       },
     });
-    ClickManager.addButton(button);
+    // A disabled entry stays out of ClickManager so it neither lights up on
+    // hover nor swallows a click; it is only drawn.
+    if (action) ClickManager.addButton(button);
     this.buttons.push(button);
   });
 };
@@ -167,14 +176,21 @@ UIGameMenu.hide = function () {
 UIGameMenu.moveSelection = function (delta: number) {
   if (!this.isVisible) return;
   const count = MENU_ITEMS.length;
-  // Wraps, like the original client's keyboard cursor.
-  this.selectedIndex = (((this.selectedIndex + delta) % count) + count) % count;
+  const step = delta < 0 ? -1 : 1;
+  // Wraps, like the original client's keyboard cursor, and steps over the
+  // disabled entry the way a greyed button is skipped by keyboard focus.
+  let index = this.selectedIndex;
+  for (let n = 0; n < count; n++) {
+    index = (((index + step) % count) + count) % count;
+    if (MENU_ITEMS[index].action) break;
+  }
+  this.selectedIndex = index;
 };
 
 UIGameMenu.activateSelected = function () {
   if (!this.isVisible) return;
   const item = MENU_ITEMS[this.selectedIndex];
-  if (!item) return;
+  if (!item || !item.action) return;
   // Claim this keypress so closing the panel below doesn't hand the very same
   // Enter to the chat box further along the frame.
   this.swallowEnter = true;
@@ -194,7 +210,9 @@ UIGameMenu.draw = function (canvas, camera, lag, msPerTick, tdelta) {
     // has an active button, so relying on it left every visited entry stuck lit
     // as the cursor moved down the list.
     const hoveredByMouse = (ClickManager as any).activeButton === b;
-    if (i === this.selectedIndex) {
+    if (!MENU_ITEMS[i].action) {
+      b.stance = "disabled";
+    } else if (i === this.selectedIndex) {
       b.stance = BUTTON_STANCE.MOUSE_OVER;
     } else if (!hoveredByMouse) {
       b.stance = BUTTON_STANCE.NORMAL;

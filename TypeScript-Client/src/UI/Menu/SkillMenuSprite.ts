@@ -9,6 +9,7 @@ import type MapleCharacter from '../../MapleCharacter';
 import { getJobNameById } from '../../Constants/Jobs';
 import UIDevTools from '../UIDevTools';
 import DragManager from '../DragManager';
+import { drawPlate } from '../UIToolTipPlate';
 
 // ─── Layout constants derived from WZ assets ────────────────────────
 // backgrnd = 175x289, but we extend it vertically to fit more skills (like GMS)
@@ -265,9 +266,10 @@ class SkillMenuSprite extends DragableMenu {
         this.scrollNext = vscr.enabled.next0?.nGetImage() as HTMLImageElement;
         this.scrollThumb = vscr.enabled.thumb0?.nGetImage() as HTMLImageElement;
       }
-      const vscrBase = basicNode?.VScr;
-      if (vscrBase?.enabled) {
-        this.scrollBg = vscrBase.enabled.base0?.nGetImage() as HTMLImageElement;
+      // Track tile belongs to the same VScr4 family as the arrows/thumb
+      // (enabled/base, 15x13) — VScr has no `base0`, so this was never loading
+      if (vscr?.enabled?.base?.nGetImage) {
+        this.scrollBg = vscr.enabled.base.nGetImage() as HTMLImageElement;
       }
     } catch (e) { /* optional */ }
 
@@ -633,15 +635,20 @@ class SkillMenuSprite extends DragableMenu {
     const sbW = this.scrollPrev?.width || 13;
     const canScroll = totalSkills > MAX_VISIBLE_SKILLS;
 
-    // Track background (always drawn)
-    const ctx = canvas.context;
-    ctx.save();
-    ctx.fillStyle = '#dde0e4';
-    ctx.fillRect(sbX + 1, sbTopY, sbW - 2, sbH);
-    ctx.strokeStyle = '#aab0b8';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(sbX, sbTopY, sbW, sbH);
-    ctx.restore();
+    // Track (always drawn): Basic.img/VScr4/enabled/base tiled between the
+    // arrows, clipped to the track so the last tile doesn't overrun the arrow
+    if (this.scrollBg && this.scrollBg.width > 0) {
+      const ctx = canvas.context;
+      const tileH = this.scrollBg.height || 13;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(sbX, sbTopY + arrowH, sbW, sbH - arrowH * 2);
+      ctx.clip();
+      for (let ty = sbTopY + arrowH; ty < sbTopY + sbH - arrowH; ty += tileH) {
+        ctx.drawImage(this.scrollBg, sbX, ty);
+      }
+      ctx.restore();
+    }
 
     // Up arrow
     if (this.scrollPrev) {
@@ -801,19 +808,9 @@ class SkillMenuSprite extends DragableMenu {
     if (ty < 0) ty = 0;
 
     // ── panel ─────────────────────────────────────────────────────────────
-    // Sampled straight off reference captures: the body is (68,74,125) and the
-    // header band (85,85,130), and those two values dominate both screenshots
-    // despite completely different scenes behind them. That small spread — ~17
-    // across the whole image — is what fixes the alpha near 0.9; a genuinely
-    // see-through panel would swing far more with its background. So the fill
-    // is essentially the colour you see, barely translucent.
-    ctx.fillStyle = 'rgba(68, 74, 125, 0.9)';
-    ctx.fillRect(tx, ty, TT_W, TT_H);
-    ctx.fillStyle = 'rgba(85, 85, 130, 0.9)';
-    ctx.fillRect(tx, ty, TT_W, headH);
-    ctx.strokeStyle = 'rgba(150, 158, 200, 0.85)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(tx + 0.5, ty + 0.5, TT_W - 1, TT_H - 1);
+    // The shared v83 plate (UIToolTipPlate carries the sampled colours); the
+    // skill tooltip is the one with the lighter header band behind the name.
+    drawPlate(ctx, tx, ty, TT_W, TT_H, { headerH: headH });
 
     // ── header: bullet + name ─────────────────────────────────────────────
     ctx.textAlign = 'left';

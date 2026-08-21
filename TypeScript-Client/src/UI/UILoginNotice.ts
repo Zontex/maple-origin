@@ -73,6 +73,13 @@ export default class UILoginNotice {
   buttons: MapleButton[];
   okHandler: (() => void) | null = null;
   cancelHandler: (() => void) | null = null;
+  /**
+   * Two-button (BtYes / BtNo) layout for questions like the character-delete
+   * confirmation. The single-button notice keeps its original position.
+   */
+  private confirm: boolean = false;
+  private yesButton: MapleStanceButton | null = null;
+  private noButton: MapleStanceButton | null = null;
 
   static async fromOpts(opts: any) {
     const object = new UILoginNotice(opts);
@@ -104,21 +111,49 @@ export default class UILoginNotice {
       ClickManager.removeButton(button);
     });
     this.buttons = [];
-    const okButton = new MapleStanceButton(null, {
+    // Both buttons exist for the whole life of the notice; setConfirm() decides
+    // which are shown and where the Yes button sits. Positions are relative to
+    // the 362x219 backgrnd: the text plate spans x=125..346, so a lone Yes
+    // sits at the original 160 and a Yes/No pair is centred under the plate
+    // (76 + 8 + 75 = 159px wide, centred on 235).
+    const yesButton = new MapleStanceButton(null, {
       x: this.x + 160,
       y: this.y + 150,
       isRelativeToCamera: true,
       isPartOfUI: true,
+      isHidden: this.isHidden,
       img: this.uiLoginNotice.BtYes.nChildren,
       onClick: () => {
         this.setIsHidden(true);
         if (this.okHandler) this.okHandler();
       },
     });
-    this.buttons.push(okButton);
+    const noButton = new MapleStanceButton(null, {
+      x: this.x + 240,
+      y: this.y + 150,
+      isRelativeToCamera: true,
+      isPartOfUI: true,
+      isHidden: true,
+      img: this.uiLoginNotice.BtNo.nChildren,
+      onClick: () => {
+        this.setIsHidden(true);
+        if (this.cancelHandler) this.cancelHandler();
+      },
+    });
+    this.yesButton = yesButton;
+    this.noButton = noButton;
+    this.buttons.push(yesButton, noButton);
     this.buttons.forEach((button) => {
       ClickManager.addButton(button);
     });
+    this.setConfirm(this.confirm);
+  }
+
+  /** Switch between the single OK-style Yes button and the Yes/No pair. */
+  setConfirm(confirm: boolean) {
+    this.confirm = confirm;
+    if (this.yesButton) this.yesButton.x = this.x + (confirm ? 156 : 160);
+    if (this.noButton) this.noButton.isHidden = this.isHidden || !confirm;
   }
 
   draw(
@@ -154,6 +189,8 @@ export default class UILoginNotice {
     this.buttons.forEach((button) => {
       button.isHidden = isHidden;
     });
+    // The No button only ever shows in confirm mode
+    if (this.noButton) this.noButton.isHidden = isHidden || !this.confirm;
   }
 
   setNoticeType(noticeType: NoticeType) {

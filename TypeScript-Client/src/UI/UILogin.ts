@@ -19,6 +19,62 @@ import MapleStandingCharacter from '../MapleStandingCharacter';
 import DebugDrag from './DebugDrag';
 import { CharCreationOptions, CreationRace, getRaceInfo, makeRaceOptions } from '../Constants/CharCreation';
 
+/** One entry of the world-select list. `id` doubles as the index of the
+ *  `Login.img/WorldSelect/BtWorld/<id>` tab art and `world/<id>` title art. */
+interface WorldEntry {
+  id: number;
+  name: string;
+  /** Channels to offer; defaults to the number of channel plates in the art. */
+  channelCount?: number;
+}
+
+// Fallback world list, mirroring server/worlds.js (the v83 GMS roster). The
+// live list comes from the server's `get_worlds` at world-select time; this is
+// only used when the request times out, so the screen never comes up empty.
+const DEFAULT_WORLDS: WorldEntry[] = [
+  { id: 0, name: 'Scania' },
+  { id: 1, name: 'Bera' },
+  { id: 2, name: 'Broa' },
+  { id: 3, name: 'Windia' },
+  { id: 4, name: 'Khaini' },
+  { id: 5, name: 'Bellocan' },
+  { id: 6, name: 'Mardia' },
+  { id: 7, name: 'Kradia' },
+];
+
+const WORLD_LIST_TIMEOUT_MS = 2000;
+
+/**
+ * Ask the server for its world list. mysocket has no `world_list` case of its
+ * own, so this subscribes through its feature-module hook (`on`) and resolves
+ * with null on timeout or a malformed reply — the caller keeps whatever list
+ * it already has.
+ */
+function requestWorldList(timeoutMs: number): Promise<WorldEntry[] | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (worlds: WorldEntry[] | null) => {
+      if (settled) return;
+      settled = true;
+      MySocket.off('world_list');
+      resolve(worlds);
+    };
+    MySocket.on('world_list', (msg: any) => {
+      const raw = Array.isArray(msg?.worlds) ? msg.worlds : [];
+      const worlds: WorldEntry[] = raw
+        .filter((w: any) => Number.isInteger(w?.id))
+        .map((w: any) => ({
+          id: w.id,
+          name: String(w.name ?? ''),
+          channelCount: Number.isInteger(w.channelCount) ? w.channelCount : undefined,
+        }));
+      finish(worlds.length ? worlds : null);
+    });
+    MySocket.sendMessage({ type: 'get_worlds' });
+    setTimeout(() => finish(null), timeoutMs);
+  });
+}
+
 interface UILoginInterface {
   uiLogin: WZNode;
   frameImg: any;
@@ -52,7 +108,16 @@ interface UILoginInterface {
    *  double-click against frame 1 — a single click entered the game. */
   _slotClickHeld: boolean;
   drawMask: (canvas: GameCanvas) => void;
-  worlds: any[];
+  _canvas: GameCanvas | null;
+  worlds: WorldEntry[];
+  /** The world tab buttons currently registered, so a refreshed list can replace them. */
+  worldButtons: MapleStanceButton[];
+  /** Number of channel plates shipped in `WorldSelect/channel` (20 in v83). */
+  artChannelCount: number;
+  /** (Re)build the world tabs from a list — on boot from DEFAULT_WORLDS, then from the server. */
+  buildWorldButtons: (worlds: WorldEntry[]) => void;
+  /** Fetch the server's world list and rebuild the tabs if it answers in time. */
+  refreshWorldList: () => Promise<void>;
   selectedWorldId: number | null;
   worldButtonImages: Map<number, WZNode>;
   worldImages: Map<number, WZNode>;
@@ -110,6 +175,8 @@ interface UILoginInterface {
   stepImage: (stepId: number) => any;
   uiLoginNotice: UILoginNotice | null;
   showNotice: (noticeType: NoticeType, noticeMessage: NoticeMessage | null) => void;
+  /** Yes/No notice; `onYes` runs only when the player confirms. */
+  showConfirm: (noticeMessage: NoticeMessage, onYes: () => void, onNo?: () => void) => void;
   uiLoginTOS: UILoginTOS | null;
   showTOS: () => void;
   characters: MapleStandingCharacter[];
@@ -183,57 +250,22 @@ UILogin.initialize = async function (canvas: GameCanvas) {
 
   this.frameImg = this.uiLogin.nGet('Common').nGet('frame').nGetImage();
   this.selectedWorldImage = this.uiLogin.nGet('Common').selectWorld.nGetImage();
-  this.worlds = [
-    {
-      id: 0,
-      channelCount: 3,
-    },
-    {
-      id: 16,
-      channelCount: 3,
-    },
-    {
-      id: 2,
-      channelCount: 3,
-    },
-  ]; // @todo: from server side
+  this._canvas = canvas;
+
+  // v83 offers 20 channels per world; the scroll art ships exactly that many
+  // numbered plates (`channel/0`..`19`, plus chSelect/chgauge/chEvent), so the
+  // count is read off the art rather than assumed.
+  const channelNode = this.uiLogin.nGet('WorldSelect')?.nGet('channel');
+  this.artChannelCount = (channelNode?.nChildren || [])
+    .filter((c: WZNode) => /^\d+$/.test(c.nName)).length || 20;
 
   this.worldButtonImages = new Map<number, WZNode>();
   this.worldImages = new Map<number, WZNode>();
-  this.worlds.forEach((world) => {
-    const buttonImage = this.uiLogin.nGet('WorldSelect')?.BtWorld.nGet(world.id, null);
-    if (buttonImage) {
-      this.worldButtonImages.set(world.id, buttonImage);
-      const worldButton = new MapleStanceButton(canvas, {
-        x: -250 + this.worldButtonImages.size * 27,
-        y: -800,
-        img: buttonImage.nChildren,
-        onClick: () => {
-          this.scrollOpenAnimation.reset();
-          this.scrollOpenAnimation.active = true;
-          this.selectedWorldId = world.id;
-
-          this.scrollContentFadeIn.active = false;
-          this.scrollContentFadeIn.alpha = 0;
-
-          this.channelButtons.forEach((button, index) => {
-            button.isHidden = false;
-          });
-        },
-      });
-      ClickManager.addButton(worldButton);
-      this.behindFrameButtons.push(worldButton);
-    } else {
-      console.warn(`World button image for world ${world.id} not found.`);
-    }
-
-    const image = this.uiLogin.nGet('WorldSelect')?.world.nGet(world.id, null);
-    if (image) {
-      this.worldImages.set(world.id, image);
-    } else {
-      console.warn(`World image for world ${world.id} not found.`);
-    }
-  });
+  this.worldButtons = [];
+  this.worlds = [];
+  // Socket isn't connected yet (that happens at log-in), so the tabs start
+  // from the fallback roster and performLogin swaps in the server's list.
+  this.buildWorldButtons(DEFAULT_WORLDS);
 
   this.createLoginInputs(canvas);
 
@@ -470,10 +502,21 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       if (!uiLoginRef.charSelected) return;
       const selectedChar = uiLoginRef.characters[uiLoginRef.selectedCharIndex];
       if (!selectedChar || !selectedChar._serverId) return;
-      const result = await MySocket.deleteCharacter(selectedChar._serverId);
-      if (result.success) {
-        await uiLoginRef.loadCharactersFromServer();
-      }
+      // v83 asks first — Login.img/Notice/text/13: "Do you wish to delete the
+      // selected character? If you delete it, you will lose all the
+      // information about the character." (GMS then asked for the PIC; we
+      // have no PIC, so Yes deletes outright.)
+      const serverId = selectedChar._serverId;
+      uiLoginRef.showConfirm(NoticeMessage.CONFIRM_DELETE_CHARACTER, async () => {
+        const current = uiLoginRef.characters[uiLoginRef.selectedCharIndex];
+        if (!current || current._serverId !== serverId) return;
+        const result = await MySocket.deleteCharacter(serverId);
+        if (result.success) {
+          await uiLoginRef.loadCharactersFromServer();
+        } else {
+          console.warn('[Login] delete_character refused:', result.error);
+        }
+      });
     },
   });
   ClickManager.addButton(deleteCharacterButton);
@@ -613,7 +656,9 @@ UILogin.initialize = async function (canvas: GameCanvas) {
       (uiLoginRef as any)._lastUsername = username;
       (uiLoginRef as any)._lastPassword = password;
 
-      // Login succeeded — proceed to world select
+      // Login succeeded — fetch the server's world list (falls back to the
+      // built-in roster on timeout), then proceed to world select
+      await uiLoginRef.refreshWorldList();
       await LoginState.switchToSubState(LoginSubState.WORLD_SELECT);
       viewAllCharacterButton.isHidden = false;
       channelBackButton.isHidden = false;
@@ -1289,7 +1334,10 @@ UILogin.drawCharacterSelect = function (canvas, camera, lag, msPerTick, tdelta) 
       this._slotClickHeld = true;
       const mx = canvas.mouseX;
       const my = canvas.mouseY;
-      for (let i = 0; i < TOTAL_SLOTS; i++) {
+      // A login notice (the delete confirmation) is modal: a press on its
+      // Yes/No must not also land on the slot drawn behind it.
+      const modalOpen = !!this.uiLoginNotice && !this.uiLoginNotice.isHidden;
+      for (let i = 0; i < TOTAL_SLOTS && !modalOpen; i++) {
         const slotX = charScreenX + i * CHAR_SLOT_SPACING;
         if (mx >= slotX - 30 && mx <= slotX + 30 &&
             my >= charScreenY - 60 && my <= charScreenY + 10) {
@@ -2120,10 +2168,113 @@ UILogin.showNotice = function (noticeType: NoticeType, noticeMessage: NoticeMess
     if (this.inputUsn?.input) this.inputUsn.input.style.visibility = 'visible';
     if (this.inputPwd?.input) this.inputPwd.input.style.visibility = 'visible';
   };
+  this.uiLoginNotice.cancelHandler = null;
+  this.uiLoginNotice.setConfirm(false);
   this.uiLoginNotice.setIsHidden(false);
   this.uiLoginNotice.setNoticeType(noticeType);
   this.uiLoginNotice.setNoticeMessage(noticeMessage);
 }
+
+UILogin.showConfirm = function (noticeMessage: NoticeMessage, onYes: () => void, onNo?: () => void) {
+  if (!this.uiLoginNotice) {
+    console.error('UILoginNotice is not initialized.');
+    return;
+  }
+  if (this.inputUsn?.input) this.inputUsn.input.style.visibility = 'hidden';
+  if (this.inputPwd?.input) this.inputPwd.input.style.visibility = 'hidden';
+  const restoreInputs = () => {
+    if (this.inputUsn?.input) this.inputUsn.input.style.visibility = 'visible';
+    if (this.inputPwd?.input) this.inputPwd.input.style.visibility = 'visible';
+  };
+  this.uiLoginNotice.okHandler = () => {
+    restoreInputs();
+    onYes();
+  };
+  this.uiLoginNotice.cancelHandler = () => {
+    restoreInputs();
+    onNo?.();
+  };
+  this.uiLoginNotice.setConfirm(true);
+  this.uiLoginNotice.setIsHidden(false);
+  this.uiLoginNotice.setNoticeType(NoticeType.NORMAL);
+  this.uiLoginNotice.setNoticeMessage(noticeMessage);
+}
+
+UILogin.buildWorldButtons = function (worlds: WorldEntry[]) {
+  const canvas = this._canvas;
+  const worldSelect: any = this.uiLogin.nGet('WorldSelect');
+  if (!canvas || !worldSelect) return;
+
+  // Drop the previous tabs (boot builds from DEFAULT_WORLDS, log-in rebuilds
+  // from the server reply) so no stale button stays registered for clicks.
+  for (const button of this.worldButtons) {
+    ClickManager.removeButton(button);
+    const at = this.behindFrameButtons.indexOf(button);
+    if (at >= 0) this.behindFrameButtons.splice(at, 1);
+  }
+  this.worldButtons = [];
+  this.worldButtonImages.clear();
+  this.worldImages.clear();
+  this.worlds = [];
+
+  const newButtons: MapleStanceButton[] = [];
+  for (const world of worlds) {
+    // Tab and title art are indexed by world id (0 = Scania ... 7 = Kradia,
+    // up to 20); a world the art doesn't know can't be drawn, so it's skipped.
+    const buttonImage = worldSelect.nGet('BtWorld').nGet(world.id, null);
+    const titleImage = worldSelect.nGet('world').nGet(world.id, null);
+    if (!buttonImage || !titleImage) {
+      console.warn(`[Login] no WorldSelect art for world ${world.id} (${world.name}) — skipped`);
+      continue;
+    }
+    this.worlds.push(world);
+    this.worldButtonImages.set(world.id, buttonImage);
+    this.worldImages.set(world.id, titleImage);
+
+    // 26px-wide vertical tabs laid side by side along the top of the scroll
+    const channelCount = Math.min(world.channelCount ?? this.artChannelCount, this.artChannelCount);
+    const worldButton = new MapleStanceButton(canvas, {
+      x: -250 + this.worlds.length * 27,
+      y: -800,
+      img: buttonImage.nChildren,
+      onClick: () => {
+        this.scrollOpenAnimation.reset();
+        this.scrollOpenAnimation.active = true;
+        this.selectedWorldId = world.id;
+        this.selectedChannelIndex = null;
+        this.channelSelectAnimation = null;
+
+        this.scrollContentFadeIn.active = false;
+        this.scrollContentFadeIn.alpha = 0;
+
+        // channelButtons holds the numbered plates first (index = channel),
+        // then the GO button last — the GO button always shows.
+        const goIndex = this.channelButtons.length - 1;
+        this.channelButtons.forEach((button, index) => {
+          button.isHidden = index < goIndex && index >= channelCount;
+        });
+      },
+    });
+    ClickManager.addButton(worldButton);
+    newButtons.push(worldButton);
+  }
+  this.worldButtons = newButtons;
+  // Keep the tabs at the front of the draw list, where the boot-time build put them
+  this.behindFrameButtons.unshift(...newButtons);
+};
+
+UILogin.refreshWorldList = async function () {
+  try {
+    const worlds = await requestWorldList(WORLD_LIST_TIMEOUT_MS);
+    if (worlds) {
+      this.buildWorldButtons(worlds);
+    } else {
+      console.warn('[Login] world list not received — keeping the built-in roster');
+    }
+  } catch (e) {
+    console.warn('[Login] world list request failed — keeping the built-in roster', e);
+  }
+};
 
 UILogin.showTOS = function () {
   if (!this.uiLoginTOS) {

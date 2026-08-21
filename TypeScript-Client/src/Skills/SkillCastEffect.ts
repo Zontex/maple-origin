@@ -1,5 +1,8 @@
 import WZManager from '../wz-utils/WZManager';
 
+/** WZ `weapon` class of a gun: item prefix 149 minus 100 */
+const GUN_WEAPON_CLASS = 49;
+
 /**
  * Arm one of a skill's animation nodes on a character. The frames sit on
  * the character and MapleMap's drawPlayerEffects pass renders them,
@@ -11,8 +14,21 @@ async function playSkillArt(character: any, skillId: number, nodeName: 'effect' 
     const jobFileId = Math.floor(skillId / 10000);
     const paddedJobId = String(jobFileId).padStart(3, '0');
     const skillNode: any = await WZManager.get(`Skill.wz/${paddedJobId}.img`);
-    const artNode = skillNode?.nGet?.('skill')?.nGet?.(String(skillId).padStart(7, '0'))?.nGet?.(nodeName);
+    const skillRoot = skillNode?.nGet?.('skill')?.nGet?.(String(skillId).padStart(7, '0'));
+    const artNode = skillRoot?.nGet?.(nodeName);
     if (!artNode?.nChildren || artNode.nChildren.length === 0) return;
+    // Gun skills (`weapon = 49`: Double Shot, Blank Shot, Recoil Shot,
+    // Flamethrower, Rapid Fire...) author their `effect` frames around the
+    // barrel, so they anchor at the gun's muzzle instead of the feet. Read
+    // straight off the node already fetched — the parsed SkillData cache may
+    // not hold another job's skill when a remote pirate casts. Double Shot's
+    // key is "weapon " with a trailing space in the v83 WZ, hence the trim.
+    const weaponNode = (skillRoot?.nChildren || []).find(
+      (c: any) => String(c.nName).trim() === 'weapon'
+    );
+    const weaponClass = Number(weaponNode?.nValue);
+    character.skillEffectAnchor =
+      nodeName === 'effect' && weaponClass === GUN_WEAPON_CLASS ? 'muzzle' : 'feet';
     character.skillEffectFrames = artNode.nChildren;
     character.skillEffectFrame = 0;
     character.skillEffectDelay = 0;

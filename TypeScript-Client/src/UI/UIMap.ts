@@ -205,9 +205,6 @@ UIMap.addButtons = function (canvas) {
       case "channel":
         UIChannelSelect.show();
         break;
-      case "skin":
-        console.log("change skin — not implemented yet");
-        break;
       case "gameOption":
         UIGameOption.show();
         break;

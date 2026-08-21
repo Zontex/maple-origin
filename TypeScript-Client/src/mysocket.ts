@@ -76,6 +76,8 @@ interface PlayerState {
 interface PlayerUpdate {
   x: number;
   y: number;
+  chairId?: number;
+  seatId?: any;
   stance: string;
   frame: number;
   flipped: boolean;
@@ -1002,6 +1004,10 @@ class MySocket {
       mapId: mapId,
       attacking: MyCharacter.isInAttack || false,
       onGround: !!MyCharacter.pos.fh,
+      // Seated state: chair item (0 = none) and map seat (null = none) so
+      // remotes can draw the chair / park on the bench (applyRemoteSeat)
+      chairId: MyCharacter.chairId || 0,
+      seatId: (MyCharacter as any).seatId ?? null,
       vx: MyCharacter.pos.vx,
       vy: MyCharacter.pos.vy,
       equipped: equippedItems,
@@ -1387,6 +1393,10 @@ class MySocket {
 
       // Face emote carried by the update
       character.applyRemoteEmote?.(playerData.emote);
+      // Chair / map seat (implemented by the seat system; optional hook)
+      if (playerData.chairId !== undefined || playerData.seatId !== undefined) {
+        (character as any).applyRemoteSeat?.(Number(playerData.chairId) || 0, playerData.seatId ?? null);
+      }
 
       // Set lerp target position
       if (playerData.x !== undefined && playerData.y !== undefined) {

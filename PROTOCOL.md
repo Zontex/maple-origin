@@ -230,3 +230,14 @@ guild_update/invite/notice/result/chat/looks), `server/handlers/fame.js`
 (fame_give/fame_query ↔ fame_result/fame_changed/fame_info) and
 `server/handlers/party.js` (party_sync/party_hp/party_chat ↔ party_update with
 charId/online/hp, party_hp_update, party_chat). All payloads sit under `data`.
+
+### World modules (2026-08-21)
+`player_update` carries `chairId` (0 = none) and `seatId` (null = none). Module
+protocols are documented at the top of `server/handlers/door.js` (door_open/
+door_close/door_sync ↔ door_open/door_close/door_list — a door is broadcast to
+BOTH its field and town rooms), `server/handlers/summon.js` (summon_spawn re-sent
+every 5s / summon_move ≤4/s / summon_attack / summon_remove, relayed with
+`ownerId` stamped), `server/handlers/mobskill.js` (host-only `mob_skill` record:
+oId, skillId, level, action, effectAfter, targets, mobTargets, summons) and
+`server/handlers/weather.js` (`weather {itemId, message, mapId}` → room incl.
+sender, `name` stamped). All payloads sit under `data`.

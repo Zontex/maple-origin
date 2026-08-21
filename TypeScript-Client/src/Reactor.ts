@@ -2,8 +2,7 @@ import WZManager from './wz-utils/WZManager';
 import PLAY_AUDIO from './Audio/PlayAudio';
 import GameCanvas from './GameCanvas';
 import { CameraInterface } from './Camera';
-import DropItemSprite from './DropItem/DropItemSprite';
-import REACTOR_DROPS from './Constants/ReactorDropData';
+import ReactorScriptEngine, { spawnReactorDrops } from './ReactorScriptEngine';
 
 interface ReactorItemEvent {
   itemId: number;
@@ -43,6 +42,9 @@ export default class Reactor {
   x: number = 0;
   y: number = 0;
   reactorTime: number = 0; // respawn delay in seconds; 0 = no respawn
+  // Map-side `name` from the reactor life node — scripts look siblings up by
+  // it (HPQ's 9108xxx act() asks for "fullmoon")
+  name: string = '';
   facing: number = 0;
   layer: number = 0;
   map: any = null;
@@ -82,10 +84,12 @@ export default class Reactor {
     reactorTime: number;
     f?: number;
     map?: any;
+    name?: string;
   }): Promise<Reactor> {
     const reactor = new Reactor();
     reactor.id = opts.id;
     reactor.oId = (opts as any).oId ?? 0;
+    reactor.name = opts.name ? String(opts.name) : '';
     reactor.x = opts.x;
     reactor.y = opts.y;
     reactor.pos = { x: opts.x, y: opts.y };
@@ -365,9 +369,11 @@ export default class Reactor {
     // whoever schedules the respawn so every client agrees on when it is due.
     this.respawnAt = this.reactorTime > 0 ? Date.now() + this.reactorTime * 1000 : 0;
 
-    // Only the player who hit the reactor creates drops
+    // Only the player who hit the reactor acts on the break: the reactor's
+    // ACT script if it has one (public/scripts/reactor/<id>.js — drops,
+    // spawns, PQ stage bookkeeping), else the static drop table
     if (!this._isRemoteHit) {
-      this.dropItems();
+      void this.runAct();
     }
 
     // Play break sound
@@ -378,58 +384,21 @@ export default class Reactor {
     } catch {}
   }
 
-  private async dropItems(): Promise<void> {
-    const drops = REACTOR_DROPS.get(this.id);
-    if (!drops || !this.map) return;
-
-    const questManager = (window as any).charecter?.questManager;
-    const spacing = 25;
-    let dropIndex = 0;
-
-    for (const drop of drops) {
-      // Quest-gated drops: only drop if player has the quest active
-      if (drop.questId > 0) {
-        if (!questManager?.activeQuests?.has(drop.questId)) continue;
-        // Check if player already has enough
-        const currentCount = questManager.getItemCount(drop.itemId);
-        // Look up required count from quest requirements
-        const QuestData = (await import('./Quest/QuestData')).default;
-        const reqs = QuestData.requirements.get(drop.questId);
-        if (reqs?.complete?.items) {
-          const needed = reqs.complete.items.find((i: any) => i.id === drop.itemId);
-          if (needed && currentCount >= needed.count) continue;
-        }
-      }
-
-      // Chance check — higher chance value = rarer (1 = 100%, 2 = 50%, 10 = 10%)
-      // Quest items with chance=1 get a realistic drop rate (~30%)
-      const effectiveChance = (drop.questId > 0 && drop.chance <= 1) ? 3 : drop.chance;
-      if (Math.random() >= (1 / effectiveChance)) continue;
-
-      // Create the drop using DropItemSprite.fromOpts (same pattern as Monster)
-      const offsetX = (dropIndex - 1) * spacing;
-      try {
-        const dropItem = await DropItemSprite.fromOpts({
-          id: drop.itemId,
-          monster: {
-            pos: { x: this.x + offsetX, y: this.y, vx: 0, vy: 0 },
-          },
-          amount: 1,
-        });
-        if (dropItem && !dropItem.destroyed) {
-          const dropId = Date.now() + Math.floor(Math.random() * 10000) + dropIndex;
-          (dropItem as any)._netDropId = dropId;
-          this.map.addItemDrop(dropItem);
-          // Broadcast non-quest drops to other players; quest drops stay local
-          if (drop.questId <= 0 && (window as any).__mySocket) {
-            (window as any).__mySocket.sendItemDrop(drop.itemId, 1, this.x + offsetX, this.y, 0, 0, dropId, (window as any).__mySocket.playerId);
-          }
-        }
-      } catch (e) {
-        console.warn(`[Reactor] Failed to create drop ${drop.itemId}:`, e);
-      }
-      dropIndex++;
+  private async runAct(): Promise<void> {
+    const character = (window as any).charecter;
+    try {
+      const ran = await ReactorScriptEngine.runAct(this, this.map, character);
+      if (ran) return;
+    } catch (e) {
+      console.error(`[Reactor] act() failed for ${this.id}:`, e);
     }
+    await this.dropItems();
+  }
+
+  /** Static-table drops — what `rm.dropItems()` does, for reactors without a script */
+  private async dropItems(): Promise<void> {
+    if (!this.map) return;
+    await spawnReactorDrops(this, this.map);
   }
 
   // Come back already destroyed, carrying the deadline from the visit that

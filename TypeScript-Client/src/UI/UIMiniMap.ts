@@ -414,9 +414,11 @@ UIMiniMap._buildCache = function () {
   const mapDrawX = nwW + Math.floor((innerW - mapImgW) / 2);
   const mapDrawY = nwH + padY;
 
-  // Dark background fills the entire inner area
-  ctx.fillStyle = '#2a2a2a';
-  ctx.fillRect(nwW, nwH, innerW, innerH);
+  // No backdrop of our own: the 9-patch above already tiled MaxMap/c over the
+  // interior, and that pixel is (255,255,255,119) — v83's minimap is the map
+  // art over a translucent white field, not a dark box. The map canvases are
+  // transparent-backed (Henesys 100000000 is the coloured town silhouette on
+  // nothing), so they sit straight on the frame's fill.
 
   // Clip minimap image to inner area
   ctx.save();

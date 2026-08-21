@@ -4,6 +4,7 @@ import type MapleMapType from "./MapleMap";
 let _MapleMap: typeof MapleMapType | null = null;
 export function _setMapleMap(m: typeof MapleMapType) { _MapleMap = m; }
 function getMapleMap() { return _MapleMap!; }
+import { FieldLimit } from "./Constants/FieldLimit";
 
 /// https://github.com/NoLifeDev/NoLifeStory/blob/master/src/client/physics.cpp
 const down_jump_multiplier = 0.35355339;
@@ -82,6 +83,13 @@ class Physics {
   // mobs and pets keep the base.
   speedScale: number = 1.0;
   jumpScale: number = 1.0;
+  // Ground friction scale from the map's `info/fs` (1.0 = ordinary ground).
+  // Every ice map in v83 Map.wz carries fs=0.2 — El Nath and its fields,
+  // the Orbis Tower ice floors, the Dead Mine, Happyville, the snowman
+  // map — and nothing else sets it. See update()'s grounded branch for how
+  // it enters the formula. Fed by the entity like speedScale (MapleCharacter
+  // reads it off its map each frame); anything that never sets it keeps 1.
+  groundFriction: number = 1.0;
   walk_speed: number = default_walk_speed;
   landingImpactVy: number = 0; // Records vy at moment of landing for fall damage
   fallStartY: number = 0; // Y position when player left a foothold
@@ -107,6 +115,9 @@ class Physics {
   canDropThrough(): boolean {
     const fh = this.fh;
     if (!fh || fh.cantThrough || fh.forbid) return false;
+    // fieldLimit FALLDOWN (0x20000, Cosmic CANNOTJUMPDOWN): the map forbids
+    // dropping through platforms anywhere — jump-quest floors mostly
+    if (getMapleMap()?.forbids?.(FieldLimit.FALLDOWN)) return false;
     const x = this.x;
     const y = this.y;
     return (getMapleMap().footholdList || []).some((f: any) => {
@@ -315,9 +326,28 @@ class Physics {
         mvr -= fh.force;
         let fs = (1 / shoe_mass) * delta;
         let maxf = 1 * this.walk_speed * this.speedScale;
+        // Ice. The map's `fs` scales BOTH the ground drag and the walking
+        // force, clamped to the same [min_friction, max_friction] window the
+        // shoe friction uses. Physically it is the friction coefficient of
+        // the surface: friction is what lets the feet push (acceleration) and
+        // what stops the slide (drag), so one number governs both — scaling
+        // drag alone would give a character that stops slowly but still
+        // snaps to full speed, which is a wet floor, not ice. With the
+        // original constants (walkDrag 80000, walkForce 140000, mass 100)
+        // ordinary ground is 800 px/s^2 of drag and 1400 px/s^2 of push, so
+        // walking speed (125) is reached in 0.09s and lost in 0.16s; at
+        // fs=0.2 both fall to a fifth — 0.45s to get going and a 0.78s,
+        // ~50px slide after the key is released. Over-speed from a landing
+        // bleeds off through the same scaled drag, so a jump onto ice skids.
+        const friction = Math.max(
+          Math.min(this.groundFriction, max_friction),
+          min_friction
+        );
+        const walkAcc = shoe_walk_acc * walk_force * friction;
         let drag =
           Math.max(Math.min(shoe_walk_drag, max_friction), min_friction) *
-          walk_drag;
+          walk_drag *
+          friction;
         let slip = fy / len;
         if (shoe_walk_slant < Math.abs(slip)) {
           let slipf = slip_force * slip;
@@ -331,11 +361,11 @@ class Physics {
           mvr = mleft
             ? mvr < -maxf
               ? Math.min(-maxf, mvr + drag * fs)
-              : Math.max(-maxf, mvr - shoe_walk_acc * walk_force * fs)
+              : Math.max(-maxf, mvr - walkAcc * fs)
             : mright
             ? mvr > maxf
               ? Math.max(maxf, mvr - drag * fs)
-              : Math.min(maxf, mvr + shoe_walk_acc * walk_force * fs)
+              : Math.min(maxf, mvr + walkAcc * fs)
             : mvr < 0
             ? Math.min(0, mvr + drag * fs)
             : mvr > 0

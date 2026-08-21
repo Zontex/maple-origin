@@ -49,6 +49,8 @@ const UIChatLog = {
   _downImg: null as HTMLImageElement | null,
   _minImg: null as HTMLImageElement | null,
   _maxImg: null as HTMLImageElement | null,
+  /** StatusBar.img/base/chat — the 566x5 bevelled rule that caps the log */
+  _edgeImg: null as HTMLImageElement | null,
   _assetsLoaded: false,
 
   // Offscreen context used only to measure text for wrapping
@@ -60,6 +62,7 @@ const UIChatLog = {
     try {
       const statusBar: any = await WZManager.get('UI.wz/StatusBar.img');
       this._chipImg = statusBar?.nGet('base')?.nGet('chatTarget')?.nGetImage?.() || null;
+      this._edgeImg = statusBar?.nGet('base')?.nGet('chat')?.nGetImage?.() || null;
 
       const basic: any = await WZManager.get('UI.wz/Basic.img');
       const vscr = basic?.nGet?.('VScr4')?.nGet?.('enabled');
@@ -153,14 +156,18 @@ const UIChatLog = {
         this.drawShadowText(ctx, 'To All', uiX + 11, rowY + 4, '#ffffff');
       }
     } else {
-      // Minimized — dark strip over the input row showing the newest message
-      ctx.save();
-      ctx.fillStyle = 'rgba(6, 15, 28, 0.8)';
-      ctx.fillRect(uiX, rowY, LOG_W, 20);
-      ctx.restore();
+      // Minimized — the newest line sits in the status bar's own pale input
+      // groove (baked into base/backgrnd), in the black the groove's typed
+      // text uses; no strip of our own over the art
       const last = this.rows[this.rows.length - 1];
       if (last) {
-        this.drawShadowText(ctx, last.text, uiX + 6, rowY + 4, COLORS[last.type]);
+        ctx.save();
+        ctx.font = FONT;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = '#000000';
+        ctx.fillText(last.text, uiX + 6, rowY + 4);
+        ctx.restore();
       }
     }
 
@@ -169,13 +176,19 @@ const UIChatLog = {
       ctx.drawImage(toggleImg, btnX, btnY);
     }
 
-    // Expanded history box above the input row
+    // Expanded history box above the input row. v83 ships no frame for the
+    // log (StatusBar.img/base has only the 566x5 `chat` rule) — the client
+    // painted the translucent black field itself, so that stays, capped by
+    // the rule the way the original's drag edge sat on top of it.
     if (this.expanded) {
       const logTop = logBottom - VISIBLE_ROWS * LINE_H - 4;
       ctx.save();
       ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
       ctx.fillRect(uiX, logTop, LOG_W, logBottom - logTop);
       ctx.restore();
+      if (this._edgeImg?.complete && this._edgeImg.width > 0) {
+        ctx.drawImage(this._edgeImg, uiX, logTop - this._edgeImg.height);
+      }
 
       const maxOffset = Math.max(0, this.rows.length - VISIBLE_ROWS);
       this.scrollOffset = Math.max(0, Math.min(maxOffset, this.scrollOffset));

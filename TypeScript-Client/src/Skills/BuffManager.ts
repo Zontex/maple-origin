@@ -11,6 +11,11 @@ export interface ActiveBuff {
 // Hyper Body raises max HP/MP by a percentage (effect.x / effect.y)
 const HYPER_BODY_SKILL_ID = 1301007;
 
+// v83 draws no remaining-time bar under a buff icon: the icon simply blinks
+// through its last few seconds and vanishes when the buff drops.
+const BUFF_BLINK_WINDOW_MS = 5000;
+const BUFF_BLINK_PERIOD_MS = 250;
+
 export default class BuffManager {
   activeBuffs: Map<number, ActiveBuff> = new Map();
   // Fired whenever a buff is applied or removed so stats can recalc
@@ -148,23 +153,20 @@ export default class BuffManager {
     return total;
   }
 
-  // Draw buff icons above HP bar area
+  // Draw buff icons above HP bar area. An icon in its last five seconds
+  // blinks (hidden every other quarter second) — that is the whole of v83's
+  // expiry warning; the slot stays reserved so its neighbours don't shuffle.
   renderBuffIcons(canvas: GameCanvas, baseX: number, baseY: number): void {
     let x = baseX;
     const ctx = canvas.context;
+    const now = Date.now();
 
     for (const buff of this.activeBuffs.values()) {
       if (buff.icon && buff.icon.complete && buff.icon.width > 0) {
-        // Draw icon at 24x24
-        ctx.drawImage(buff.icon, x, baseY, 24, 24);
-
-        // Remaining time indicator (shrinking bar under icon)
-        const remaining = Math.max(0, buff.expiresAt - Date.now());
-        const total = (buff.effect.time || 1) * 1000;
-        const ratio = remaining / total;
-        ctx.fillStyle = '#44cc44';
-        ctx.fillRect(x, baseY + 24, Math.floor(24 * ratio), 2);
-
+        const remaining = buff.expiresAt - now;
+        const hidden = remaining < BUFF_BLINK_WINDOW_MS
+          && Math.floor(now / BUFF_BLINK_PERIOD_MS) % 2 === 1;
+        if (!hidden) ctx.drawImage(buff.icon, x, baseY, 24, 24);
         x += 26;
       }
     }

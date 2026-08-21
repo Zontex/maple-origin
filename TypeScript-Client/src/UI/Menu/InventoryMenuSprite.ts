@@ -29,7 +29,20 @@ import UIEquipTooltip from "../UIEquipTooltip";
 import { formatRemaining, FACE_COUPON_EXPRESSIONS } from "../../Shop/CashShopData";
 import UIAvatarMegaphone, { isMegaphoneItem } from "../UIAvatarMegaphone";
 import { getEquipSlotForItem } from "./EquipMenuSprite";
+import { FieldLimit, FIELD_LIMIT_MESSAGE, currentMapForbids } from "../../Constants/FieldLimit";
+import Weather, { isWeatherItem } from "../../Effects/Weather";
+import UIChatLog from "../UIChatLog";
 import UIKeyConfig from "../UIKeyConfig";
+import { drawPlate } from "../UIToolTipPlate";
+
+// Tab strip on the 175x289 backgrnd, measured off the decoded PNG: the pale
+// band is y=23..41 and the red underline y=42..44 spanning x=3..171. The
+// plates (Item/New/Tab1|Tab0, 34 wide) hang from that line exactly as the
+// Skill window's do — five of them fill x=4..174.
+const TAB_X0 = 4;
+const TAB_W = 34;
+const TAB_STRIP_BOTTOM = 42;
+const TAB_PLATE_H = 19;   // selected plate; the grey one is 18
 
 class InventoryMenuSprite extends DragableMenu {
   opts: any;
@@ -55,8 +68,9 @@ class InventoryMenuSprite extends DragableMenu {
   consumeSound: any = null;
   // Scrollbar images
   _scrollbarImages: any = null;
-  // Tab frame images from Basic.img/Tab
-  _tabFrames: any = null;
+  // Tab plates from UIWindow.img/Item/New: Tab1/0 pink (selected), Tab0/0 grey
+  _tabPlateOn: HTMLImageElement | null = null;
+  _tabPlateOff: HTMLImageElement | null = null;
   // Item quantity digit images from Basic.img/ItemNo
   _itemNoDigits: HTMLImageElement[] = [];
   // Tooltip state
@@ -92,6 +106,11 @@ class InventoryMenuSprite extends DragableMenu {
     try {
       this.inventoryNode = await WZManager.get(`${WZFiles.UI}/UIWindow.img/Item`);
       console.log("Loaded inventory UI node:", this.inventoryNode);
+      // Tab plates. Always variant 0: 1-4 under Tab0/Tab1 are the shades the
+      // tab pulses through when a new item lands in it, not per-tab colours.
+      const newNode = this.inventoryNode?.New;
+      this._tabPlateOn = newNode?.Tab1?.nGet?.('0')?.nGetImage?.() || null;
+      this._tabPlateOff = newNode?.Tab0?.nGet?.('0')?.nGetImage?.() || null;
     } catch (e) {
       console.error("Error loading inventory UI node:", e);
     }
@@ -123,18 +142,6 @@ class InventoryMenuSprite extends DragableMenu {
           prev: vscr.enabled.prev0?.nGetImage(),
           next: vscr.enabled.next0?.nGetImage(),
           thumb: vscr.enabled.thumb0?.nGetImage(),
-        };
-      }
-      // Tab frame pieces (0 = inactive, 1 = active/selected)
-      const tabFrame = basicNode.Tab;
-      if (tabFrame) {
-        this._tabFrames = {
-          left0: tabFrame.left0?.nGetImage(),
-          left1: tabFrame.left1?.nGetImage(),
-          fill0: tabFrame.fill0?.nGetImage(),
-          fill1: tabFrame.fill1?.nGetImage(),
-          right0: tabFrame.right0?.nGetImage(),
-          right1: tabFrame.right1?.nGetImage(),
         };
       }
       // Item quantity digit sprites
@@ -560,82 +567,37 @@ class InventoryMenuSprite extends DragableMenu {
       MapleInventoryType.ETC,
       MapleInventoryType.CASH,
     ];
-    const labels = ['Equip', 'Use', 'Set-up', 'Etc', 'Cash'];
-
-    // Tabs fit within the inventory width (175px), with small margins
-    const tabTotalWidth = 168;
-    const tabCount = 5;
-    const tabW = Math.floor(tabTotalWidth / tabCount);
-    let tabX = this.x + 4;
-    const tabY = this.y + 24;
-    const tabH = 20;
 
     for (let i = 0; i < tabTypes.length; i++) {
       const isActive = this.currentTab === tabTypes[i];
+      const tabX = this.x + TAB_X0 + i * TAB_W;
 
-      // Draw tab background — active = pink/red, inactive = light grey-blue
-      const ctx = canvas.context;
-      ctx.save();
+      // Plate first — Tab1/0 (pink) under the lit tab, Tab0/0 (grey) under the
+      // rest. The selected plate is a pixel taller (19 vs 18), so both are
+      // bottom-aligned on the strip's red underline and the lit one rises a
+      // pixel over it, which is what makes it read as "in front".
+      const plate = isActive ? this._tabPlateOn : this._tabPlateOff;
+      const plateH = plate?.height || (isActive ? TAB_PLATE_H : TAB_PLATE_H - 1);
+      const plateW = plate?.width || TAB_W;
+      const plateY = this.y + TAB_STRIP_BOTTOM - plateH;
+      if (plate && plate.width > 0) canvas.drawImage({ img: plate, dx: tabX, dy: plateY });
 
-      // Draw rounded tab shape
-      const r = 3; // corner radius
-      ctx.beginPath();
-      ctx.moveTo(tabX + r, tabY);
-      ctx.lineTo(tabX + tabW - r, tabY);
-      ctx.arcTo(tabX + tabW, tabY, tabX + tabW, tabY + r, r);
-      ctx.lineTo(tabX + tabW, tabY + tabH);
-      ctx.lineTo(tabX, tabY + tabH);
-      ctx.lineTo(tabX, tabY + r);
-      ctx.arcTo(tabX, tabY, tabX + r, tabY, r);
-      ctx.closePath();
-
-      if (isActive) {
-        ctx.fillStyle = '#dd4466';
-        ctx.fill();
-        // Lighter top highlight
-        ctx.save();
-        ctx.clip();
-        ctx.fillStyle = '#ee6688';
-        ctx.fillRect(tabX, tabY, tabW, 2);
-        ctx.restore();
-      } else {
-        ctx.fillStyle = '#b8c4d8';
-        ctx.fill();
-      }
-
-      // Thin border
-      ctx.strokeStyle = '#8899bb';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      ctx.restore();
-
-      // Draw label — try WZ image first, fall back to text
+      // Label sprite centred on the plate it sits on: `enabled` is the dark
+      // glyph for the pink plate, `disabled` the light one for the grey
       let labelImg: HTMLImageElement | null = null;
       try {
         if (tabNode) {
           const stateNode = isActive ? tabNode.enabled : tabNode.disabled;
           labelImg = stateNode.nGet(`${i}`).nGetImage();
         }
-      } catch (e) { /* fallback */ }
-
+      } catch (e) { /* plate alone still reads */ }
       if (labelImg && labelImg.width > 0) {
-        const labelX = tabX + Math.floor((tabW - labelImg.width) / 2);
-        const labelY = tabY + Math.floor((tabH - (labelImg.height || 11)) / 2);
-        canvas.drawImage({ img: labelImg, dx: labelX, dy: labelY });
-      } else {
-        canvas.drawText({
-          text: labels[i],
-          x: tabX + tabW / 2,
-          y: tabY + 4,
-          color: isActive ? '#ffffff' : '#444466',
-          align: 'center',
-          fontSize: 11,
-          fontWeight: isActive ? 'bold' : '',
+        canvas.drawImage({
+          img: labelImg,
+          dx: tabX + Math.round((plateW - labelImg.width) / 2),
+          dy: plateY + Math.round((plateH - labelImg.height) / 2),
         });
       }
-
-      tabX += tabW;
     }
   }
 
@@ -666,12 +628,9 @@ class InventoryMenuSprite extends DragableMenu {
   }
 
   handleTabClick(mouseX: number, mouseY: number) {
-    // Tab click regions — 5 tabs across the top
-    // Tabs are at y=28 to y=45, with varying widths
-    const tabY = this.y + 28;
-    const tabH = 16;
-
-    if (mouseY < tabY || mouseY > tabY + tabH) return false;
+    // Same geometry drawTabs paints: five 34px plates hanging from the strip
+    const tabY = this.y + TAB_STRIP_BOTTOM - TAB_PLATE_H;
+    if (mouseY < tabY || mouseY > tabY + TAB_PLATE_H) return false;
 
     const tabs = [
       MapleInventoryType.EQUIP,
@@ -681,13 +640,9 @@ class InventoryMenuSprite extends DragableMenu {
       MapleInventoryType.CASH
     ];
 
-    // Each tab is ~30px wide, starting at x=7
-    const tabStartX = this.x + 7;
-    const tabWidth = 30;
-
     for (let i = 0; i < tabs.length; i++) {
-      const tabX = tabStartX + i * tabWidth;
-      if (mouseX >= tabX && mouseX < tabX + tabWidth) {
+      const tabX = this.x + TAB_X0 + i * TAB_W;
+      if (mouseX >= tabX && mouseX < tabX + TAB_W) {
         this.currentTab = tabs[i];
         return true;
       }
@@ -775,6 +730,9 @@ class InventoryMenuSprite extends DragableMenu {
                   void PetManager.useEvolutionRock(item, slotIndex, this.charecter);
                 } else if (isMegaphoneItem(item.itemId)) {
                   void UIAvatarMegaphone.promptAndSend(item, this.charecter);
+                } else if (isWeatherItem(item.itemId)) {
+                  // Weather items: ask for the message, consume, relay to the map
+                  void Weather.promptAndUse(item, slotIndex, this.charecter);
                 } else if (FACE_COUPON_EXPRESSIONS[item.itemId]) {
                   // Face-expression coupons fire their emote (not consumed)
                   this.charecter.playEmote?.(FACE_COUPON_EXPRESSIONS[item.itemId]);
@@ -1150,7 +1108,19 @@ class InventoryMenuSprite extends DragableMenu {
     const moveToNode = spec.moveTo ?? spec.nGet?.('moveTo');
     const moveTo = parseInt(moveToNode?.nValue ?? moveToNode ?? NaN);
     if (!isNaN(moveTo)) {
+      // fieldLimit PORTALSCROLL (0x20): the map refuses return scrolls
+      if (currentMapForbids(FieldLimit.PORTALSCROLL)) {
+        UIChatLog.system(FIELD_LIMIT_MESSAGE);
+        return;
+      }
       this.consumeReturnScroll(item, moveTo);
+      return;
+    }
+
+    // fieldLimit POTIONUSE (0x400, the client's STATCHANGEITEMCONSUMELIMIT):
+    // no potions or food here — v83's "You can't use it here in this map."
+    if (currentMapForbids(FieldLimit.POTIONUSE)) {
+      UIChatLog.system(FIELD_LIMIT_MESSAGE);
       return;
     }
 
@@ -1456,17 +1426,8 @@ class InventoryMenuSprite extends DragableMenu {
     if (tx < 0) tx = 0;
     if (ty < 0) ty = 0;
 
-    // Draw dark blue/purple background (matching original MapleStory tooltip)
-    canvas.drawRect({
-      x: tx,
-      y: ty,
-      width: tooltipWidth,
-      height: tooltipHeight,
-      color: '#1a1230',
-      alpha: 0.92,
-      stroke: '#6666AA',
-      strokeWidth: 1,
-    });
+    // The shared v83 translucent navy plate
+    drawPlate(canvas.context, tx, ty, tooltipWidth, tooltipHeight);
 
     // Draw item name with bullet
     canvas.drawText({
@@ -1493,15 +1454,7 @@ class InventoryMenuSprite extends DragableMenu {
     // Draw icon
     const bodyY = separatorY + 4;
     if (icon) {
-      // Icon background
-      canvas.drawRect({
-        x: tx + padding,
-        y: bodyY,
-        width: iconSize,
-        height: iconSize,
-        color: '#14102a',
-        alpha: 0.6,
-      });
+      // The icon sits straight on the plate — v83 has no backing square here
       canvas.drawImage({
         img: icon,
         dx: tx + padding + (iconSize - icon.width) / 2,

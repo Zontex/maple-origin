@@ -7,6 +7,7 @@ import { Position } from '../../Effects/DamageIndicator';
 import GameCanvas from '../../GameCanvas';
 import QuestData, { mobNames, resolveItemCodes, getItemNameSync, ensureMapNames } from '../../Quest/QuestData';
 import type MapleCharacter from '../../MapleCharacter';
+import { drawSelectionBar } from '../UISelectionBar';
 
 enum QuestTab {
   AVAILABLE = 0,
@@ -99,6 +100,9 @@ class QuestLogMenuSprite extends DragableMenu {
   private summaryLbl: any = null;
   private tabLblEnabled: any[] = [];
   private tabLblDisabled: any[] = [];
+  /** Basic.img/CheckBox 0 (empty) / 1 (red check) — category fold toggles */
+  private checkBoxOff: HTMLImageElement | null = null;
+  private checkBoxOn: HTMLImageElement | null = null;
   private buttons: MapleStanceButton[] = [];
 
   // Progress gauge
@@ -188,6 +192,8 @@ class QuestLogMenuSprite extends DragableMenu {
 
       // Scrollbar (VScr4)
       const basicNode = await WZManager.get('UI.wz/Basic.img');
+      this.checkBoxOff = (basicNode as any)?.CheckBox?.nGet?.('0')?.nGetImage?.() || null;
+      this.checkBoxOn = (basicNode as any)?.CheckBox?.nGet?.('1')?.nGetImage?.() || null;
       const vscr = (basicNode as any)?.VScr4;
       if (vscr?.enabled) {
         this.scrollPrev = vscr.enabled.prev0?.nGetImage?.() || null;
@@ -536,19 +542,11 @@ class QuestLogMenuSprite extends DragableMenu {
       const entry = this.displayList[i];
 
       if (entry.type === 'category') {
-        // Category header with collapse/expand icon
-        // Blue square icon
-        const ctx = canvas.context;
-        ctx.save();
-        ctx.fillStyle = '#5577AA';
-        ctx.fillRect(lx, ly + 2, 12, 12);
-        ctx.strokeStyle = '#334466';
-        ctx.strokeRect(lx, ly + 2, 12, 12);
-        // + or - sign
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = 'bold 10px Arial';
-        ctx.fillText(entry.collapsed ? '+' : '-', lx + 3, ly + 12);
-        ctx.restore();
+        // Category row: a faint band, then the fold toggle as Basic.img/CheckBox
+        // (1 = red check while the group is open, 0 = empty box when folded)
+        drawSelectionBar(canvas.context, lx - 2, ly, LIST_W, ENTRY_H, 0.12);
+        const box = entry.collapsed ? this.checkBoxOff : this.checkBoxOn;
+        if (box && box.width > 0) canvas.drawImage({ img: box, dx: lx, dy: ly + 2 });
 
         // Category name with count
         canvas.drawText({
@@ -557,14 +555,6 @@ class QuestLogMenuSprite extends DragableMenu {
           x: lx + 16, y: ly + 3, fontSize: 11, fontWeight: 'bold',
         });
 
-        // Light blue background for category row
-        const ctx2 = canvas.context;
-        ctx2.save();
-        ctx2.globalAlpha = 0.15;
-        ctx2.fillStyle = '#6699CC';
-        ctx2.fillRect(lx - 2, ly, LIST_W, ENTRY_H);
-        ctx2.restore();
-
       } else {
         // Quest entry
         const questInfo = QuestData.quests.get(entry.questId);
@@ -572,7 +562,7 @@ class QuestLogMenuSprite extends DragableMenu {
         const selected = entry.questId === this.selectedQuestId;
 
         if (selected) {
-          canvas.drawRect({ x: lx - 2, y: ly, width: LIST_W, height: ENTRY_H, color: '#4477BB', alpha: 0.3 });
+          drawSelectionBar(canvas.context, lx - 2, ly, LIST_W, ENTRY_H);
         }
 
         // Quest status icon (icon0 available / icon1 in progress / icon4 done)

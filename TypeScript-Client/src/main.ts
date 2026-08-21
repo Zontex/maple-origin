@@ -4,7 +4,6 @@ import GameLoop from "./Gameloop";
 import Timer from "./Timer";
 import WZManager from "./wz-utils/WZManager";
 import Camera from "./Camera";
-import SessionManager from "./SessionManager";
 import MySocket, { wasDisconnected } from "./mysocket";
 import StateManager from "./StateManager";
 import LoginState from "./LoginState";

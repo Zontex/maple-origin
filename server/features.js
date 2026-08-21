@@ -7,3 +7,7 @@ require('./handlers/buddy');
 require('./handlers/fame');
 require('./handlers/trade');
 require('./handlers/guild');
+require('./handlers/summon');
+require('./handlers/door');
+require('./handlers/mobskill');
+require('./handlers/weather');

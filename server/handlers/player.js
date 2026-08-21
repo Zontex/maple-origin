@@ -122,6 +122,9 @@ function handlePlayerUpdate(playerId, updateData) {
   if (updateData.attacking !== undefined) updatedInfo.attacking = updateData.attacking;
   // Face emote is transient — present while held, absent otherwise
   updatedInfo.emote = updateData.emote;
+  // Seated state (chair item / map seat) persists in info for late joiners
+  if (updateData.chairId !== undefined) updatedInfo.chairId = updateData.chairId;
+  if (updateData.seatId !== undefined) updatedInfo.seatId = updateData.seatId;
   // Summoned-pet roster (persists in info so late joiners see the pets);
   // petAction is a one-shot like emote — present for one broadcast only
   if (updateData.pets !== undefined) updatedInfo.pets = updateData.pets;

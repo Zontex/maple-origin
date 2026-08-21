@@ -520,7 +520,12 @@ class Stats {
   // v83 accuracy is uniform across jobs (dex·0.8 + luk·0.5) plus gear/buff/passive
   // bonuses — all folded into localAcc by recalcLocalStats
   getAccuracy() {
-    return this.localAcc;
+    // Darkness (mob skill 121) cuts the local player's accuracy for its
+    // duration — read off the status module rather than folded into
+    // localAcc so recalcLocalStats never has to know about diseases
+    const status = (window as any).charecter?.status;
+    const mul = status && status.owner?.stats === this ? status.accuracyMultiplier : 1;
+    return mul === 1 ? this.localAcc : Math.floor(this.localAcc * mul);
   }
 
   getAvoidability() {

@@ -15,6 +15,7 @@ import {
   preloadEmblemParts,
 } from '../../Guild/GuildEmblem';
 import { getJobNameById } from '../../Constants/Jobs';
+import { drawSelectionBar } from '../UISelectionBar';
 
 /**
  * Guild window — v83 UIWindow.img/UserList with the Guild tab live (G key).
@@ -792,11 +793,7 @@ class GuildMenuSprite extends DragableMenu {
         const m = e.member;
         if (rowBg?.width) canvas.drawImage({ img: rowBg, dx: this.x + ROW_X, dy: y });
         if (m.characterId === this.selectedCharacterId) {
-          ctx.save();
-          ctx.globalAlpha = 0.25;
-          ctx.fillStyle = '#3366cc';
-          ctx.fillRect(this.x + ROW_X + 1, y + 1, 279, ROW_H - 2);
-          ctx.restore();
+          drawSelectionBar(ctx, this.x + ROW_X + 1, y + 1, 279, ROW_H - 2);
         }
         const color = m.online ? '#000000' : '#808080';
         this.drawClippedText(canvas, m.name, this.x + ROW_X + COL_NAME_X, y + 4, 112, color);
@@ -865,13 +862,23 @@ class GuildMenuSprite extends DragableMenu {
     const cx = r.x + Math.floor(r.width / 2);
     if (prompt) {
       canvas.drawText({ text: prompt.title, x: cx, y: r.y + 38, color: '#000000', fontSize: 12, align: 'center' });
-      // The field sits on the frame's own panel; a hairline marks where to type
-      const ctx = canvas.context;
-      ctx.save();
-      ctx.fillStyle = '#000000';
-      ctx.globalAlpha = 0.35;
-      ctx.fillRect(r.x + 32, r.y + 80, 200, 1);
-      ctx.restore();
+      // The entry field under the DOM input: UserList/Guild/GuildInfo/guildinfo6,
+      // the window's own white rounded field (282x20), sliced end-cap /
+      // stretch / end-cap down to the 200px the input occupies
+      const field = this.info.guildinfo6;
+      if (field?.width) {
+        const fx = r.x + 32, fy = r.y + 62, fw = 200, cap = 10;
+        const fh = field.height;
+        canvas.drawImage({ img: field, sx: 0, sy: 0, sw: cap, sh: fh, dx: fx, dy: fy });
+        canvas.drawImage({
+          img: field, sx: cap, sy: 0, sw: field.width - cap * 2, sh: fh,
+          dx: fx + cap, dy: fy, dw: fw - cap * 2, dh: fh,
+        });
+        canvas.drawImage({
+          img: field, sx: field.width - cap, sy: 0, sw: cap, sh: fh,
+          dx: fx + fw - cap, dy: fy,
+        });
+      }
     } else if (invite) {
       canvas.drawText({
         text: `'${invite.fromName}' has invited you`,

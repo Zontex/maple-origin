@@ -60,23 +60,22 @@ Deferred inside Tier 3: guild alliances, Guild BBS/ranking/GP, the GUILD
 CONTRACT co-signing scroll, buddy groups/TALK/NOTE/BLOCK, whisper via the
 party window's buttons beyond the bridge, Trade's BtReset.
 
-### Tier 4 — World fidelity
+### Tier 4 — done 2026-08-21 (with deferrals)
 
-1. **Mob skills** — no `MobSkill.img` support: heal, summon, poison, stun,
-   seduce, dispel, stat-ups, reflect (`Monster.ts` parses only attack1-4).
-2. **Summons** — no player summons at all (Puppet, Silver Hawk, Golden Eagle...).
-3. **Portals** — hidden portals (types 10/11) render permanently instead of
-   revealing on proximity; touch portals (3/9) require Up instead of triggering
-   on contact; Mystic Door (6) unhandled (`Portal.ts`).
-4. **Map seats** — `Obj.ts:50` parses and discards `seat` nodes; town benches
-   unusable (chair system exists — extend the sit action to map seats). Sitting
-   is also never broadcast to other players.
-5. **Ice/slippery maps** — per-map `info/fs` friction never read (`Physics.ts`).
-6. **Weather effects + fieldLimit** — no snow/rain overlays; `fieldLimit`
-   bitflags unenforced (jump-down/teleport/potion restrictions).
-7. **Reactor scripts** — reactors run a full WZ state machine but drops come
-   from a static table; no reactor ACT script engine, no generic event/mob-spawn
-   reactors (HenesysPQ's are hand-coded).
+Mob skills (`MobSkill.img`: heal, summon, stat-ups, immunity/reflect, the
+player diseases with v83's two-disease cap), player summons (generic from the
+skills' `summon` stances — hawks/eagles, Puppet, dragons, Ifrit/Elquines,
+Octopus/Gaviota, Phoenix/Frostprey, Beholder), the full portal type table
+(`ph`/`psh` hidden-portal reveal, contact portals), Mystic Door in both rooms,
+map seats + remote chairs, `info/fs` ice friction, `fieldLimit` bits with their
+gates, Cash Shop weather items, and Cosmic's 292 reactor ACT scripts through a
+new `ReactorScriptEngine`.
+
+Deferred inside Tier 4: mob poison mist (131), 134-136, hard skin (142); mobs
+do not aggro the Puppet; a player joining after a mob-summoned mob appeared
+doesn't see it until it dies; weather `stateChangeItem` map buffs; reactor
+`touch()` scripts (no touch detection); script-spawned mobs are local to the
+breaking client.
 
 ### Tier 5 — Content
 
@@ -96,28 +95,24 @@ party window's buttons beyond the bridge, Trade's BtReset.
    (Tier 4.2), party buffs (Tier 3.4), map/door skills (Mystic Door), Dark Sight
    invisibility rules, Recovery-family passives (Tier 1.5).
 
-### Tier 6 — UI fidelity polish
+### Tier 6 — done 2026-08-21
 
-1. **Tabs** — inventory (`InventoryMenuSprite.ts:576`) and cash shop draw tabs
-   as colored rounded rects; the WZ `Basic.img/Tab` pieces are already loaded
-   and unused. Skill/quest/party windows do it right — copy them.
-2. **Tooltip plates** — six copies of a custom navy fillRect panel (equip
-   tooltip, inventory, equip window, skill window, shop, cash shop). Extract one
-   shared plate renderer; v83 ships no UIToolTip frame in this version, so keep
-   the current look but stop duplicating it.
-3. **Minimap** — inner `#2a2a2a` fillRect backdrop + Arial map names; no NPC
-   list (BtNpc) panel.
-4. **Small fillRect offenders** — skill-window scrollbar track, quest-log
-   checkbox/row highlight, party selected-row highlight, chat-log backdrops.
-5. **Font** — prose is Arial everywhere; WZ bitmap digits are used only for
-   numbers. Evaluate a v83-style webfont/bitmap pass (deliberate decision, not
-   an accident — `UIQuestAlarm.ts:28` documents it).
-6. **Login polish** — character delete has no confirmation dialog
-   (`UILogin.ts:450`); world list is hardcoded client-side (server endpoint
-   exists, never called); channel choice never sent (ties to Tier 2.5).
-7. **Dead code cleanup** — `UINpcTalk` is never shown (superseded by
-   UIQuestDialog); the `Net/` binary protocol stack is unused (keep as Cosmic
-   port reference or delete); ESC menu `skin` action is a stub.
+WZ tab plates in the inventory and cash shop, one shared tooltip plate
+(`UI/UIToolTipPlate.ts`), the minimap's fillRect backdrop dropped (the 9-patch
+already paints the interior; v83 ships no NPC-list art), selection bars and
+checkboxes from WZ, buff icons blink instead of a timer bar, character delete
+confirmation from `Login.img/Notice/text/13`, the world list from the server
+(20 channels from the art), CHANGE SKIN drawn disabled (no skin set exists in
+UI.wz), `UINpcTalk` removed, `Net/` kept as the documented Cosmic-port
+reference.
+
+**Font decision (6.5): keep Arial.** GMS rendered text with Arial through GDI
+(HeavenClient loads arial.ttf at 11/12/13/14/15/18 px); the WZ has no text
+font beyond the Memo window's bitmap strips and the digit strips. What differs
+from v83 is GDI's unhinted small-size look, which no web font reproduces. Only
+follow-ups: audit any player-visible `monospace` sites, pin sizes to the
+11/12/13 set with bold where v83 used A11B/A12B, and add Liberation Sans as a
+metric-compatible fallback for platforms without Arial.
 
 ### Tier 7 — Long term: the Cosmic port
 
@@ -135,7 +130,8 @@ JSON-over-WS relay stays the trust model, by design.
 2. ~~Drop registry + save sequencing~~ done (all of Tier 2).
 3. ~~Trade + whispers/buddy~~ done.
 4. ~~Party buffs → party HP bars~~ done.
-5. **Mob skills + summons** (Tier 4.1-4.2) — the last big combat-fidelity gap.
-6. **Portals/seats/ice/weather** (Tier 4.3-4.6) — world polish batch.
+5. ~~Mob skills + summons~~ done.
+6. ~~Portals/seats/ice/weather~~ done.
 7. **Kerning PQ** (Tier 5.1) — proves the event template generalizes.
-8. **UI fidelity pass** (Tier 6) — tabs first, then the shared tooltip plate.
+8. ~~UI fidelity pass~~ done.
+9. **Play-test everything from 2026-08-21** — two large commits landed without a browser; the Tier 3/4/6 windows and effects were laid out from decoded sprites.

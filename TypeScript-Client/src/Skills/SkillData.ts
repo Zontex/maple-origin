@@ -29,6 +29,12 @@ export interface SkillLevelEffect {
   mp: number;
   damagepc: number;
   /**
+   * Item a cast consumes, with how many — Silver Hawk / Golden Eagle / Summon
+   * Dragon eat one Summoning Rock (4006001) per cast. 0 = nothing consumed.
+   */
+  itemCon: number;
+  itemConNo: number;
+  /**
    * The `lt`/`rb` attack rectangle, in pixels relative to the character.
    * v83 authors one on area skills only (Thunder Bolt is 300x100 with
    * mobCount 6); single-target skills like Energy Bolt and Power Strike ship
@@ -69,6 +75,15 @@ export interface SkillInfo {
    */
   weapon: number | null;
   element: string | null; // WZ elemAttr char: F/I/L/S/H/D/P (fire/ice/lightning/poison/holy/dark/physical)
+  /**
+   * Summon skills carry a `summon` imgdir beside `level` holding the
+   * creature's own stances (summoned/stand/fly/move/attack1/hit/die). Such a
+   * skill spawns an entity (see Summon/SummonManager) instead of swinging or
+   * buffing, whatever else its root nodes say — Silver Hawk also has a root
+   * `hit`, Puppet only an `action`.
+   */
+  hasSummon: boolean;
+  summonNode: any;
 }
 
 const LEVEL_EFFECT_FIELDS: (keyof SkillLevelEffect)[] = [
@@ -76,7 +91,7 @@ const LEVEL_EFFECT_FIELDS: (keyof SkillLevelEffect)[] = [
   'x', 'y', 'pad', 'pdd', 'mad', 'mdd', 'acc', 'eva',
   'speed', 'jump', 'range', 'cooltime', 'fixdamage',
   'mobCount', 'attackCount', 'bulletCount', 'bulletConsume',
-  'hp', 'mp', 'damagepc',
+  'hp', 'mp', 'damagepc', 'itemCon', 'itemConNo',
 ];
 
 function emptyEffect(): SkillLevelEffect {
@@ -85,7 +100,7 @@ function emptyEffect(): SkillLevelEffect {
     x: 0, y: 0, pad: 0, pdd: 0, mad: 0, mdd: 0, acc: 0, eva: 0,
     speed: 0, jump: 0, range: 0, cooltime: 0, fixdamage: 0,
     mobCount: 1, attackCount: 1, bulletCount: 0, bulletConsume: 0,
-    hp: 0, mp: 0, damagepc: 0,
+    hp: 0, mp: 0, damagepc: 0, itemCon: 0, itemConNo: 0,
     hitBox: null,
     ballNode: null, hitNode: null,
   };
@@ -183,6 +198,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   // damage, no bolt.
   let rootBallNode: any = null;
   let rootHitNode: any = null;
+  let summonNode: any = null;
   let invisible = false;
   let actionStance: string | null = null;
   let element: string | null = null;
@@ -219,6 +235,8 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
       rootBallNode = child;
     } else if (name === 'effect') {
       hasEffect = true;
+    } else if (name === 'summon' && child.nChildren?.length) {
+      summonNode = child;
     } else if (name === 'invisible') {
       invisible = true;
     } else if (name === 'disable') {
@@ -286,7 +304,11 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   }
 
   const levelHasBallOrHit = effects.some(e => e.ballNode || e.hitNode);
-  const isAttack = hasHit || hasBall || levelHasBallOrHit;
+  // A summon counts as an attack for routing: the hotkey bar only charges
+  // MP/HP after an attack cast reports success, which is what a cast that can
+  // fail (no Summoning Rock) needs. useSkill diverts it to SummonManager.
+  const hasSummon = !!summonNode;
+  const isAttack = hasHit || hasBall || levelHasBallOrHit || hasSummon;
   const isBuff = !isAttack && (hasAction || hasEffect);
   const isPassive = !isAttack && !isBuff && effects.length > 0;
 
@@ -321,6 +343,8 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     action: actionStance,
     weapon,
     element,
+    hasSummon,
+    summonNode,
   };
 }
 

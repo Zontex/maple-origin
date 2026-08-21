@@ -32,6 +32,10 @@ class Obj {
   hide: boolean = false;
   tags: string[] = [];
   visible: boolean = true;
+  // `seat/<n>` vectors: where a character sits on this object (a bench, a
+  // log, the rim of a fountain), relative to the object's position. World
+  // coordinates are resolved by MapleMap once x/y/flip are known.
+  seats: Array<{ x: number; y: number }> = [];
 
   static async fromWzNode(wzNode: any) {
     const obj = new Obj(wzNode);
@@ -57,6 +61,9 @@ class Obj {
       } else if (frame.nName === "repeat") {
         this.repeat = frame.nValue;
       } else if (frame.nName === "seat") {
+        this.seats = (frame.nChildren || [])
+          .filter((v: any) => v.nTagName === "vector")
+          .map((v: any) => ({ x: Number(v.nX) || 0, y: Number(v.nY) || 0 }));
       } else {
         console.log(`Unhandled frame=${frame.nTagName} for cls=Obj `, this);
       }

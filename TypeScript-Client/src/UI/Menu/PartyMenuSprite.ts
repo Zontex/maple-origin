@@ -6,6 +6,7 @@ import config from '../../Config';
 import { CameraInterface } from '../../Camera';
 import PartyManager, { PartyMember } from '../../Party/PartyManager';
 import { getJobNameById } from '../../Constants/Jobs';
+import { drawSelectionBar } from '../UISelectionBar';
 
 /**
  * Party window — v83 UIWindow.img/UserList (P key). Only the Party tab is
@@ -409,12 +410,7 @@ class PartyMenuSprite extends DragableMenu {
       if (!m) continue;
 
       if (m.charId === this.selectedCharId) {
-        const ctx = canvas.context;
-        ctx.save();
-        ctx.globalAlpha = 0.25;
-        ctx.fillStyle = '#3366cc';
-        ctx.fillRect(this.x + ROW_X + 1, ry + 1, 277, ROW_H - 2);
-        ctx.restore();
+        drawSelectionBar(canvas.context, this.x + ROW_X + 1, ry + 1, 277, ROW_H - 2);
       }
 
       if (m.charId === leaderCharId && star?.width) {
