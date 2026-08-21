@@ -1,5 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
-import { XY_STAT_SKILLS } from '../Constants/CombatSkills';
+import { XY_STAT_SKILLS, MONSTER_MAGNET_IDS } from '../Constants/CombatSkills';
 
 export interface SkillLevelEffect {
   mpCon: number;
@@ -41,6 +41,8 @@ export interface SkillLevelEffect {
    * no geometry at all and take the character's own reach instead.
    */
   hitBox: { left: number; top: number; right: number; bottom: number } | null;
+  /** Per-level cast stance (Spear/Pole Arm Crusher alternate burster1/burster2). */
+  action: string | null;
   // WZ nodes for skill projectile and hit effect (stored per-level for skills like Three Snails)
   ballNode: any;
   hitNode: any;
@@ -68,7 +70,9 @@ export interface SkillInfo {
   helpStrings: Map<string, string>;
   /** Prerequisite skills from the WZ `req` node: skillId -> level needed */
   req: { id: number; level: number }[];
-  action: string | null; // Body stance to play (e.g., 'alert2', 'alert4') from WZ action node
+  action: string | null;
+  /** `prepare/action` stance for skills that plant instead of swing (Monster Magnet). */
+  prepareAction: string | null; // Body stance to play (e.g., 'alert2', 'alert4') from WZ action node
   /**
    * Required weapon class from the WZ `weapon` int — the item-id prefix minus
    * 100 (Double Shot carries 49: guns, 149xxxx). null = any weapon.
@@ -102,6 +106,7 @@ function emptyEffect(): SkillLevelEffect {
     mobCount: 1, attackCount: 1, bulletCount: 0, bulletConsume: 0,
     hp: 0, mp: 0, damagepc: 0, itemCon: 0, itemConNo: 0,
     hitBox: null,
+    action: null,
     ballNode: null, hitNode: null,
   };
 }
@@ -164,6 +169,8 @@ function parseLevelEffect(levelNode: any): SkillLevelEffect {
       effect.ballNode = child;
     } else if (name === 'hit') {
       effect.hitNode = child;
+    } else if (name === 'action') {
+      if (typeof child.nValue === 'string' && child.nValue) effect.action = child.nValue;
     } else if (name === 'lt' || name === 'rb') {
       // Vector pair, so it can only be read once both halves are in
       const x = Number(child.nX ?? child.nGet?.('x')?.nValue ?? NaN);
@@ -203,6 +210,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   let actionStance: string | null = null;
   let element: string | null = null;
   let weapon: number | null = null;
+  let prepareAction: string | null = null;
 
   let icon: HTMLImageElement | null = null;
   let iconMouseOver: HTMLImageElement | null = null;
@@ -246,6 +254,12 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     } else if (name === 'weapon') {
       const w = Number(child.nValue);
       if (Number.isFinite(w) && w > 0) weapon = w;
+    } else if (name === 'prepare') {
+      // Charge/plant pose (Monster Magnet's `dash`) — the cast stance when
+      // the skill has no `action` of its own
+      const a = child.nGet?.('action');
+      const v = a?.nValue ?? a?.nGet?.('0')?.nValue;
+      if (typeof v === 'string' && v) prepareAction = v;
     } else if (name === 'level') {
       // Parse each level
       const levelChildren = (child.nChildren || []).slice();
@@ -308,7 +322,11 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   // MP/HP after an attack cast reports success, which is what a cast that can
   // fail (no Summoning Rock) needs. useSkill diverts it to SummonManager.
   const hasSummon = !!summonNode;
-  const isAttack = hasHit || hasBall || levelHasBallOrHit || hasSummon;
+  // Levels that spend MP to deal damage and carry no duration are attacks even
+  // without root hit/ball art — Sacrifice, Power Crash, Rush, Dragon Fury's
+  // pole arm twin. Passives with a damage% (Final Attack, Berserk) cost no MP.
+  const levelIsAttack = effects.some((e) => e.damage > 0 && e.mpCon > 0 && !(e.time > 0));
+  const isAttack = hasHit || hasBall || levelHasBallOrHit || hasSummon || levelIsAttack || MONSTER_MAGNET_IDS.has(skillId);
   const isBuff = !isAttack && (hasAction || hasEffect);
   const isPassive = !isAttack && !isBuff && effects.length > 0;
 
@@ -341,6 +359,7 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
     helpStrings: skillHelp.get(skillId) || new Map(),
     req,
     action: actionStance,
+    prepareAction,
     weapon,
     element,
     hasSummon,
@@ -515,6 +534,17 @@ export function skillReach(effect: SkillLevelEffect | null | undefined): number 
     if (reach > 0) return reach;
   }
   return SINGLE_TARGET_REACH;
+}
+
+/** Dragon Roar spends a share of max HP (`x`%), not the flat `hpCon`. */
+export const DRAGON_ROAR_ID = 1311006;
+/** Sacrifice loses `x`% of the damage it deals as HP. */
+export const SACRIFICE_ID = 1311005;
+
+export function skillHpCost(skillId: number, effect: SkillLevelEffect | null | undefined, maxHp: number): number {
+  if (!effect) return 0;
+  if (skillId === DRAGON_ROAR_ID && effect.x > 0) return Math.floor(maxHp * effect.x / 100);
+  return effect.hpCon > 0 ? effect.hpCon : 0;
 }
 
 export default SkillData;

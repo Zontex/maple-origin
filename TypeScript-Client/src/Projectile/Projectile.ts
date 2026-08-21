@@ -369,8 +369,8 @@ class Projectile {
   // enters (no pre-selected target, damage rolled at impact)
   checkForStraightHit() {
     for (const monster of this.targetMonsters) {
-      if (!monster || monster.dying) continue;
-      const rect = {
+      if (!monster || monster.dying || monster.isFake) continue;
+      const rect = monster.getHitRect?.() ?? {
         x: monster.x,
         y: monster.y,
         width: monster.width,

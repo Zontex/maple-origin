@@ -25,6 +25,9 @@ import TouchJoyStick, {
 } from "./UI/TouchJoyStick";
 import ClickManager from "./UI/ClickManager";
 import ShopUI from "./UI/ShopUI";
+import UIStorage from "./UI/UIStorage";
+import UIAvatarStyleDialog from "./UI/UIAvatarStyleDialog";
+import UIPetGuideDialog from "./UI/UIPetGuideDialog";
 import CashShopUI from "./UI/CashShopUI";
 import UIAvatarMegaphone from "./UI/UIAvatarMegaphone";
 import WZManager from "./wz-utils/WZManager";
@@ -652,6 +655,8 @@ MapStateInstance.initialize = async function (_canvas?: GameCanvas) {
       // which is what turned a failed warp into an unrecoverable crash loop
       // ("Cannot read properties of undefined (reading 'isHidden')").
       if ((MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) || (MapleMap.questDialog && !MapleMap.questDialog.isHidden)) return;
+      // Full-window dialogs own the screen — no NPC/portal clicks through them
+      if (UIStorage.isVisible || UIAvatarStyleDialog.isVisible || UIPetGuideDialog.isVisible) return;
       MapleMap.handleClick(event, canvasElement, Camera);
     });
     canvasElement.addEventListener("mousemove", (event) => {
@@ -725,6 +730,15 @@ MapStateInstance.doUpdate = function (
     if (ShopUI.isVisible) {
       ShopUI.update(msPerTick);
     }
+    if (UIStorage.isVisible) {
+      UIStorage.update(msPerTick);
+    }
+    if (UIAvatarStyleDialog.isVisible) {
+      UIAvatarStyleDialog.update(msPerTick);
+    }
+    if (UIPetGuideDialog.isVisible) {
+      UIPetGuideDialog.update(msPerTick);
+    }
 
     // Cash Shop overlay — the world underneath keeps ticking (mob host!)
     if (CashShopUI.isVisible) {
@@ -795,7 +809,7 @@ MapStateInstance.doUpdate = function (
       // are included for the same reason — the character should stand still
       // while an option dialog has the screen.
       const dialogOpen =
-        (MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) || ShopUI.isVisible ||
+        (MapleMap.npcDialog && !MapleMap.npcDialog.isHidden) || ShopUI.isVisible || UIStorage.isVisible || UIAvatarStyleDialog.isVisible || UIPetGuideDialog.isVisible ||
         CashShopUI.isVisible || UIAvatarMegaphone.isDialogOpen || questDialogOpen ||
         DirectionScene.isActive || UIGameMenu.isVisible ||
         UISystemOption.isVisible || UIGameOption.isVisible ||
@@ -915,6 +929,12 @@ MapStateInstance.doUpdate = function (
         } else if (CashShopUI.isVisible) {
           // First ESC closes the confirm dialog, the next one leaves the shop
           CashShopUI.escape();
+        } else if (UIPetGuideDialog.isVisible) {
+          UIPetGuideDialog.escape();
+        } else if (UIAvatarStyleDialog.isVisible) {
+          UIAvatarStyleDialog.escape();
+        } else if (UIStorage.isVisible) {
+          UIStorage.escape();
         } else if (ShopUI.isVisible) {
           ShopUI.hide();
         } else if (UIWorldMap.isVisible) {
@@ -1109,6 +1129,15 @@ MapStateInstance.doRender = function (
     // Draw ShopUI on top of game elements
     if (ShopUI.isVisible) {
       ShopUI.render(canvas, camera);
+    }
+    if (UIStorage.isVisible) {
+      UIStorage.render(canvas, camera);
+    }
+    if (UIAvatarStyleDialog.isVisible) {
+      UIAvatarStyleDialog.render(canvas, camera);
+    }
+    if (UIPetGuideDialog.isVisible) {
+      UIPetGuideDialog.render(canvas, camera);
     }
 
     // Draw death dialog on top of game but under cursor

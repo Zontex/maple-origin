@@ -1,6 +1,7 @@
 import WZManager from "./wz-utils/WZManager";
 
 import Background, { getBackgroundScale } from "./Background";
+import ReactorScriptEngine from "./ReactorScriptEngine";
 import config from "./Config";
 import { getBossSpawns, BOSS_MOBTIME_S } from "./Constants/BossSpawns";
 import Foothold from "./FootHold";
@@ -19,7 +20,7 @@ import GameCanvas from "./GameCanvas";
 import UIQuestDialog from './UI/UIQuestDialog';
 import QuestScriptEngine from './Quest/QuestScriptEngine';
 import NpcScriptEngine, { stripScriptCodes } from './NpcScriptEngine';
-import QuestData from './Quest/QuestData';
+import QuestData, { QuestState } from './Quest/QuestData';
 import Reactor from './Reactor';
 import Weather from './Effects/Weather';
 import { fieldForbids } from './Constants/FieldLimit';
@@ -140,6 +141,7 @@ export interface MapleMap {
   tryNpcScript: (npc: any) => Promise<void>;
   runQuestScript: (npc: any, questId: number, phase: 'start' | 'end') => Promise<void>;
   showDefaultNpcTalk: (npc: any) => Promise<void>;
+  checkItemReactors: () => void;
 }
 
 const MapleMap = {} as MapleMap;
@@ -1180,6 +1182,63 @@ MapleMap.update = function (msPerTick) {
   this.itemDrops.forEach((drop: DropItemSprite) => {
     drop.update(msPerTick);
   });
+  this.checkItemReactors();
+};
+
+/**
+ * Type-100 reactor events: a matching item landing inside the reactor's
+ * lt/rb box is swallowed and advances the reactor, whose script then runs
+ * (Zakum's altar 2111001 eats an Eye of Fire and summons the boss). Henesys
+ * PQ's moonflowers are the same mechanism, handled by the PQ itself.
+ */
+const ITEM_REACTOR_DELAY_MS = 5000;
+
+MapleMap.checkItemReactors = function () {
+  if (!this.reactors?.length) return;
+  if (HenesysPQ.isRegistered()) return;
+  const now = Date.now();
+  for (const reactor of this.reactors) {
+    if (reactor.destroyed) continue;
+    const ev = reactor.getItemEvent?.();
+    if (!ev) { reactor._itemArm = null; continue; }
+
+    // Armed: the offering lies on the altar for ITEM_REACTOR_DELAY_MS first
+    // (Cosmic schedules ActivateItemReactor 5s out); picking it up meanwhile
+    // calls the whole thing off
+    const arm = reactor._itemArm;
+    if (arm) {
+      const drop = arm.drop;
+      if (drop.destroyed || drop.isAlreadyPickedUp || drop.isInPickupAnimation) { reactor._itemArm = null; continue; }
+      if (now < arm.at) continue;
+      reactor._itemArm = null;
+      drop.destroyed = true;
+      try {
+        const netId = (drop as any)._netDropId;
+        if (netId) (window as any).__mySocket?.sendItemPickup?.(netId);
+        (window as any).__mySocket?.sendReactorHit?.(reactor.oId);
+      } catch { /* relay is best effort */ }
+      reactor.forceAdvance(ev.nextState);
+      const character = (window as any).charecter;
+      ReactorScriptEngine.runAct(reactor, this, character).catch((e: any) =>
+        console.error(`[Reactor] act() failed for ${reactor.id}:`, e)
+      );
+      continue;
+    }
+
+    for (const drop of this.itemDrops || []) {
+      if (drop.destroyed || drop.isAlreadyPickedUp || drop.id !== ev.itemId || !drop.pos) continue;
+      if ((drop.amount || 1) !== (ev.count || 1)) continue; // the exact stack the event names
+      if (drop.pos.vy !== 0 || drop.isInPickupAnimation) continue; // still airborne
+      const dx = drop.pos.x - reactor.x;
+      const dy = drop.pos.y - reactor.y;
+      // A few px of vertical slack: the altar's box is 18px tall and the
+      // floor beside its raised step sits right at the box's bottom edge
+      const SLACK = 6;
+      if (dx < ev.lt.x || dx > ev.rb.x || dy < ev.lt.y - SLACK || dy > ev.rb.y + SLACK) continue;
+      reactor._itemArm = { drop, at: now + ITEM_REACTOR_DELAY_MS };
+      break;
+    }
+  }
 };
 
 // Collision debug overlay, toggled with F10 (F9 is DebugDrag): draws every
@@ -1278,11 +1337,19 @@ MapleMap.render = function (
   // to keep sprites crisp, but an upscaled panorama needs it — nearest-neighbour
   // turns the sky gradient into steps. The layer is composed 1:1 on an
   // offscreen canvas and blitted in one smoothed draw (see _bgCompose).
-  const drawBackgroundLayer = (layer: any[]) => {
-    if (layer.length === 0) return;
+  const drawBackgroundLayer = (all: any[]) => {
+    if (all.length === 0) return;
     const scale = getBackgroundScale();
     if (scale === 1) {
-      layer.forEach(draw);
+      all.forEach(draw);
+      return;
+    }
+    // World-locked layers (Background.worldLocked) are drawn straight onto
+    // the frame at 1:1 after the scaled sky — they sit at world positions
+    const layer = all.filter((bg: any) => !bg.worldLocked);
+    const locked = all.filter((bg: any) => bg.worldLocked);
+    if (layer.length === 0) {
+      locked.forEach(draw);
       return;
     }
     const w = Math.ceil(config.width / scale);
@@ -1309,6 +1376,7 @@ MapleMap.render = function (
     mainCtx.imageSmoothingEnabled = true;
     mainCtx.drawImage(_bgCompose, 0, 0, w, h, 0, 0, w * scale, h * scale);
     mainCtx.restore();
+    locked.forEach(draw);
   };
 
   drawBackgroundLayer(_backLayers[0]);
@@ -1328,17 +1396,34 @@ MapleMap.render = function (
   // anything tied to facing — a punch, a muzzle flash, a dash burst — is
   // mirrored about its anchor when the character faces right. Symmetric
   // overlays (level up, quest) never flip: their lettering would read backwards.
+  // Frames may fade: WZ `a0`/`a1` are the alpha endpoints across the frame's
+  // delay (Spear Crusher's `effect` is a 0→255→0 fade of one image — drawn
+  // opaque it reads as a frozen still). `elapsed` is how far into the frame
+  // the caller's clock is, in ms.
+  const frameAlpha = (frame: any, elapsed: number) => {
+    const a0 = frame?.a0?.nValue ?? frame?.nGet?.('a0')?.nValue;
+    const a1 = frame?.a1?.nValue ?? frame?.nGet?.('a1')?.nValue;
+    if (a0 == null && a1 == null) return 1;
+    const start = Number(a0 ?? 255) / 255;
+    const end = Number(a1 ?? a0 ?? 255) / 255;
+    const delay = Number(frame?.delay?.nValue ?? frame?.nGet?.('delay')?.nValue ?? 90) || 90;
+    const t = Math.max(0, Math.min(1, elapsed / delay));
+    return start + (end - start) * t;
+  };
   const drawEffectAt = (
     x: number,
     y: number,
     frames: any,
     frameIndex: number,
-    flipped = false
+    flipped = false,
+    elapsed = 0
   ) => {
     const frame = frames?.[frameIndex];
     if (!frame || !frame.nGetImage) return;
     const img = frame.nGetImage();
     if (!img || (img instanceof HTMLImageElement && !img.complete)) return;
+    const alpha = frameAlpha(frame, elapsed);
+    if (alpha <= 0) return;
     const ox = frame.origin?.nX ?? 0;
     const oy = frame.origin?.nY ?? 0;
     const w = frame.nWidth ?? img.width;
@@ -1347,10 +1432,11 @@ MapleMap.render = function (
       dx: (flipped ? x - (w - ox) : x - ox) - camera.x,
       dy: y - oy - camera.y,
       flipped,
+      alpha,
     });
   };
-  const drawEffect = (c: MapleCharacter, frames: any, frameIndex: number, flipped = false) =>
-    drawEffectAt(c.pos.x, c.pos.y, frames, frameIndex, flipped);
+  const drawEffect = (c: MapleCharacter, frames: any, frameIndex: number, flipped = false, elapsed = 0) =>
+    drawEffectAt(c.pos.x, c.pos.y, frames, frameIndex, flipped, elapsed);
 
   const drawLevelUp = (c: MapleCharacter) => {
     drawEffect(c, c.levelUpFrames, c.levelUpFrame);
@@ -1385,8 +1471,12 @@ MapleMap.render = function (
         }
         hold = pc.muzzleHold;
       }
-      if (hold) drawEffectAt(pc.pos.x + hold.dx, pc.pos.y + hold.dy, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
-      else drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
+      if (hold) drawEffectAt(pc.pos.x + hold.dx, pc.pos.y + hold.dy, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped, pc.skillEffectDelay);
+      else drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped, pc.skillEffectDelay);
+    }
+    // The skill's extra cast layers (effect0..N) — per-hit slashes, bursts
+    for (const layer of pc.skillEffectLayers ?? []) {
+      drawEffect(pc, layer.frames, layer.frame, pc.flipped, layer.delay);
     }
     // Mob-skill diseases (stun stars, darkness, seduce hearts) — see Status/PlayerStatus
     pc.status?.drawWith?.(drawEffectAt);
@@ -1474,6 +1564,28 @@ MapleMap.render = function (
   this.portals.forEach(draw);
   MysticDoorManager.draw(canvas, camera);
   drawBackgroundLayer(_backLayers[1]);
+
+  // The map ends at its VR. A viewport taller than the VR (Zakum's Altar is
+  // 600 high) shows past the authored sky — roof pieces stopping mid-air,
+  // strips of sheets that were never meant to be seen — so everything
+  // outside the VR is black, as the original client never showed it at all.
+  if (this.boundaries && this.wzNode?.info && "VRTop" in this.wzNode.info) {
+    const b = this.boundaries;
+    const ctx = canvas.context;
+    const viewW = config.width;
+    const viewH = config.height;
+    const top = b.top - camera.y;
+    const bottom = b.bottom - camera.y;
+    const left = b.left - camera.x;
+    const right = b.right - camera.x;
+    ctx.save();
+    ctx.fillStyle = "#000";
+    if (top > 0) ctx.fillRect(0, 0, viewW, Math.ceil(top));
+    if (bottom < viewH) ctx.fillRect(0, Math.floor(bottom), viewW, viewH - Math.floor(bottom));
+    if (left > 0) ctx.fillRect(0, 0, Math.ceil(left), viewH);
+    if (right < viewW) ctx.fillRect(Math.floor(right), 0, viewW - Math.floor(right), viewH);
+    ctx.restore();
+  }
 
   this.itemDrops.forEach((drop: DropItemSprite) => {
     drop.draw(canvas, camera);
@@ -1848,6 +1960,7 @@ MapleMap.runQuestScript = async function (npc: any, questId: number, phase: 'sta
         text: pending.text,
         dialogType: pending.type,
         selections: pending.selections,
+        styles: pending.styles,
         input: pending.input,
         onInput: pending.onInput,
         onAction: (mode: number, type: number, selection: number) => {
@@ -1903,6 +2016,7 @@ MapleMap.tryNpcScript = async function (npc: any) {
         text: pending.text,
         dialogType: pending.type,
         selections: pending.selections,
+        styles: pending.styles,
         input: pending.input,
         onInput: pending.onInput,
         onAction: (mode: number, type: number, selection: number) => {
@@ -1931,8 +2045,20 @@ MapleMap.tryNpcScript = async function (npc: any) {
 // NPCs with no default dialogue say nothing at all — the original client
 // simply doesn't open a chat window for them.
 MapleMap.showDefaultNpcTalk = async function (npc: any) {
-  const dLines: string[] = npc.strings?.questDialogues || [];
-  if (dLines.length === 0) return;
+  const talk: Record<string, string> = npc.strings?.defaultTalk || {};
+  if (!talk.d0 && !talk.d1) return;
+
+  // d1 is the "thanks for your help" line: it belongs to an NPC whose quest
+  // you have finished. Everyone else gets d0. Never both — they were never
+  // pages of one conversation.
+  const questManager = (window as any).charecter?.questManager;
+  const helped = !!questManager && (QuestData.npcToQuests.get(npc.id) || []).some((questId: number) => {
+    const reqs = QuestData.requirements.get(questId);
+    const ends = reqs ? (reqs.complete.npc || reqs.start.npc) === npc.id : false;
+    return ends && questManager.getQuestState(questId) === QuestState.COMPLETED;
+  });
+  const line = (helped && talk.d1) || talk.d0 || talk.d1;
+  if (!line) return;
 
   // d-lines use the same #p/#t/#b/#m format codes as script dialogue — both
   // name tables must be loaded before stripping bakes the text
@@ -1941,27 +2067,14 @@ MapleMap.showDefaultNpcTalk = async function (npc: any) {
   await ensureMapNames();
 
   const dialog = this.questDialog;
-  const npcName = npc.strings?.name || '';
-  let page = 0;
-  const showPage = () => {
-    const last = page === dLines.length - 1;
-    dialog.showScriptDialog({
-      npcId: npc.id,
-      npcName,
-      questName: '',
-      text: stripScriptCodes(dLines[page]),
-      dialogType: last ? 'ok' : 'next',
-      onAction: (mode: number) => {
-        if (mode === -1 || last) {
-          dialog.hide();
-          return;
-        }
-        page++;
-        showPage();
-      },
-    });
-  };
-  showPage();
+  dialog.showScriptDialog({
+    npcId: npc.id,
+    npcName: npc.strings?.name || '',
+    questName: '',
+    text: stripScriptCodes(line),
+    dialogType: 'ok',
+    onAction: () => dialog.hide(),
+  });
 };
 
 export default MapleMap;

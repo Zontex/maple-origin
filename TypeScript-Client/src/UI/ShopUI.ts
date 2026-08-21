@@ -5,13 +5,12 @@ import { CameraInterface } from '../Camera';
 import ClickManager from './ClickManager';
 import { MapleStanceButton } from './MapleStanceButton';
 import { getShopInfo, getItemSellPrice, getItemUnitPrice, getItemSlotMax, getItemNotSale, ShopItem } from '../Shop/ShopData';
-import { ensureItemNames, getItemNameSync, getItemDescSync } from '../Quest/QuestData';
-import UIEquipTooltip from './UIEquipTooltip';
+import { ensureItemNames, getItemNameSync } from '../Quest/QuestData';
 import Item from '../Inventory/Item';
 import ItemConstants from '../Constants/Inventory/ItemConstants';
 import UIMesoDropDialog from './UIMesoDropDialog';
 import Config from '../Config';
-import { drawPlate } from './UIToolTipPlate';
+import { drawItemHoverTooltip } from './UIItemHoverTooltip';
 
 interface LoadedShopItem {
   itemId: number;
@@ -570,76 +569,9 @@ const ShopUI: any = {
     }
   },
 
-  /**
-   * Tooltip for the row under the cursor — the same information the inventory
-   * shows, since a shop is where you most need it. Equips reuse UIEquipTooltip
-   * (REQ stats, job bar, the lot); everything else gets name + description
-   * from String.wz, with `#c..#` rendered orange as elsewhere.
-   */
+  /** Tooltip for the row under the cursor, beside the window (shared helper). */
   drawHoverTooltip(canvas: GameCanvas) {
-    const item = this._hoverItem;
-    if (!item) return;
-    const itemId = item.itemId ?? item.id;
-    if (!itemId) return;
-
-    // Anchor beside the shop window, never over it. Anchoring to the hovered
-    // row put the panel straight on top of the list, hiding the very items
-    // being browsed. Prefer the right of the window, fall back to its left
-    // when there is no room there.
-    const NOMINAL_W = 260;
-    let ax = this.x + BG_W + 6;
-    if (ax + NOMINAL_W > canvas.game.width) ax = Math.max(2, this.x - NOMINAL_W - 6);
-    const ay = Math.max(2, this._hoverY - 20);
-
-    if (Math.floor(itemId / 1000000) === 1) {
-      if (UIEquipTooltip.draw(canvas, itemId, item.equipData, ax, ay)) return;
-    }
-
-    const name = getItemNameSync(itemId) || item.name || '';
-    const desc = (getItemDescSync(itemId) || '').replace(/\\n/g, '\n');
-    if (!name && !desc) return;
-
-    const ctx = canvas.context;
-    const W = 210, PAD = 8, LINE = 13;
-    ctx.save();
-    ctx.font = '11px Arial';
-
-    const lines: { text: string; color: string }[] = [];
-    lines.push({ text: name, color: '#ffcc00' });
-    for (const para of desc.split('\n')) {
-      // #c..# is the orange highlight; other codes are chrome and get dropped
-      const cleaned = para.replace(/#c(.*?)#/g, '$1').replace(/#[a-z]/g, '');
-      let line = '';
-      for (const word of cleaned.split(' ')) {
-        const test = line ? line + ' ' + word : word;
-        if (ctx.measureText(test).width > W - PAD * 2 && line) {
-          lines.push({ text: line, color: '#ffffff' });
-          line = word;
-        } else {
-          line = test;
-        }
-      }
-      if (line) lines.push({ text: line, color: '#ffffff' });
-    }
-
-    const H = PAD * 2 + lines.length * LINE;
-    let tx = ax;
-    let ty = ay;
-    if (tx + W > canvas.game.width) tx = canvas.game.width - W - 2;
-    if (ty + H > canvas.game.height) ty = canvas.game.height - H - 2;
-    if (ty < 0) ty = 0;
-
-    drawPlate(ctx, tx, ty, W, H);
-
-    ctx.textAlign = 'left';
-    let y = ty + PAD + 10;
-    for (const l of lines) {
-      ctx.fillStyle = l.color;
-      ctx.font = l.color === '#ffcc00' ? 'bold 11px Arial' : '11px Arial';
-      ctx.fillText(l.text, tx + PAD, y);
-      y += LINE;
-    }
-    ctx.restore();
+    drawItemHoverTooltip(canvas, this._hoverItem, this.x, BG_W, this._hoverY);
   },
 
   /**

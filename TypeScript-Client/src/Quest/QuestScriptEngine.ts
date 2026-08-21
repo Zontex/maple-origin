@@ -6,7 +6,7 @@ import { makeSafeScriptApi, createScriptJavaShim } from '../NpcScriptEngine';
 
 export type ScriptDialogType =
   | 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple'
-  | 'getText' | 'getNumber';
+  | 'getText' | 'getNumber' | 'style';
 
 export interface InlineImage {
   wzPath: string;   // WZ path for #f codes, or item icon path for #v codes

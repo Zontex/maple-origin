@@ -329,7 +329,7 @@ export default class UIMesoDropDialog {
         align: 'center',
       });
       canvas.drawText({
-        text: 'like to drop?',
+        text: `like to ${this.verb}?`,
         x: textX,
         y: textAreaTop + 16,
         color: '#000000',

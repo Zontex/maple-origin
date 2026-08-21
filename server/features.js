@@ -10,4 +10,5 @@ require('./handlers/guild');
 require('./handlers/summon');
 require('./handlers/door');
 require('./handlers/mobskill');
+require('./handlers/storage');
 require('./handlers/weather');

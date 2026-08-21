@@ -4,7 +4,7 @@ import { preloadFrames } from "./wz-utils/WZNode";
 // Static, not the dynamic import the rest of SkillData uses here: skillReach
 // is needed inside a synchronous stance callback. Safe — SkillData imports
 // only WZManager, so this closes no cycle.
-import { skillReach, SINGLE_TARGET_REACH } from "./Skills/SkillData";
+import { skillReach, SINGLE_TARGET_REACH, SACRIFICE_ID } from "./Skills/SkillData";
 import config from "./Config";
 import GUIUtil from "./GuiUtils";
 import PLAY_AUDIO from "./Audio/PlayAudio";
@@ -38,8 +38,7 @@ import {
   BOOSTER_SKILL_IDS,
   DASH_SKILL_ID,
   SKILL_BULLET_STAGGER_MS,
-  usesWeaponSound,
-} from "./Constants/CombatSkills";
+  usesWeaponSound, MONSTER_MAGNET_IDS } from "./Constants/CombatSkills";
 import { playSkillSound } from "./Skills/SkillSound";
 import PartyManager from "./Party/PartyManager";
 import { jobMeetsEquipReq } from "./Constants/Jobs";
@@ -160,6 +159,8 @@ class MapleCharacter {
   status: PlayerStatus = new PlayerStatus(this);
   skillEffectActive: boolean = false;
   skillEffectFrames: any[] | null = null;
+  /** Extra cast layers (`effect0`..`effectN`), each with its own frame clock. */
+  skillEffectLayers: { frames: any[]; frame: number; delay: number }[] = [];
   skillEffectFrame: number = 0;
   skillEffectDelay: number = 0;
   // Where the skill `effect` art is anchored: the feet for nearly every skill
@@ -1505,9 +1506,61 @@ async attack() {
       this.skillTriggerFrame = null;
       this.onSkillTriggerFrame = null;
       if (pending) pending();
+      if (this.pendingFinalAttack) this.playFinalAttack();
     },
     triggerFrame === null ? fire : () => {}
   );
+}
+
+/** A queued Final Attack follow-up, set by executeAttackDamage's roll. */
+pendingFinalAttack: { skillId: number; stance: string; damagePct: number; targets: Monster[] } | null = null;
+
+/**
+ * The body's Final Attack variant of a swing: swingO1 → swingOF, stabT2 →
+ * stabTF, swingP1 → swingPF (the F stances are the only extra attack poses
+ * the v83 body ships). Null when the swing has none.
+ */
+static finalAttackStanceFor(stance: string): string | null {
+  const m = /^(swing[OTP]|stab[OT])\d$/.exec(stance);
+  return m ? `${m[1]}F` : null;
+}
+
+/**
+ * Final Attack's second swing: the F-stance, the weapon's own clip, the
+ * skill's `hit` art on each target still in reach, `damage`% of a regular
+ * hit. Plays right after the swing that rolled it.
+ */
+playFinalAttack() {
+  const fa = this.pendingFinalAttack;
+  this.pendingFinalAttack = null;
+  if (!fa || this.isInAttack) return;
+  const weaponType = getEquipTypeById(this.weaponEquipId);
+  const reach = getWeaponConfig(weaponType)?.meleeRange ?? 70;
+  this.isInAttack = true;
+  void this.armAfterimage(fa.stance);
+  const fire = () => {
+    try { playAudioForAttackByWeaponType(weaponType); } catch (e) { /* ignore */ }
+    const facingRight = this.flipped;
+    const effect = this.skillManager?.getSkillEffectSync?.(fa.skillId) ?? null;
+    const attackType = this.getAttackTypeFromStance();
+    const mastery = this.skillManager?.getWeaponMastery?.(weaponType) ?? 0.1;
+    for (const monster of fa.targets) {
+      if (!monster || monster.dying || monster.isFake) continue;
+      const r = monster.getHitRect();
+      const gap = Math.max(0, r.x - this.pos.x, this.pos.x - (r.x + r.width));
+      if (gap > reach + 30) continue;
+      const rawRange = this.stats.getAttackRange(weaponType, attackType, mastery);
+      const monsterDef = monster.mobFile?.info?.PDDamage?.nValue ?? 0;
+      const monsterLevel = monster.mobFile?.info?.level?.nValue ?? 1;
+      const defRange = this.stats.getAttackDamageRangeAfterMonsterDefense(rawRange, monsterDef, monsterLevel);
+      const isMiss = this.stats.getRandomIsMiss(monsterLevel, monster.eva ?? 0);
+      const damage = isMiss ? 0 : Math.max(1, Math.floor(Stats.getRandomAttackDamageFromAttackRange(defRange) * fa.damagePct));
+      monster.hit(damage, facingRight ? 1 : -1, this, false, fa.skillId);
+      if (effect?.hitNode) spawnSkillHit(effect.hitNode, monster.hitCenter.x, monster.hitCenter.y, facingRight);
+    }
+    void playSkillSound(fa.skillId, 'Hit');
+  };
+  this.setStance(fa.stance, 0, true, false, () => { this.isInAttack = false; }, fire);
 }
 
 /**
@@ -1539,18 +1592,17 @@ async executeAttackDamage() {
     return targetY - h <= myBottom && targetY >= myTop;
   };
 
-  // Find monsters in melee range facing the right direction
+  // Find monsters in melee range facing the right direction — by each mob's
+  // hit box (Monster.getHitRect), not its anchor: Zakum's arms all hang off
+  // one anchor and only their boxes say which one the spear reached
   const monsters = this.map?.monsters.filter((monster: Monster) => {
-    if (monster.dying) return false;
-    const dx = monster.pos.x - this.pos.x;
-    if (isCharacterFacingRight && dx < -20) return false;
-    if (!isCharacterFacingRight && dx > 20) return false;
-    const monsterHalfWidth = (monster.width || 50) / 2;
-    const effectiveDistance = Math.max(0, Math.abs(dx) - monsterHalfWidth);
-    return (
-      effectiveDistance <= attackRange &&
-      overlapsVertically(monster.pos.y, monster.height)
-    );
+    if (monster.dying || monster.isFake) return false;
+    const r = monster.getHitRect();
+    const cx = r.x + r.width / 2;
+    if (isCharacterFacingRight && cx < this.pos.x - 20) return false;
+    if (!isCharacterFacingRight && cx > this.pos.x + 20) return false;
+    const gap = Math.max(0, r.x - this.pos.x, this.pos.x - (r.x + r.width));
+    return gap <= attackRange && overlapsVertically(r.y + r.height, r.height);
   }) || [];
 
   // Check reactor hits
@@ -1610,6 +1662,16 @@ async executeAttackDamage() {
       monster.hit(damage, knockbackDirection, this, isCritical);
     } catch (error) {
       console.error('Error processing monster hit:', error);
+    }
+  }
+
+  // Final Attack: `prop`% of basic hits are followed by a second swing in the
+  // body's F-stance for `damage`% — queued here, played once this swing ends
+  const fa = this.skillManager?.getFinalAttack?.(weaponType) ?? null;
+  if (fa && Math.random() < fa.chance) {
+    const faStance = MapleCharacter.finalAttackStanceFor(String(this.stance));
+    if (faStance && this.baseBody?.[faStance]) {
+      this.pendingFinalAttack = { skillId: fa.skillId, stance: faStance, damagePct: fa.damagePct, targets: monsters.slice() };
     }
   }
 
@@ -1783,6 +1845,14 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
     if (info.action && this.baseBody?.[info.action]) {
       attackStance = info.action;
     }
+    // A level can name its own stance (Crusher alternates burster1/burster2)
+    if (effect.action && this.baseBody?.[effect.action]) {
+      attackStance = effect.action;
+    }
+    // No action at all: a `prepare/action` plant (Monster Magnet's `dash`)
+    if (!info.action && !effect.action && info.prepareAction && this.baseBody?.[info.prepareAction]) {
+      attackStance = info.prepareAction;
+    }
 
     // No weapon trail on skill casts — a skill's visuals are its own ball /
     // effect / hit art. Swinging a staff for Energy Bolt must not streak.
@@ -1907,7 +1977,7 @@ fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverr
     magicAttack: (effect.mad || 0) > 0
       ? { spellAttack: effect.mad, mastery: (effect.mastery || 10) / 100, element }
       : null,
-    targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying) || [],
+    targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying && !m.isFake) || [],
     maxDistance: skillReach(effect),
   });
   this.projectiles.push(projectile);
@@ -1918,7 +1988,10 @@ fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverr
  */
 async executeSkillDamage(skillId: number, effect: any) {
   const weaponType = getEquipTypeById(this.weaponEquipId);
-  const skillRange = effect.range > 0 ? effect.range : (getWeaponConfig(weaponType)?.meleeRange ?? 70);
+  // Reach: the level's `range`, else the project's close-range default — the
+  // weapon's 70-80px swing is for plain attacks, not skills (Power Strike
+  // carries no range at all in the WZ)
+  const skillRange = effect.range > 0 ? effect.range : SINGLE_TARGET_REACH;
   const mobCount = effect.mobCount || 1;
   const attackCount = effect.attackCount || 1;
   const damagePercent = (effect.damage || 100) / 100;
@@ -1928,24 +2001,60 @@ async executeSkillDamage(skillId: number, effect: any) {
   // attack sound, and its `Hit` clip lands below
   const isCharacterFacingRight = this.flipped;
 
-  // Find monsters in range
+  // Find monsters in reach. Skills with an `lt`/`rb` box (Dragon Roar,
+  // Spear Crusher, Rush, Power Crash...) hit exactly that box — authored for
+  // a left-facing character, so it mirrors with the facing; a symmetric box
+  // (Roar) reaches behind as well. Everything else uses the reach in front.
+  const box = effect.hitBox;
   let monsters = this.map?.monsters.filter((monster: Monster) => {
-    if (monster.dying) return false;
-    const dx = monster.pos.x - this.pos.x;
-    const dy = monster.pos.y - this.pos.y;
-    if (isCharacterFacingRight && dx < -20) return false;
-    if (!isCharacterFacingRight && dx > 20) return false;
-    const monsterHalfWidth = (monster.width || 50) / 2;
-    const effectiveDistance = Math.max(0, Math.abs(dx) - monsterHalfWidth);
-    return effectiveDistance <= skillRange && Math.abs(dy) <= 100;
+    if (monster.dying || monster.isFake) return false;
+    // Each mob's own hit box (Zakum's arms share an anchor; the boxes differ)
+    const r = monster.getHitRect();
+    const rl = r.x - this.pos.x, rr = r.x + r.width - this.pos.x;
+    const rt = r.y - this.pos.y, rbm = r.y + r.height - this.pos.y;
+    const cx = (rl + rr) / 2;
+    if (box) {
+      const left = isCharacterFacingRight ? -box.right : box.left;
+      const right = isCharacterFacingRight ? -box.left : box.right;
+      const inX = rr >= left && rl <= right;
+      const inY = rbm >= box.top - 10 && rt <= box.bottom + 10;
+      return inX && inY;
+    }
+    if (isCharacterFacingRight && cx < -20) return false;
+    if (!isCharacterFacingRight && cx > 20) return false;
+    const gap = Math.max(0, rl, -rr);
+    const vgap = Math.max(0, rt, -rbm);
+    return gap <= skillRange && vgap <= 100;
   }) || [];
 
-  // Limit to mobCount
+  // Nearest first, then cap at mobCount
+  monsters.sort((a: Monster, b: Monster) => Math.abs(a.hitCenter.x - this.pos.x) - Math.abs(b.hitCenter.x - this.pos.x));
   if (monsters.length > mobCount) {
     monsters = monsters.slice(0, mobCount);
   }
+  let totalDealt = 0;
 
   if (monsters.length === 0) return;
+
+  // Monster Magnet deals nothing — each mob in reach is dragged to your feet
+  // with `prop`% odds, landing in a row in front of you. Mob positions are
+  // host-authoritative, so on a non-host client the pull is only cosmetic
+  // until the host's next state batch.
+  if (MONSTER_MAGNET_IDS.has(skillId)) {
+    const dir = isCharacterFacingRight ? 1 : -1;
+    let placed = 0;
+    for (const monster of monsters) {
+      if (Math.random() * 100 >= (effect.prop || 100)) continue;
+      const targetX = this.pos.x + dir * (40 + placed * 30);
+      monster.updatePosition(targetX, monster.pos.y);
+      monster._targetX = targetX;
+      // Let physics re-seat it on whatever foothold is under the new x
+      if (monster.pos) { monster.pos.fh = null; monster.pos.vy = 0; }
+      placed++;
+    }
+    void playSkillSound(skillId, 'Hit');
+    return;
+  }
 
   const attackType = this.getAttackTypeFromStance();
   const skillInfo = (await import('./Skills/SkillData')).default.getSkillSync(skillId);
@@ -1998,15 +2107,21 @@ async executeSkillDamage(skillId: number, effect: any) {
 
         const knockbackDirection = isCharacterFacingRight ? 1 : -1;
         monster.hit(damage, knockbackDirection, this, isCritical, skillId);
+        totalDealt += damage;
       }
       // The skill's own impact art when it has one (Magic Claw, Energy Bolt's
       // melee fallback); otherwise nothing, as before
       if (effect.hitNode) {
-        spawnSkillHit(effect.hitNode, monster.pos.x, monster.pos.y, isCharacterFacingRight);
+        spawnSkillHit(effect.hitNode, monster.hitCenter.x, monster.hitCenter.y, isCharacterFacingRight);
       }
     } catch (e) {
       console.error('Error processing skill hit:', e);
     }
+  }
+
+  // Sacrifice: `x`% of the damage dealt comes out of the caster's HP
+  if (skillId === SACRIFICE_ID && effect.x > 0 && totalDealt > 0) {
+    this.hp = Math.max(1, this.hp - Math.floor(totalDealt * effect.x / 100));
   }
 
   // The skill's own Hit clip, falling back to the generic weapon hit
@@ -2077,7 +2192,7 @@ async fireProjectile(
       y: spawnY,
       right: this.flipped,
       left: !this.flipped,
-      targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying) || [],
+      targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying && !m.isFake) || [],
       weaponAttackRange: weaponAttackRange,
       // A basic ranged attack is a single-target attack with no skill
       // geometry — the same category Energy Bolt and Power Strike are in, so
@@ -2107,8 +2222,8 @@ isCloseToMob = (inAllDirections = true) => {
   const monstersToConsider = inAllDirections
     ? this.map.monsters
     : this.map.monsters.filter((monster: Monster) => {
-        const isMonsterOnRight = monster.pos.x > this.pos.x;
-        const isMonsterOnLeft = monster.pos.x < this.pos.x;
+        const isMonsterOnRight = monster.hitCenter.x > this.pos.x;
+        const isMonsterOnLeft = monster.hitCenter.x < this.pos.x;
         const isPlayerFacingRight = this.flipped;
 
         return (
@@ -2129,8 +2244,10 @@ isCloseToMob = (inAllDirections = true) => {
     }
     
     // Calculate horizontal and vertical distances separately
-    const horizontalDistance = Math.abs(monster.pos.x - this.pos.x);
-    const verticalDistance = Math.abs(monster.pos.y - this.pos.y);
+    const hc = monster.hitCenter;
+    const hr = monster.getHitRect();
+    const horizontalDistance = Math.max(0, hr.x - this.pos.x, this.pos.x - (hr.x + hr.width));
+    const verticalDistance = Math.abs(hc.y - this.pos.y);
     
     // Consider monster in range if both horizontal and vertical distances are within limits
     return horizontalDistance <= HORIZONTAL_DISTANCE && verticalDistance <= VERTICAL_DISTANCE;
@@ -2932,7 +3049,7 @@ isCloseToMob = (inAllDirections = true) => {
     this.lastDamagedTime = currentTime;
     // Bounce up-and-away from the mob (v83 numbers in Physics.hitKnockback);
     // on a ladder or rope the damage lands but the grip holds
-    const knockbackDirection: 1 | -1 = this.pos.x - monster.pos.x > 0 ? 1 : -1;
+    const knockbackDirection: 1 | -1 = this.pos.x - monster.hitCenter.x > 0 ? 1 : -1;
     this.pos.hitKnockback(knockbackDirection);
 
     // v83 mob damage: mob attack scaled by level gap, reduced by the player's
@@ -2992,7 +3109,7 @@ isCloseToMob = (inAllDirections = true) => {
       if (currentTime - this.lastHitTime >= this.hitCooldownTimeInMS) {
         const monster = this.map!.monsters.filter(
           // bodyAttack === 0 mobs (ranged-only) deal no touch damage
-          (monster: Monster) => monster.dying === false && (monster as any).bodyAttack !== 0
+          (monster: Monster) => monster.dying === false && !monster.isFake && (monster as any).bodyAttack !== 0
         ).find((monster: Monster) => {
           // Slim fixed body box, not the sprite union — see TOUCH_HALF_W
           const isHit = areAnyRectanglesOverlapping(
@@ -3002,12 +3119,7 @@ isCloseToMob = (inAllDirections = true) => {
               width: TOUCH_HALF_W * 2,
               height: TOUCH_H,
             }],
-            {
-              x: monster.x,
-              y: monster.y,
-              width: monster.width,
-              height: monster.height,
-            },
+            monster.getHitRect(),
             this.mobHitMinOverlapPercentage
           );
 
@@ -3359,6 +3471,18 @@ isCloseToMob = (inAllDirections = true) => {
         this.skillEffectFrame = 0;
         this.skillEffectDelay = 0;
       }
+    }
+    if (this.skillEffectLayers.length) {
+      for (const layer of this.skillEffectLayers) {
+        layer.delay += msPerTick;
+        const f = layer.frames[layer.frame];
+        const d = Number(f?.delay?.nValue ?? f?.nGet?.('delay')?.nValue ?? 90) || 90;
+        if (layer.delay > d) {
+          layer.delay -= d;
+          layer.frame += 1;
+        }
+      }
+      this.skillEffectLayers = this.skillEffectLayers.filter((l) => l.frame < l.frames.length);
     }
 
     this.updateDashTrail(msPerTick);

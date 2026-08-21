@@ -1,6 +1,6 @@
 import SkillData, { SkillInfo, SkillLevelEffect } from './SkillData';
 import type MapleCharacter from '../MapleCharacter';
-import { WEAPON_MASTERY_SKILLS, CRITICAL_SKILLS } from '../Constants/CombatSkills';
+import { WEAPON_MASTERY_SKILLS, CRITICAL_SKILLS, FINAL_ATTACK_SKILLS } from '../Constants/CombatSkills';
 
 export interface SkillEntry {
   level: number;
@@ -104,6 +104,19 @@ export default class SkillManager {
       }
     }
     return mastery;
+  }
+
+  /** Final Attack parameters for this weapon, or null when none is learned. */
+  getFinalAttack(weaponType: number): { skillId: number; chance: number; damagePct: number } | null {
+    const candidates = FINAL_ATTACK_SKILLS[weaponType];
+    if (!candidates) return null;
+    for (const skillId of candidates) {
+      const effect = this.getSkillEffectSync(skillId);
+      if (effect && effect.prop > 0) {
+        return { skillId, chance: effect.prop / 100, damagePct: (effect.damage || 100) / 100 };
+      }
+    }
+    return null;
   }
 
   /**

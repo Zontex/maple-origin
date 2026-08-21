@@ -1,4 +1,6 @@
 import WZManager from "../../wz-utils/WZManager";
+import { MobSkillId } from '../../Mob/MobSkillData';
+import UIPetGuideDialog from '../UIPetGuideDialog';
 import WZFiles from "../../Constants/enums/WZFiles";
 import ClickManager from "../ClickManager";
 import { MapleStanceButton } from "../MapleStanceButton";
@@ -723,6 +725,9 @@ class InventoryMenuSprite extends DragableMenu {
                 this.equipItem(item, slotIndex);
               } else if (this.currentTab === MapleInventoryType.SETUP) {
                 this.useSetupItem(item);
+              } else if (this.currentTab === MapleInventoryType.ETC) {
+                // Pet Command Guides (and any other WZ `book`) open their reader
+                if (item.node?.book) void UIPetGuideDialog.show(item);
               } else if (this.currentTab === MapleInventoryType.CASH) {
                 if (Math.floor(item.itemId / 1000000) === 1) {
                   if (isPetEquipItemId(item.itemId)) {
@@ -1104,10 +1109,12 @@ class InventoryMenuSprite extends DragableMenu {
   consumeItem(item: any, slotIndex: number) {
     if (!item || !this.charecter) return;
 
-    // Potions/food (2000xxx-2029xxx) and return scrolls (2030xxx) are usable.
-    // Upgrade scrolls (2040xxx+), arrows, stars, cards are NOT double-click usable
+    // Potions/food (2000xxx-2029xxx), return scrolls (2030xxx) and the cure
+    // potions (2050xxx: Antidote, Eyedrop, Tonic, Holy Water, All Cure) are
+    // usable. Upgrade scrolls (2040xxx), arrows, stars, cards are NOT
     const id = item.itemId;
-    if (id < 2000000 || id >= 2040000) return;
+    const isCure = id >= 2050000 && id < 2050100;
+    if (!isCure && (id < 2000000 || id >= 2040000)) return;
 
     // Access spec via WZ node — try both property access and nGet
     const spec = item.node?.spec || item.node?.nGet?.('spec');
@@ -1133,6 +1140,25 @@ class InventoryMenuSprite extends DragableMenu {
     // no potions or food here — v83's "You can't use it here in this map."
     if (currentMapForbids(FieldLimit.POTIONUSE)) {
       UIChatLog.system(FIELD_LIMIT_MESSAGE);
+      return;
+    }
+
+    // Cure flags in the spec (poison/darkness/weakness/seal/curse) lift the
+    // matching mob-skill diseases; the potion is spent whether or not one
+    // was active, as in v83
+    const cureFlags: [string, number][] = [
+      ['poison', MobSkillId.POISON], ['darkness', MobSkillId.DARKNESS],
+      ['weakness', MobSkillId.WEAKNESS], ['seal', MobSkillId.SEAL], ['curse', MobSkillId.CURSE],
+    ];
+    const readFlag = (name: string) => {
+      const node = spec[name] ?? spec.nGet?.(name);
+      return Number(node?.nValue ?? node ?? 0) > 0;
+    };
+    const cures = cureFlags.filter(([name]) => readFlag(name)).map(([, sid]) => sid);
+    if (cures.length) {
+      for (const sid of cures) this.charecter.status?.remove?.(sid);
+      if (this.consumeSound) PLAY_AUDIO(this.consumeSound, 0.5, true);
+      this.removeOneFromUseTab(item);
       return;
     }
 
@@ -1182,7 +1208,11 @@ class InventoryMenuSprite extends DragableMenu {
       PLAY_AUDIO(this.consumeSound, 0.5, true);
     }
 
-    // Remove one from inventory
+    this.removeOneFromUseTab(item);
+  }
+
+  /** Spend one of a USE-tab stack (the consumed potion, scroll, cure). */
+  private removeOneFromUseTab(item: any) {
     const inventoryArray = this.charecter.inventory.use || [];
     const actualItem = inventoryArray.find((i: any) => i && i.itemId === item.itemId);
     if (actualItem) {
@@ -1192,6 +1222,7 @@ class InventoryMenuSprite extends DragableMenu {
       } else {
         actualItem.quantity--;
       }
+      (window as any).__mySocket?.requestSave?.();
     }
   }
 

@@ -296,13 +296,18 @@ class NPC {
       for (const child of npcStrings.nChildren) {
         result[child.nName] = child.nValue;
 
-        // 'd0', 'd1' are the NPC's default click-dialogue pages, shown when
-        // talking to an NPC that has no script, shop, or quests
+        // 'd0' / 'd1' are the NPC's default click lines, shown when talking
+        // to an NPC that has no script, shop, or quests. They are NOT pages:
+        // d0 is what they say before you have helped them, d1 after you have
+        // completed one of their quests (Johnson: "I can't believe I got a
+        // cold" → "Thank you very much for helping me out"). Kept by key.
         if (child.nName.startsWith('d') && !isNaN(parseInt(child.nName.substring(1)))) {
           if (!result.questDialogues) {
             result.questDialogues = [];
           }
           result.questDialogues.push(child.nValue);
+          if (!result.defaultTalk) result.defaultTalk = {};
+          result.defaultTalk[child.nName] = child.nValue;
         }
       }
 

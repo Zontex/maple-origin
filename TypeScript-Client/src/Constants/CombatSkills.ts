@@ -19,6 +19,25 @@ export const WEAPON_MASTERY_SKILLS: Record<number, number[]> = {
   [WeaponType.PISTOL]: [5200000],              // Gun Mastery
 };
 
+// Final Attack per weapon: after a basic melee hit, `prop`% chance of a second
+// swing (the body's F-stance: swingOF/stabTF/...) for `damage`% with the
+// skill's own `hit` art. Hunter/Crossbowman versions are projectile follow-ups
+// and are not modelled yet.
+export const FINAL_ATTACK_SKILLS: Record<number, number[]> = {
+  [WeaponType.SWORD]: [1100002, 1200002],      // Fighter / Page Final Attack: Sword
+  [WeaponType.SWORD_2H]: [1100002, 1200002],
+  [WeaponType.AXE]: [1100003],                 // Final Attack: Axe
+  [WeaponType.AXE_2H]: [1100003],
+  [WeaponType.MACE]: [1200003],                // Final Attack: Blunt Weapon
+  [WeaponType.MACE_2H]: [1200003],
+  [WeaponType.SPEAR]: [1300002],               // Final Attack: Spear
+  [WeaponType.POLEARM]: [1300003],             // Final Attack: Pole Arm
+};
+
+// Monster Magnet (Hero / Paladin / Dark Knight): no damage — drags up to
+// `mobCount` mobs within `range` in front of you to your feet, `prop`% each
+export const MONSTER_MAGNET_IDS = new Set([1121001, 1221001, 1321001]);
+
 // Passive critical skills: chance = effect.prop / 100, damage = effect.damage / 100
 export const CRITICAL_SKILLS: Record<number, number[]> = {
   [WeaponType.BOW]: [3000001],                 // Critical Shot

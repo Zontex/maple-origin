@@ -254,7 +254,10 @@ class Stats {
     const second = Math.floor(jobId / 10) * 10;
     tiers.push(second);
     if (jobId === second) return tiers;
-    tiers.push(jobId);
+    // 3rd job is second+1 (131), 4th is second+2 (132) — a 4th-jobber owns
+    // both; pushing only jobId left the 3rd-job pool out entirely
+    if (jobId % 10 >= 1) tiers.push(second + 1);
+    if (jobId % 10 >= 2) tiers.push(second + 2);
     return tiers;
   }
 

@@ -1,16 +1,17 @@
-import { npcNames, mobNames, QuestState, ensureItemNames, ensureMapNames, getMapNameSync, collapseBlankLines } from './Quest/QuestData';
+import { npcNames, mobNames, QuestState, ensureItemNames, ensureMapNames, getMapNameSync, collapseBlankLines, getItemNameSync } from './Quest/QuestData';
 import GuildManager, { getIncreaseGuildCost as guildIncreaseCost } from './Guild/GuildManager';
 import { cachedFetch } from './AssetDownloader';
 import { getItemName } from './Quest/QuestScriptEngine';
 import { fadeToBlack } from './MapState';
 import ShopUI from './UI/ShopUI';
+import UIStorage from './UI/UIStorage';
 import TransportationManager from './Transport/TransportationManager';
 import HenesysPQ from './Events/HenesysPQ';
 import PartyManager from './Party/PartyManager';
 
 export type ScriptDialogType =
   | 'next' | 'nextPrev' | 'acceptDecline' | 'ok' | 'prev' | 'yesNo' | 'simple'
-  | 'getText' | 'getNumber';
+  | 'getText' | 'getNumber' | 'style';
 
 export interface SelectionOption {
   index: number;
@@ -22,6 +23,8 @@ export interface PendingDialog {
   text: string;
   type: ScriptDialogType;
   selections?: SelectionOption[];
+  /** sendStyle candidates (hair / face / skin ids) for the avatar picker. */
+  styles?: number[];
   // For getText/getNumber dialogs: input config + where the value goes
   input?: { def?: string | number; min?: number; max?: number };
   onInput?: (value: string) => void;
@@ -211,6 +214,11 @@ export default class NpcScriptEngine {
   private npcId: number = 0;
   pendingDialog: PendingDialog | null = null;
   private disposed: boolean = false;
+  // A script dereferenced an event instance that does not exist (Amon in a
+  // Zakum altar entered without the expedition): rerun it once against a
+  // null-safe instance so its dialog still shows. Scripts that test for
+  // null themselves never trip this and keep their authentic branches.
+  private eventStub: boolean = false;
   private character: any = null;
   private mapNameCache: Map<number, string> = new Map();
   // Values captured by sendGetText/sendGetNumber input dialogs (Cosmic pattern)
@@ -254,6 +262,7 @@ export default class NpcScriptEngine {
     changeMap?: (mapId: number, portalName?: string | number) => Promise<void>;
   }) {
     this.npcId = opts.npcId;
+    this.eventStub = false;
     this.character = opts.character;
     this.onShowDialog = opts.onShowDialog;
     this.onDispose = opts.onDispose;
@@ -314,7 +323,22 @@ export default class NpcScriptEngine {
     }
   }
 
-  private async runScript(funcName: string, mode: number, type: number, selection: number) {
+  /** The live event instance, or the null-safe stand-in after a crash on one. */
+  eventInstanceApi(): any {
+    if (HenesysPQ.isRegistered()) return makeSafeScriptApi(HenesysPQ.getInstanceApi(), 'EventInstance:HenesysPQ');
+    if (!this.eventStub) return null;
+    return makeSafeScriptApi({
+      isEventCleared() { return false; },
+      getProperty(_k: string) { return null; },
+      getIntProperty(_k: string) { return 0; },
+      setProperty(_k: string, _v: any) { /* no instance */ },
+      getPlayerCount() { return 1; },
+      getPlayers() { return []; },
+      isExpeditionTeamTogether() { return true; },
+    }, 'EventInstance:none');
+  }
+
+  private async runScript(funcName: string, mode: number, type: number, selection: number): Promise<void> {
     const scriptCode = await this.loadScript(this.npcId);
     if (!scriptCode) {
       this.onDispose?.();
@@ -348,6 +372,12 @@ export default class NpcScriptEngine {
         fn(mode, type, selection);
       }
     } catch (e) {
+      const msg = String((e as any)?.message ?? e);
+      if (!this.eventStub && /null|undefined/.test(msg)) {
+        console.warn(`[NpcScript] NPC ${this.npcId} (${funcName}) needs an event instance that is not running — retrying with a null-safe one:`, msg);
+        this.eventStub = true;
+        return this.runScript(funcName, mode, type, selection);
+      }
       console.error(`[NpcScript] Error in NPC ${this.npcId} (${funcName}):`, e);
       this.onDispose?.();
       return;
@@ -495,11 +525,7 @@ export default class NpcScriptEngine {
       },
       disbandGuild() { GuildManager.disband(); },
       increaseGuildCapacity() { GuildManager.expand(); },
-      getEventInstance() {
-        return HenesysPQ.isRegistered()
-          ? makeSafeScriptApi(HenesysPQ.getInstanceApi(), 'EventInstance:HenesysPQ')
-          : null;
-      },
+      getEventInstance() { return engine.eventInstanceApi(); },
       // Party Search (HeavenMS extra surfaced in Tory's menu)
       isRecvPartySearchInviteEnabled() { return false; },
       toggleRecvPartySearchInvite() { return false; },
@@ -508,8 +534,12 @@ export default class NpcScriptEngine {
         return character?.skillManager?.getSkillLevel?.(id) ?? 0;
       },
       getStorage() {
+        // cm.getPlayer().getStorage().sendStorage(cm.getClient(), npcId) — the
+        // 25 storage keepers. The keeper's id decides the deposit fee.
         return makeSafeScriptApi({
-          sendStorage() { console.warn('[NpcScript] storage not implemented'); },
+          sendStorage(_client: any, npcId?: number) {
+            void UIStorage.show(Number(npcId) || engine.npcId);
+          },
         }, 'Storage');
       },
     };
@@ -539,17 +569,20 @@ export default class NpcScriptEngine {
       },
       sendImage(text: string) { engine.pendingDialog = { text: stripScriptCodes(text, mapNameResolver), type: 'ok' }; },
       sendStyle(text: string, options: any) {
-        // Style options render as a selection list; the script applies the
-        // chosen style itself via cm.setHair(styles[selection]) (Cosmic flow)
-        const styles: number[] = Array.isArray(options) ? options : [];
-        engine.pendingDialog = {
-          text: stripScriptCodes(text, mapNameResolver),
-          type: 'simple',
-          selections: styles.map((styleId, i) => ({
-            index: i,
-            label: getItemName(styleId) !== 'item' ? getItemName(styleId) : `Style ${styleId}`,
-          })),
-        };
+        // The v83 avatar picker (UtilDlgEx_Avatar): the script gets back
+        // (mode 1, type 7, index) and applies cm.setHair(styles[selection])
+        // itself. An empty list is Cosmic's "no cosmetics" notice + dispose.
+        const styles: number[] = (Array.isArray(options) ? options : [])
+          .map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v) && v >= 0);
+        if (styles.length === 0) {
+          engine.pendingDialog = {
+            text: 'Sorry, there are no options of cosmetics available for you here at the moment.',
+            type: 'ok',
+          };
+          engine.disposed = true;
+          return;
+        }
+        engine.pendingDialog = { text: stripScriptCodes(text, mapNameResolver), type: 'style', styles };
       },
       sendGetText(text: string, def?: string) {
         engine.pendingDialog = {
@@ -664,8 +697,23 @@ export default class NpcScriptEngine {
       getQuestProgressInt(questId: number) { return 0; },
 
       // Cosmetics — mutate the character and persist on next save
-      isCosmeticEquipped(id: number) { return false; },
-      getCosmeticItem(slot: number) { return 0; },
+      // Cosmic: a cosmetic "exists" when String.wz names it; a missing colour
+      // variant falls back to its base (hair xxxx0, face xxx00), else -1
+      isCosmeticEquipped(id: number) {
+        id = Number(id);
+        if (id < 100) return (character?.skinColor ?? 0) === id;
+        if (id < 30000) return (character?.face ?? 20000) === id;
+        return (character?.hair ?? 30030) === id;
+      },
+      getCosmeticItem(id: number) {
+        id = Number(id);
+        if (!Number.isFinite(id)) return -1;
+        if (id < 100) return id;
+        const exists = (v: number) => !!getItemNameSync(v);
+        if (exists(id)) return id;
+        const base = id < 30000 ? Math.floor(id / 1000) * 1000 + (id % 100) : Math.floor(id / 10) * 10;
+        return id !== base && exists(base) ? base : -1;
+      },
       /**
        * Put an equip straight onto the character, no inventory round trip.
        * Used by the Maple avatar NPC, which dresses the player rather than
@@ -686,9 +734,9 @@ export default class NpcScriptEngine {
           }
         })();
       },
-      setHair(id: number) { character?.setHair?.(id)?.catch?.(console.error); },
-      setFace(id: number) { character?.setFace?.(id)?.catch?.(console.error); },
-      setSkin(id: number) { character?.setSkinColor?.(id)?.catch?.(console.error); },
+      setHair(id: number) { character?.setHair?.(id)?.then?.(() => (window as any).__mySocket?.requestSave?.())?.catch?.(console.error); },
+      setFace(id: number) { character?.setFace?.(id)?.then?.(() => (window as any).__mySocket?.requestSave?.())?.catch?.(console.error); },
+      setSkin(id: number) { character?.setSkinColor?.(id)?.then?.(() => (window as any).__mySocket?.requestSave?.())?.catch?.(console.error); },
 
       // Skills/jobs
       teachSkill(skillId: number, level?: number, masterLevel?: number) {
@@ -738,11 +786,7 @@ export default class NpcScriptEngine {
         return PartyManager.isInParty() ? PartyManager.isLeader() : true;
       },
       isEventLeader() { return HenesysPQ.isEventLeader(); },
-      getEventInstance() {
-        return HenesysPQ.isRegistered()
-          ? makeSafeScriptApi(HenesysPQ.getInstanceApi(), 'EventInstance:HenesysPQ')
-          : null;
-      },
+      getEventInstance() { return engine.eventInstanceApi(); },
       isUsingOldPqNpcStyle() { return false; },
       getEventManager(name: string) {
         if (name === 'HenesysPQ') {

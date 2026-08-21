@@ -34,6 +34,19 @@ async function playSkillArt(character: any, skillId: number, nodeName: 'effect' 
     character.skillEffectDelay = 0;
     character.skillEffectActive = true;
     character.muzzleHold = null;
+    // `effect0`, `effect1`, ... are the skill's extra cast layers — one per
+    // hit for Spear Crusher, Dragon Fury's burst — and the original client
+    // plays them all at cast time; each opens with a blank 1x1 frame whose
+    // delay is its stagger. They run on their own clocks beside `effect`.
+    if (nodeName === 'effect') {
+      const layers: any[] = [];
+      for (const child of skillRoot?.nChildren || []) {
+        if (/^effect\d+$/.test(String(child.nName)) && child.nChildren?.length) {
+          layers.push({ frames: child.nChildren, frame: 0, delay: 0 });
+        }
+      }
+      character.skillEffectLayers = layers;
+    }
   } catch (e) {
     /* a missing effect is not an error */
   }

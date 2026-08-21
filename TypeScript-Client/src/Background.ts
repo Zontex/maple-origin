@@ -35,6 +35,8 @@ class Background {
   z: number = 0;
   rx: number = 0;
   ry: number = 0;
+  /** Drawn 1:1 at world coordinates instead of through the scaled sky pass. */
+  worldLocked: boolean = false;
   cx: number = 0;
   cy: number = 0;
   type: number = 0;
@@ -129,6 +131,17 @@ class Background {
       case 4: case 6: this.velocityX = this.rx; break;
       case 5: case 7: this.velocityY = this.ry; break;
     }
+
+    // A layer whose parallax is (near) -100 on both axes is pinned to the
+    // world — Zakum's lava (ry -95, scrolling in X), the lava-rock pieces at
+    // -80/-80 standing beside their platforms. Such art belongs at a world
+    // position at 1:1, like an object; composing it for 800x600 and
+    // magnifying it with the sky (see getBackgroundScale) moved Zakum's lava
+    // up over the arena floor on any larger viewport. A scrolling axis
+    // (type 4-7) is world-locked on that axis by construction.
+    const rxP = this.velocityX !== 0 ? -100 : this.rx;
+    const ryP = this.velocityY !== 0 ? -100 : this.ry;
+    this.worldLocked = Math.abs(rxP) >= 80 && Math.abs(ryP) >= 80;
   }
   setFrame(frame = 0, carryOverDelay = 0) {
     if (!this.frames || this.frames.length === 0) return;
@@ -170,7 +183,7 @@ class Background {
     // Ceil to match the compositor canvas (MapleMap._bgCompose), which must
     // have integer dimensions — tiling to the fractional size would leave its
     // last sub-pixel row/column untiled and visible after the scaled blit.
-    const scale = getBackgroundScale();
+    const scale = this.worldLocked ? 1 : getBackgroundScale();
     const viewW = Math.ceil(config.width / scale);
     const viewH = Math.ceil(config.height / scale);
     // Camera in authored units. Every term derived from it is magnified by the

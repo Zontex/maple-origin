@@ -2,6 +2,7 @@ import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import MyCharacter from '../MyCharacter';
 import SkillData, { SkillInfo } from '../Skills/SkillData';
+import { skillHpCost } from '../Skills/SkillData';
 import { playSkillSound as playSkillSoundClip } from '../Skills/SkillSound';
 import { usesWeaponSound } from '../Constants/CombatSkills';
 import { playSkillCastEffect } from '../Skills/SkillCastEffect';
@@ -264,8 +265,9 @@ const UIHotkeyBar = {
       return;
     }
 
-    // Check HP cost
-    if (effect.hpCon > 0 && MyCharacter.hp <= effect.hpCon) {
+    // Check HP cost (Dragon Roar's is a share of max HP)
+    const hpCost = skillHpCost(skillId, effect, MyCharacter.maxHp);
+    if (hpCost > 0 && MyCharacter.hp <= hpCost) {
       return;
     }
 
@@ -306,7 +308,7 @@ const UIHotkeyBar = {
 
     // Consume resources
     if (effect.mpCon > 0) MyCharacter.mp -= effect.mpCon;
-    if (effect.hpCon > 0) MyCharacter.hp -= effect.hpCon;
+    if (hpCost > 0) MyCharacter.hp = Math.max(1, MyCharacter.hp - hpCost);
 
     // Start cooldown
     if (effect.cooltime > 0) {

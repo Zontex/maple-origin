@@ -152,6 +152,9 @@ class Monster {
   firstAttack: boolean = false;
   bodyAttack: number = 1;
   isFriendly: boolean = false;
+  // Cosmic's "fake monster" (rm.spawnFakeMonster): drawn and animated but
+  // untargetable and unhurtable — Zakum's body until its eight arms are down
+  isFake: boolean = false;
   /** Scripted kills (PQ clear) suppress loot */
   _noDrops: boolean = false;
   flySpeed: number = 0;
@@ -206,6 +209,7 @@ class Monster {
 
     this.oId = opts.oId;
     this.id = opts.id;
+    this.isFake = !!opts.fake;
     this.fh = opts.fh;
     this.minX = opts.minX;
     this.maxX = opts.maxX;
@@ -389,14 +393,29 @@ class Monster {
     // Start decoding every stance + attack-ball frame now — drawImage skips
     // undecoded images, so lazily-created frames blink on first render. Fire
     // and forget: awaiting every decode blocks map load for seconds.
-    mobFile.nChildren
-      .filter((c: any) => c.nName !== "info")
-      .forEach((stanceNode: any) => {
-        (stanceNode.nChildren || []).forEach((frame: any) => {
-          const f = frame.nTagName === "uol" ? frame.nResolveUOL() : frame;
-          void f?.nPreloadImage?.();
-        });
+    //
+    // Budgeted: a normal mob is a few MB of bitmaps and decodes whole. Zakum
+    // is ~230 frames up to 697x513 per body and nine of him spawn in one tick
+    // — ~370MB of bitmaps at once, which is what tipped the GPU process over
+    // and left the screen a tiled smear. Past the budget only the standing
+    // frames decode up front; every other stance decodes the first time the
+    // mob switches to it (setStance), at the cost of one blink.
+    const stanceNodes = mobFile.nChildren.filter((c: any) => c.nName !== "info");
+    let pixels = 0;
+    for (const stanceNode of stanceNodes) {
+      for (const frame of stanceNode.nChildren || []) {
+        const f = frame?.nTagName === "uol" ? frame.nResolveUOL() : frame;
+        pixels += (f?.nWidth ?? 0) * (f?.nHeight ?? 0);
+      }
+    }
+    this._lazyStances = pixels > Monster.EAGER_DECODE_PIXEL_BUDGET;
+    for (const stanceNode of stanceNodes) {
+      if (this._lazyStances && stanceNode.nName !== MobStance.stand) continue;
+      (stanceNode.nChildren || []).forEach((frame: any) => {
+        const f = frame.nTagName === "uol" ? frame.nResolveUOL() : frame;
+        void f?.nPreloadImage?.();
       });
+    }
     for (const attack of this.attacks) {
       (attack.ballNode?.nChildren || []).forEach((frame: any) => {
         void frame?.nPreloadImage?.();
@@ -614,6 +633,39 @@ async addDrops() {
       } catch {}
     }
 
+    // Zakum: the body (8800000) is spawned fake; once the last arm
+    // (8800003-8800010) dies it becomes a real, hittable monster. A body that
+    // dies revives into its next form (Mob.wz info/revive: 8800000 → 8800001
+    // → 8800002) in the same place.
+    if (!this.isRemote) {
+      if (this.id >= 8800003 && this.id <= 8800010) {
+        const armsLeft = (this.map?.monsters || []).some(
+          (m: any) => m !== this && m.id >= 8800003 && m.id <= 8800010 && !m.dying && !m.destroyed
+        );
+        if (!armsLeft) {
+          for (const m of this.map?.monsters || []) {
+            if (m.id === 8800000 && m.isFake) m.isFake = false;
+          }
+        }
+      }
+      const revive = this.mobFile?.info?.revive;
+      if (revive?.nChildren?.length && this.map?.spawnMonster) {
+        const nextIds = revive.nChildren.map((c: any) => Number(c.nValue)).filter((n: number) => Number.isFinite(n) && n > 0);
+        const { x, y } = this.pos;
+        const fh = this.pos.fh;
+        const map = this.map;
+        setTimeout(() => {
+          for (const id of nextIds) {
+            void map.spawnMonster({
+              oId: 200000 + id, id, x, y, fh: fh?.id,
+              minX: fh ? fh.x1 : x - 100, maxX: fh ? fh.x2 : x + 100,
+              stance: '', map, alive: true, nextPossibleSpawn: 0, fadeIn: true,
+            });
+          }
+        }, 1500);
+      }
+    }
+
     // Award experience to the player who killed the monster; local kills
     // run the v83 party split (same-map members get their share relayed)
     if (responsibleMapleCharacter) {
@@ -648,8 +700,25 @@ async addDrops() {
     this.nextDelay = stanceFrame.nGet("delay").nGet("nValue", 100);
   }
 
+  /** Mobs whose art exceeds this many pixels decode stances on demand (~24MB of bitmaps). */
+  static readonly EAGER_DECODE_PIXEL_BUDGET = 6_000_000;
+  _lazyStances: boolean = false;
+  private _decodedStances: Set<string> = new Set();
+
+  /** Decode one stance's frames (lazy mobs only), once. */
+  private preloadStanceFrames(stance: string) {
+    if (!this._lazyStances || this._decodedStances.has(stance)) return;
+    this._decodedStances.add(stance);
+    const node = this.mobFile?.[stance];
+    for (const frame of node?.nChildren || []) {
+      const f = frame?.nTagName === "uol" ? frame.nResolveUOL() : frame;
+      void f?.nPreloadImage?.();
+    }
+  }
+
   setStance(stance: any, frame = 0, onFinish = () => {}) {
     if (this.stance !== stance) {
+      this.preloadStanceFrames(String(stance));
       this.stance = stance;
       this.stances = {};
       this.mobFile.nChildren
@@ -713,6 +782,9 @@ async addDrops() {
       damage = this.applyMobStatusesToHit(damage, skillId, responsibleMapleCharacter);
     }
 
+    // A fake (Zakum body behind its arms) shrugs everything off silently
+    if (this.isFake) return;
+
     // Remote mob (non-host client): send damage request to host, show visual only
     if (this.isRemote) {
       // Send damage request to host via server
@@ -722,7 +794,7 @@ async addDrops() {
       // Show damage indicator locally for immediate feedback
       this.DamageIndicator.addDamageIndicator(
         indicatorType,
-        { x: this.centerPosition.x - this.width / 2, y: this.centerPosition.y - this.height - 20 },
+        { x: this.getHitRect().x, y: this.getHitRect().y - 20 },
         damage
       );
       this.playAudio(MobSounds.Damage);
@@ -783,8 +855,8 @@ async addDrops() {
     this.DamageIndicator.addDamageIndicator(
       indicatorType,
       {
-        x: this.centerPosition.x - this.width / 2,
-        y: this.centerPosition.y - this.height - 20,
+        x: this.getHitRect().x,
+        y: this.getHitRect().y - 20,
       },
       damage
     );
@@ -870,7 +942,7 @@ async addDrops() {
       this.hp += healed;
       this.DamageIndicator?.addDamageIndicator(
         DamageIndicatorType.Recovery,
-        { x: this.centerPosition.x - this.width / 2, y: this.centerPosition.y - this.height - 20 },
+        { x: this.getHitRect().x, y: this.getHitRect().y - 20 },
         healed
       );
     }
@@ -964,6 +1036,35 @@ async addDrops() {
     }
     holder.frame = art.frames.length - 1;
     return true;
+  }
+
+  /**
+   * World-space hit box of the current frame. v83 mob frames carry `lt`/`rb`
+   * — the body rectangle relative to the anchor, authored facing left and
+   * mirrored with the sprite — and that is where a mob can be struck. Zakum's
+   * eight arms share one anchor with the body; only their boxes tell them
+   * apart (Arm 1 sits 144..48px left and 400..266px above it). Frames without
+   * a box fall back to the drawn sprite.
+   */
+  getHitRect(): { x: number; y: number; width: number; height: number } {
+    const frame = this.stances?.[this.stance]?.frames?.[this.frame];
+    const lt = frame?.nGet?.("lt");
+    const rb = frame?.nGet?.("rb");
+    const ltx = lt?.nX, lty = lt?.nY, rbx = rb?.nX, rby = rb?.nY;
+    if ([ltx, lty, rbx, rby].every((v) => typeof v === "number")) {
+      const flip = this.noFlip ? false : !!this.flipped;
+      const left = flip ? -rbx : ltx;
+      const right = flip ? -ltx : rbx;
+      return { x: this.pos.x + left, y: this.pos.y + lty, width: right - left, height: rby - lty };
+    }
+    if (this.width > 0 && this.height > 0) return { x: this.x, y: this.y, width: this.width, height: this.height };
+    return { x: this.pos.x - 25, y: this.pos.y - 50, width: 50, height: 50 };
+  }
+
+  /** Centre of the hit box — where damage numbers, bars and impact art go */
+  get hitCenter(): { x: number; y: number } {
+    const r = this.getHitRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   }
 
   /** WZ `pos` anchor → world y for this mob: 0 feet, 1/2 head top, 3 body centre */
@@ -1470,8 +1571,11 @@ async addDrops() {
 
     if (!this.dying && !this.isInHit) {
       this.updateAggro(now);
-      this.tryAttack(now);
-      if (!this.isAttacking) MobSkillRunner.tryCast(this, now);
+      // A fake (Zakum's body behind its arms) neither swings nor casts
+      if (!this.isFake) {
+        this.tryAttack(now);
+        if (!this.isAttacking) MobSkillRunner.tryCast(this, now);
+      }
     }
 
     // Haste-type buffs scale the walk; everything else keeps the WZ speed
@@ -1673,11 +1777,11 @@ async addDrops() {
     const blackBorderWidth = 1;
     const whiteBorderWidth = 1;
 
-    // Calculate bar dimensions
-    const barX = Math.floor(this.pos.x - camera.x - healthBarWidth / 2);
-    const barY = Math.floor(
-      this.pos.y - originY - camera.y - healthBarOffsetFromY
-    );
+    // Bar above the hit box (an arm's, not the anchor every Zakum part shares)
+    const hitRect = this.getHitRect();
+    const barX = Math.floor(hitRect.x + hitRect.width / 2 - camera.x - healthBarWidth / 2);
+    const barY = Math.floor(hitRect.y - camera.y - healthBarOffsetFromY);
+    void originY;
     const whiteBarWidth = healthBarWidth - 2 * blackBorderWidth;
     const whiteBarHeight = healthBarHeight - 2 * blackBorderWidth;
 

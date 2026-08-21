@@ -218,7 +218,7 @@ export default class ReactorScriptEngine {
     // Reactor position with Cosmic's 10px lift (ReactorActionManager.getPosition)
     const getPosition = () => ({ x: reactor.x, y: reactor.y - 10, getX: () => reactor.x, getY: () => reactor.y - 10 });
 
-    const spawnMonsterAt = async (id: number, x: number, y: number) => {
+    const spawnMonsterAt = async (id: number, x: number, y: number, extra: Record<string, any> = {}) => {
       if (!map?.spawnMonster) return;
       const ground = map.getFootholdBelow?.(x, y) || map.getNearestFootholdPosition?.(x, y);
       const gy = ground?.y ?? y;
@@ -236,6 +236,7 @@ export default class ReactorScriptEngine {
         alive: true,
         nextPossibleSpawn: 0,
         fadeIn: true,
+        ...extra,
       };
       try {
         await map.spawnMonster(def);
@@ -426,8 +427,9 @@ export default class ReactorScriptEngine {
         for (let i = 0; i < qty; i++) void spawnMonsterAt(Number(id), x, y);
       },
       spawnFakeMonster(id: number) {
+        // Untargetable stand-in (Zakum's body while its arms live)
         const pos = getPosition();
-        void spawnMonsterAt(Number(id), pos.x, pos.y);
+        void spawnMonsterAt(Number(id), pos.x, pos.y, { fake: true });
       },
       summonBossDelayed(mobId: number, delayMs: number, x: number, y: number, bgm?: string, message?: string) {
         setTimeout(() => {

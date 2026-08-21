@@ -420,7 +420,7 @@ class Summon {
 
   private usable(m: any): boolean {
     const c = m?.centerPosition;
-    return !!m && !m.dying && !m.destroyed && !m.isFriendly && !!c && Number.isFinite(c.x) && Number.isFinite(c.y);
+    return !!m && !m.dying && !m.destroyed && !m.isFriendly && !m.isFake && !!c && Number.isFinite(c.x) && Number.isFinite(c.y);
   }
 
   private distanceTo(m: any): number {
@@ -479,6 +479,7 @@ class Summon {
   }
 
   private mobRect(m: any) {
+    if (m.getHitRect) return m.getHitRect();
     if (m.width > 0 && m.height > 0) return { x: m.x, y: m.y, width: m.width, height: m.height };
     const c = m.centerPosition;
     return { x: c.x - 1, y: c.y - 1, width: 2, height: 2 };

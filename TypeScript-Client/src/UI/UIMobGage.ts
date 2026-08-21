@@ -68,7 +68,7 @@ const UIMobGage = {
   isShowable(mob: any, monsters: any[]): boolean {
     return (
       !!mob &&
-      mob.isBoss &&
+      mob.isBoss && !mob.isFake &&
       !mob.dying &&
       !mob.destroyed &&
       (mob.hp ?? 0) > 0 &&

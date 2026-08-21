@@ -1,4 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
+import UIAvatarStyleDialog from './UIAvatarStyleDialog';
 import GameCanvas from '../GameCanvas';
 import { CameraInterface } from '../Camera';
 import { MapleStanceButton } from './MapleStanceButton';
@@ -280,10 +281,23 @@ export default class UIQuestDialog {
     text: string;
     dialogType: ScriptDialogType;
     selections?: SelectionOption[];
+    styles?: number[];
     input?: { def?: string | number; min?: number; max?: number };
     onInput?: (value: string) => void;
     onAction: (mode: number, type: number, selection: number) => void;
   }) {
+    // sendStyle opens the avatar picker instead of this window
+    if (opts.dialogType === 'style') {
+      this.hide();
+      await UIAvatarStyleDialog.show({
+        npcId: opts.npcId,
+        text: opts.text,
+        styles: opts.styles || [],
+        character: (window as any).charecter,
+        onAction: opts.onAction,
+      });
+      return;
+    }
     this.scriptMode = true;
     this.scriptDialogType = opts.dialogType;
     this.scriptOnAction = opts.onAction;
@@ -827,6 +841,7 @@ export default class UIQuestDialog {
     this.buttons.forEach(btn => ClickManager.removeButton(btn));
     this.buttons = [];
     this.isHidden = true;
+    if (UIAvatarStyleDialog.isVisible) UIAvatarStyleDialog.hide();
     this.onQuestAccepted = null;
     this.onQuestCompleted = null;
     this.scriptMode = false;

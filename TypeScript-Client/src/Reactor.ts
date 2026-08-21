@@ -37,6 +37,8 @@ const REACTOR_SOUND_FALLBACK: Record<number, number> = {
 const SCRIPT_ONLY_REACTORS = new Set<number>([9101000]);
 
 export default class Reactor {
+  /** Item-event offering lying in the box, waiting out the activation delay (MapleMap.checkItemReactors). */
+  _itemArm: { drop: any; at: number } | null = null;
   id: number = 0;
   oId: number = 0; // Unique spawn index for network identification
   x: number = 0;
