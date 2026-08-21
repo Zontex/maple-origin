@@ -194,10 +194,13 @@ const MapStateInstance = {} as MapState;
 
 // Fade overlay for map transitions
 let fadeAlpha = 1; // Start fully black
-let fadeDirection: 'out' | 'none' = 'none'; // 'out' = revealing
+let fadeDirection: 'out' | 'in' | 'none' = 'none'; // 'out' = revealing, 'in' = darkening
 const fadeDuration = 500; // ms
+const fadeInDuration = 300; // ms, darkening (channel change)
 let fadeTimer = 0;
 let fadeWaitForDoneLoading = false; // Wait for map to finish loading before fading in
+let fadeHoldMs = 0; // black held this long before revealing
+let fadeOnBlack: (() => void) | null = null; // runs once the screen is fully black
 let oobRespawning = false; // Out-of-bounds respawn in progress
 // Map loads can race (reconnect re-login, cutscene warps, double-fired
 // transitions). Each initializeMapState takes a sequence number; a run that
@@ -205,6 +208,20 @@ let oobRespawning = false; // Out-of-bounds respawn in progress
 // newer load's state — that half-applied state was rendering maps with no
 // player and no HUD.
 let mapLoadSeq = 0;
+
+/**
+ * Channel change: darken to black over fadeInDuration, run `onBlack` (the
+ * room swap happens unseen), hold briefly, then reveal like a map load. v83
+ * blacks the screen out around a channel change exactly like a warp.
+ */
+export function fadeOutAndBack(onBlack?: () => void, holdMs = 150) {
+  fadeDirection = 'in';
+  fadeTimer = 0;
+  fadeHoldMs = holdMs;
+  fadeOnBlack = onBlack ?? null;
+  const chatInput = document.querySelector('.game-wrapper input') as HTMLInputElement | null;
+  if (chatInput) chatInput.style.visibility = 'hidden';
+}
 
 // Call before map.load() — holds black screen until doneLoading
 export function fadeToBlack() {
@@ -665,7 +682,20 @@ MapStateInstance.doUpdate = function (
   TouchControls.update(canvas);
 
   // Update fade overlay
-  if (fadeWaitForDoneLoading && MapleMap.doneLoading) {
+  if (fadeDirection === 'in') {
+    fadeTimer += msPerTick;
+    fadeAlpha = Math.min(1, fadeTimer / fadeInDuration);
+    if (fadeAlpha >= 1) {
+      fadeDirection = 'none';
+      const cb = fadeOnBlack;
+      fadeOnBlack = null;
+      try { cb?.(); } catch (e) { console.error('[Fade] onBlack failed:', e); }
+      fadeWaitForDoneLoading = true;
+    }
+  }
+  if (fadeWaitForDoneLoading && fadeHoldMs > 0) {
+    fadeHoldMs = Math.max(0, fadeHoldMs - msPerTick);
+  } else if (fadeWaitForDoneLoading && MapleMap.doneLoading) {
     // Map finished loading — start revealing
     fadeWaitForDoneLoading = false;
     fadeDirection = 'out';

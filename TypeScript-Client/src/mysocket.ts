@@ -1667,12 +1667,17 @@ class MySocket {
     }
     this.channel = Number(data.channel) || 0;
     UIChannelSelect.currentChannel = this.channel;
-    for (const [id, player] of this.otherPlayers.entries()) {
-      const index = MapleMap.characters.indexOf(player);
-      if (index !== -1) MapleMap.characters.splice(index, 1);
-      this.otherPlayers.delete(id);
-    }
-    UIChatLog.notice(`[Channel] Moved to channel ${this.channel + 1}.`);
+    // v83 blacks the screen out around a channel change like a warp: fade
+    // down, swap the room's population while it is black, fade back up
+    const swap = () => {
+      for (const [id, player] of this.otherPlayers.entries()) {
+        const index = MapleMap.characters.indexOf(player);
+        if (index !== -1) MapleMap.characters.splice(index, 1);
+        this.otherPlayers.delete(id);
+      }
+      UIChatLog.notice(`[Channel] Moved to channel ${this.channel + 1}.`);
+    };
+    void import('./MapState').then((m) => m.fadeOutAndBack(swap)).catch(() => swap());
   }
 
   // --- Player Effects Sync ---
