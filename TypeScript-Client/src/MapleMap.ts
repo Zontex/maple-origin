@@ -1374,8 +1374,18 @@ MapleMap.render = function (
     if (pc.skillEffectActive) {
       // Gun skills anchor their flash at the barrel, re-read every frame so
       // it rides the recoil (shoot2 → stabO1 → shoot2); no gun → the feet
-      const muzzle = pc.skillEffectAnchor === 'muzzle' ? pc.getMuzzleWorldPosition?.() : null;
-      if (muzzle) drawEffectAt(muzzle.x, muzzle.y, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
+      let hold: { dx: number; dy: number } | null = null;
+      if (pc.skillEffectAnchor === 'muzzle') {
+        // Follow the live muzzle while the attack stance plays; once it has
+        // ended, keep the last offset (relative to pos, so it still walks
+        // with the character) for the frames that outlive the stance
+        if (pc.isInAttack || !pc.muzzleHold) {
+          const m = pc.getMuzzleWorldPosition?.();
+          if (m) pc.muzzleHold = { dx: m.x - pc.pos.x, dy: m.y - pc.pos.y };
+        }
+        hold = pc.muzzleHold;
+      }
+      if (hold) drawEffectAt(pc.pos.x + hold.dx, pc.pos.y + hold.dy, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
       else drawEffect(pc, pc.skillEffectFrames, pc.skillEffectFrame, pc.flipped);
     }
     // Mob-skill diseases (stun stars, darkness, seduce hearts) — see Status/PlayerStatus

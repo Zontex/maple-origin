@@ -167,6 +167,11 @@ class MapleCharacter {
   // it), the gun's `muzzle` map point for gun skills (`weapon = 49`), whose
   // frames straddle their origin because they are authored around the barrel
   skillEffectAnchor: 'feet' | 'muzzle' = 'feet';
+  // Last muzzle offset sampled while the attack stance was playing. Effect
+  // art can outlive the stance (Double Shot's flash is 660ms, `doublefire`
+  // 450ms), and the alert pose that follows holds the gun at the hip — the
+  // tail frames keep this offset instead of sliding onto the body.
+  muzzleHold: { dx: number; dy: number } | null = null;
   // Frame of the attack stance on which the current skill fires
   // (SKILL_TRIGGER_FRAME); null = the stance's last frame, via onLastFrame
   skillTriggerFrame: number | null = null;
@@ -3330,7 +3335,10 @@ isCloseToMob = (inAllDirections = true) => {
     // Weapon trail — ignites at the swing's apex, then plays out on its own.
     // Gated on isInAttack so a late WZ load can't streak during idle frames.
     if (this.isInAttack) {
-      this.afterimage.tryIgnite(this.frame, this.pos.x, this.pos.y, this.flipped);
+      // A gun's afterimage is the muzzle spark (Afterimage/gun.img `shot`:
+      // 25x25, origin at its centre) — it belongs on the barrel, not the feet
+      const muzzle = this.getMuzzleWorldPosition();
+      this.afterimage.tryIgnite(this.frame, muzzle?.x ?? this.pos.x, muzzle?.y ?? this.pos.y, this.flipped);
     } else {
       this.afterimage.armed = false;
     }

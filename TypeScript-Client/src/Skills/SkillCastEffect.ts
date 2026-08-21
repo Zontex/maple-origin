@@ -33,6 +33,7 @@ async function playSkillArt(character: any, skillId: number, nodeName: 'effect' 
     character.skillEffectFrame = 0;
     character.skillEffectDelay = 0;
     character.skillEffectActive = true;
+    character.muzzleHold = null;
   } catch (e) {
     /* a missing effect is not an error */
   }
