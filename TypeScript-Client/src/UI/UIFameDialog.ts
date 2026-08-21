@@ -235,8 +235,14 @@ export default class UIFameDialog {
     this.wasClicked = clicked;
   }
 
-  draw(canvas: GameCanvas, _camera: CameraInterface, _lag: number, _ms: number, _t: number) {
+  draw(canvas: GameCanvas, camera: CameraInterface, lag: number, ms: number, t: number) {
     if (this.isHidden) return;
+    this.drawPanel(canvas);
+    // ClickManager only routes clicks — the buttons paint themselves here
+    this.buttons.forEach((btn) => btn.draw(canvas, camera, lag, ms, t));
+  }
+
+  private drawPanel(canvas: GameCanvas) {
     const frame = this.frame;
     if (!frame) return;
 
