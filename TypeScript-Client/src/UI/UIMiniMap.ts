@@ -344,13 +344,22 @@ UIMiniMap._buildCache = function () {
   ctx.beginPath();
   ctx.rect(nwW, nwH, innerW, innerH);
   ctx.clip();
+  // MaxMap/c is a single translucent-white pixel (255,255,255,119) — the
+  // v83 minimap is see-through by design. It is tiled as a pattern, and a
+  // pattern needs the image decoded: before this flagged the cache, a
+  // first build that ran ahead of the decode skipped the fill and the
+  // interior stayed fully transparent for the rest of the map.
   if (fr.c.width > 0 && fr.c.height > 0) {
     const pattern = ctx.createPattern(fr.c, 'repeat');
     if (pattern) {
       ctx.translate(nwW, nwH);
       ctx.fillStyle = pattern;
       ctx.fillRect(0, 0, innerW, innerH);
+    } else {
+      incomplete = true;
     }
+  } else {
+    incomplete = true;
   }
   ctx.restore();
 
