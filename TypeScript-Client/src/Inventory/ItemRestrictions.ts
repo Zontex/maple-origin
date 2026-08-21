@@ -52,6 +52,17 @@ async function readInfo(itemId: number): Promise<any | null> {
   return await WZManager.get(`Item.wz/${wzType}/${prefix}.img/${strId}/info`);
 }
 
+/**
+ * Cached flags for draw paths that cannot await: returns what is known now
+ * (NONE until the first lookup lands) and kicks the lookup off if needed.
+ */
+export function getItemFlagsSync(itemId: number): ItemFlags {
+  const hit = cache.get(itemId);
+  if (hit) return hit;
+  void getItemFlags(itemId);
+  return NONE;
+}
+
 /** Read (and cache) an item's restriction flags. Unknown items are unrestricted. */
 export async function getItemFlags(itemId: number): Promise<ItemFlags> {
   const hit = cache.get(itemId);

@@ -8,6 +8,7 @@
  * cached — draw() renders nothing on the first hover frames until ready.
  */
 import GameCanvas from '../GameCanvas';
+import { getItemFlagsSync } from '../Inventory/ItemRestrictions';
 import WZManager from '../wz-utils/WZManager';
 import { getEquipWzPath, EquipData } from '../Inventory/Item';
 import { getItemNameSync } from '../Quest/QuestData';
@@ -294,7 +295,13 @@ const UIEquipTooltip = {
     const category = CATEGORY_NAMES[prefix] ?? 'EQUIP';
 
     // ---- Layout ----
-    const jobY = BLOCK_Y + ICON_PLATE + 6;
+    // Untradeable equips carry an "Untradeable" line under the name, which
+    // pushes the icon/REQ block down a row
+    const flags = getItemFlagsSync(itemId);
+    const untradeable = !!(flags.tradeBlock || flags.quest);
+    const headerExtra = untradeable ? 14 : 0;
+    const blockTop = BLOCK_Y + headerExtra;
+    const jobY = blockTop + ICON_PLATE + 6;
     const jobH = A.jobsAble[0]?.height || 13;  // Can/<class> sprites are 13px
     const divY = jobY + jobH + 5;
     const textY = divY + 7;
@@ -322,8 +329,17 @@ const UIEquipTooltip = {
       align: 'center',
     });
 
+    if (untradeable) {
+      canvas.drawText({
+        text: 'Untradeable',
+        x: tx + W / 2, y: ty + 8 + 15,
+        color: '#FF9955', fontSize: 11,
+        align: 'center',
+      });
+    }
+
     // ---- Icon on its backplate, drawn 2x pixel-scaled ----
-    const blockY = ty + BLOCK_Y;
+    const blockY = ty + blockTop;
     if (A.iconBase && A.iconBase.complete && A.iconBase.width > 0) {
       ctx.drawImage(A.iconBase, tx + ICON_X, blockY, ICON_PLATE, ICON_PLATE);
     }
