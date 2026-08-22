@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased] - 2026-08-22
 
 ### Fixed
+- **Papulatus' summon beam drew over the player** (Origin of Clocktower) — the reactor took the layer of the floor beneath it instead of the platform its drop box is authored on; item-triggered reactors now take the platform under their box. No other reactor in the game moves.
 - **Phantom equips** — `!item` accepted ids v83 doesn't have (the name lookup's fallback word counted as a name), equipping one pulled it from the bag and took the worn piece off before the missing Character.wz file threw, and a cash costume cover worn over an emptied slot could not be clicked off (the equip window called the cell empty). Now `!item` refuses unnamed ids, `attachEquip` refuses cleanly and `equipItem` restores the bag and the old piece, and a cover-only cell unequips.
 - **Inventory icons** — slots drew `iconRaw` centred by image size; `info/icon` (the raw plus its baked drop shadow, what the original inventory shows) is now drawn and placed by its origin on the cell floor, `iconRaw` only as a fallback, and anything still well over the cell is scaled to fit. 590 items author an oversized raw — Piece of Cracked Dimension's 52x48 was spilling over its neighbours.
 - **`!item <id> [count]`** dev chat command (beside `!level` and `!map`) — gives yourself any item String.wz names, up to 1000 at a time.

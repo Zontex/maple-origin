@@ -838,20 +838,43 @@ MapleMap.loadReactors = async function (wzNode) {
       // layer-1 bushes — were painted a whole layer earlier and hidden
       // behind the scenery. Within the right layer, drawLayer already puts
       // reactors after objects, which is what puts the box in front.
-      let bestLayer: number | null = null;
-      let bestDist = Infinity;
-      for (const fh of this.footholdList) {
-        const lo = Math.min(fh.x1, fh.x2);
-        const hi = Math.max(fh.x1, fh.x2);
-        if (x < lo || x > hi) continue;
-        const t = (x - fh.x1) / (fh.x2 - fh.x1 || 1);
-        const fy = fh.y1 + t * (fh.y2 - fh.y1);
-        const d = Math.abs(fy - y);
-        if (d < bestDist) {
-          bestDist = d;
-          bestLayer = fh.layer;
+      //
+      // Which foothold is "the ground"? An item-triggered reactor says so
+      // itself: its lt/rb box is authored where the offering must lie, i.e.
+      // on the platform it serves. Papulatus' summon beam (2201004, Origin
+      // of Clocktower) hangs mid-air between the layer-3 platform you drop
+      // the Piece of Cracked Dimension on and the layer-5 floor; the floor
+      // was nearer to its anchor, so the beam took layer 5 and painted over
+      // a player standing in it. Everything else keeps the nearest foothold.
+      // Footholds under `px` with their y inside [top, bottom]; nearest to `py`
+      const nearestLayer = (px: number, py: number, top = -Infinity, bottom = Infinity): number | null => {
+        let best: number | null = null;
+        let bestDist = Infinity;
+        for (const fh of this.footholdList) {
+          const lo = Math.min(fh.x1, fh.x2);
+          const hi = Math.max(fh.x1, fh.x2);
+          if (px < lo || px > hi) continue;
+          const t = (px - fh.x1) / (fh.x2 - fh.x1 || 1);
+          const fy = fh.y1 + t * (fh.y2 - fh.y1);
+          if (fy < top || fy > bottom) continue;
+          const d = Math.abs(fy - py);
+          if (d < bestDist) { bestDist = d; best = fh.layer; }
         }
+        return best;
+      };
+      const itemBox = reactor.placementItemBox;
+      let bestLayer: number | null = null;
+      if (itemBox && (itemBox.rb.x !== itemBox.lt.x || itemBox.rb.y !== itemBox.lt.y)) {
+        // The platform the offering lies on: inside the box's vertical span
+        // (a few px of slack — the beam's box ends 15px under its platform),
+        // nearest to the box's bottom edge, under the box's centre
+        const SLACK = 16;
+        bestLayer = nearestLayer(
+          x + (itemBox.lt.x + itemBox.rb.x) / 2, y + itemBox.rb.y,
+          y + itemBox.lt.y - SLACK, y + itemBox.rb.y + SLACK,
+        );
       }
+      if (bestLayer === null) bestLayer = nearestLayer(x, y);
       if (bestLayer !== null) reactor.layer = bestLayer;
 
       // A reactor we smashed stays smashed until its own timer is up. Without

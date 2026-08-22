@@ -328,6 +328,11 @@ export default class Reactor {
   }
 
   /** The item-drop trigger of the current state, if any (and still pending) */
+  /** The state-0 item-drop box (type-100 event), used to place the reactor in its platform's layer. */
+  get placementItemBox(): ReactorItemEvent | null {
+    return this.states?.[0]?.itemEvent ?? null;
+  }
+
   getItemEvent(): ReactorItemEvent | null {
     if (this.destroyed || this.isHit || this.pendingAdvance >= 0) return null;
     return this.states[this.currentState]?.itemEvent ?? null;
