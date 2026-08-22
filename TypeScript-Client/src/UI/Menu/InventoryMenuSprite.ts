@@ -533,35 +533,37 @@ class InventoryMenuSprite extends DragableMenu {
         if (slotIndex < items.length && items[slotIndex]) {
           const item = items[slotIndex];
           let icon = null;
-          // Expired pets show their doll icon (iconRawD)
-          if (item.equipData?.dead) {
-            const dollNode = item.node?.info?.iconRawD ?? item.node?.info?.iconD;
-            try {
-              if (dollNode?.nGetImage) icon = dollNode.nGetImage();
-            } catch { /* fall through to the live icon */ }
+          // The slot art is `info/icon` — iconRaw plus the baked drop shadow,
+          // what the original's inventory shows — placed by its origin so it
+          // sits on the cell's floor like the original. iconRaw is only the
+          // fallback: some items author it oversized (Piece of Cracked
+          // Dimension's raw is 52x48 against a 32x32 icon) and it covered
+          // the neighbouring cells. Expired pets show their doll (iconD).
+          const info = item.node?.info;
+          const dead = !!item.equipData?.dead;
+          const candidates = dead
+            ? [info?.iconD, info?.iconRawD, info?.icon, info?.iconRaw]
+            : [info?.icon, item.node?.icon, info?.iconRaw, item.node?.iconRaw];
+          let iconNode: any = null;
+          for (const c of candidates) {
+            if (c?.nTagName === 'canvas' && c.nGetImage) { iconNode = c; break; }
           }
-          if (!icon && item.node && item.node.iconRaw) {
-            try {
-              icon = item.node.iconRaw.nGetImage();
-            } catch (e) {
-              console.warn(`Failed to get iconRaw image for item ${item.itemId}`);
-            }
-          }
-          if (!icon && item.node && item.node.info && item.node.info.iconRaw) {
-            try {
-              icon = item.node.info.iconRaw.nGetImage();
-            } catch (e) {
-              console.warn(`Failed to get info.iconRaw image for item ${item.itemId}`);
-            }
-          }
+          try { icon = iconNode?.nGetImage?.() ?? null; } catch { icon = null; }
 
-          if (icon) {
+          if (icon && iconNode) {
             try {
-              canvas.drawImage({
-                img: icon,
-                dx: slotX + (slotSize - icon.width) / 2,
-                dy: slotY + (slotSize - icon.height) / 2,
-              });
+              const w = Number(iconNode.nWidth) || icon.width || slotSize;
+              const h = Number(iconNode.nHeight) || icon.height || slotSize;
+              const ox = Number(iconNode.nGet?.('origin')?.nX ?? 0) || 0;
+              const oy = Number(iconNode.nGet?.('origin')?.nY ?? h) || h;
+              // Anything well over the cell (a few chairs, oversized raws
+              // with no icon) is scaled to fit rather than spilling over
+              const limit = slotSize + 4;
+              const scale = w > limit || h > limit ? Math.min(limit / w, limit / h) : 1;
+              const dw = Math.round(w * scale), dh = Math.round(h * scale);
+              const dx = scale === 1 ? slotX - ox : slotX + Math.round((slotSize - dw) / 2);
+              const dy = scale === 1 ? slotY + slotSize - oy : slotY + slotSize - dh;
+              canvas.drawImage({ img: icon, dx, dy, dw, dh });
             } catch (e) {
               console.warn(`Failed to draw icon for item ${item.itemId}`);
             }

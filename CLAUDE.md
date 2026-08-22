@@ -400,6 +400,9 @@ Use `Math.floor(itemId / 1000000)` to determine inventory tab:
 | 190, 193 | 19 | TamingMob | Mount |
 | 191 | 20 | TamingMob | Saddle |
 
+### Item icon rule (inventory cells)
+- `info/icon` = `iconRaw` + the 2-3px baked drop shadow; its `origin` bottom-anchors it in a 32px cell (Red Potion: 27x30, origin (-3,30) → drawn at cell (3,2)). The inventory draws `icon` placed by origin, `iconRaw` only as a fallback, and scales anything over 36px to fit. 590 items (chairs, some ETC/quest pieces) author an oversized `iconRaw` — never centre a raw by its pixel size in a cell. Storage/Trade/Shop/Hotkey still draw iconRaw centred.
+
 ### Equipment Item Icons
 - Equip items (category 1) live in `Character.wz/{Dir}/0{itemId}.img`, NOT `Item.wz`
 - Icons at `node.info.iconRaw` or `node.info.icon` (prefer iconRaw)
