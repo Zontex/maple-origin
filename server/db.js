@@ -195,6 +195,20 @@ function initSchema() {
     // Column already exists — ignore
   }
 
+  // Migration: superuser flag — only these accounts may run the "!" GM
+  // commands (DevCommands.ts); everyone else's "!text" is plain chat
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN superuser INTEGER DEFAULT 0`);
+  } catch (e) {
+    // Column already exists — ignore
+  }
+  // The built-in admin account is the superuser
+  try {
+    db.prepare(`UPDATE users SET superuser = 1 WHERE username = 'admin' COLLATE NOCASE`).run();
+  } catch (e) {
+    console.warn('[DB] could not flag admin as superuser:', e.message);
+  }
+
   console.log('[DB] SQLite schema initialized');
 }
 

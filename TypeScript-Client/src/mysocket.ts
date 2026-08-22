@@ -118,6 +118,8 @@ class MySocket {
   // Set by disconnect() so handleSocketClose skips the reconnect path
   intentionalDisconnect: boolean = false;
   userId: number = 0;
+  // Account may run the "!" GM commands (users.superuser); false = plain chat
+  isSuperuser: boolean = false;
   reconnectAttempts: number = 0;
   maxReconnectAttempts: number = 5;
   reconnectInterval: number = 3000; // 3 seconds
@@ -732,6 +734,7 @@ class MySocket {
           if (data.success) {
             this.isLoggedIn = true;
             this.userId = data.userId;
+            this.isSuperuser = !!data.superuser;
           }
           break;
         case "character_list":

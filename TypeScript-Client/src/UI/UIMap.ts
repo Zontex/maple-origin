@@ -353,10 +353,13 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
         }
       } else if (msg.trim()) {
         if (msg[0] === "!") {
-          // GM / dev commands (DevCommands.ts: !help lists them); anything
-          // else with a leading "!" is guild chat (delivered to every online
-          // member by the server, echoed back to us too)
-          if (!runDevCommand(msg)) {
+          // GM / dev commands (DevCommands.ts: !help lists them) — only for
+          // a superuser account (users.superuser). For anyone else, and for
+          // anything that is not a known command, a leading "!" is guild
+          // chat (delivered to every online member by the server, echoed
+          // back to us too): no refusal message, nothing written
+          const superuser = !!(window as any).__mySocket?.isSuperuser;
+          if (!(superuser && runDevCommand(msg))) {
             import('../Guild/GuildManager').then(({ default: GuildManager }) => {
               GuildManager.chat(msg.slice(1));
             }).catch(() => {});

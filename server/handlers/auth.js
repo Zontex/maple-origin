@@ -20,6 +20,7 @@ function handleLogin(playerId, data) {
   if (result.success) {
     player.userId = result.userId;
     player.username = result.username;
+    player.superuser = !!result.superuser;
     console.log(`[Auth] User logged in: ${result.username} (${playerId.slice(0, 6)})`);
   }
 }

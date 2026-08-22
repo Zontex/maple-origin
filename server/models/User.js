@@ -33,7 +33,7 @@ class User {
     }
 
     const db = getDb();
-    const user = db.prepare('SELECT id, username, password_hash FROM users WHERE username = ?').get(username);
+    const user = db.prepare('SELECT id, username, password_hash, superuser FROM users WHERE username = ?').get(username);
 
     if (!user) {
       return { success: false, error: 'Invalid username or password' };
@@ -43,7 +43,7 @@ class User {
       return { success: false, error: 'Invalid username or password' };
     }
 
-    return { success: true, userId: user.id, username: user.username };
+    return { success: true, userId: user.id, username: user.username, superuser: !!user.superuser };
   }
 
   static getById(userId) {
