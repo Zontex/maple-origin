@@ -1,5 +1,6 @@
 import WZManager from "../../wz-utils/WZManager";
 import { MobSkillId } from '../../Mob/MobSkillData';
+import { isDevOnlyNode } from '../../CustomWz';
 import UIPetGuideDialog from '../UIPetGuideDialog';
 import WZFiles from "../../Constants/enums/WZFiles";
 import ClickManager from "../ClickManager";
@@ -1189,6 +1190,11 @@ class InventoryMenuSprite extends DragableMenu {
 
     if (chr.chairId === id) {
       chr.standUpFromChair();
+      return;
+    }
+    // The Developer Throne (info/devOnly) seats only the superuser
+    if (isDevOnlyNode(item.node) && !(window as any).__mySocket?.isSuperuser) {
+      UIChatLog.system('Only its maker may sit on this throne.');
       return;
     }
     // Can't sit mid-air, on a rope, while attacking or dead
