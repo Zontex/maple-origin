@@ -390,7 +390,13 @@ class KerningPQEvent {
     if (!this.active) return;
     if (this.timerEndsAt && Date.now() >= this.timerEndsAt) {
       this.timerEndsAt = 0;
-      // Time's up: out through the exit map (the bonus round ends there too)
+      // Time's up: "Failed" (unless this is just the bonus round running out),
+      // then out through the exit map
+      if (!this.cleared) {
+        WZManager.get('Sound.wz/Field.img/Party1/Failed')
+          .then((snd: any) => { if (snd?.nGetAudio) PLAY_AUDIO(snd.nGetAudio()); })
+          .catch(() => {});
+      }
       this.warpTeam(EXIT_MAP);
     }
   }
@@ -411,8 +417,9 @@ class KerningPQEvent {
       if (frames.length > 0) this.effect = { frames, idx: 0, t: 0 };
     } catch { /* optional art */ }
     if (kind === 'clear') {
+      // The party-quest "Clear!" voice, not the quest-completion jingle
       try {
-        const snd: any = await WZManager.get('Sound.wz/Game.img/QuestClear');
+        const snd: any = await WZManager.get('Sound.wz/Field.img/Party1/Clear');
         if (snd?.nGetAudio) PLAY_AUDIO(snd.nGetAudio());
       } catch { /* optional */ }
     }

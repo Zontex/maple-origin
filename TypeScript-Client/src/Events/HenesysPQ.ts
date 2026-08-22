@@ -666,7 +666,8 @@ class HenesysPQEvent {
       if (frames.length > 0) this.clearEffect = { frames, idx: 0, t: 0 };
     } catch {}
     try {
-      const snd: any = await WZManager.get('Sound.wz/Game.img/QuestClear');
+      // The party-quest "Clear!" voice (Field.img/Party1), not the quest jingle
+      const snd: any = await WZManager.get('Sound.wz/Field.img/Party1/Clear');
       if (snd?.nGetAudio) PLAY_AUDIO(snd.nGetAudio());
     } catch {}
   }
