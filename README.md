@@ -7,14 +7,6 @@ TypeScript + HTML5 Canvas client, Node.js WebSocket server, everything rendered 
 
 ---
 
-## Screenshots
-
-![Login Screen](images/login.png)
-![World Select](images/world-select.png)
-![Gameplay](images/gameplay.png)
-
----
-
 ## Quick Start
 
 ### Prerequisites
