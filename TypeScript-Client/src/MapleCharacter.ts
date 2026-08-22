@@ -675,6 +675,28 @@ class MapleCharacter {
     return null;
   }
 
+  /**
+   * When each damage line of a multi-hit attack lands, relative to the first:
+   * the original client applies the i-th line when the i-th body frame after
+   * the trigger frame starts, so the hits follow the animation (Spear
+   * Crusher's thrusts, Brandish's two slashes). Past the last frame the last
+   * frame's delay repeats.
+   */
+  attackHitTimes(count: number): number[] {
+    const frames = this.baseBody?.[this.stance];
+    const times = [0];
+    let t = 0;
+    let last = 100;
+    for (let h = 1, i = this.frame; h < count; h++, i++) {
+      const f = frames?.[i];
+      const d = f ? Math.abs(f.nGet("delay").nGet("nValue", last)) : last;
+      if (d > 0) last = d;
+      t += last;
+      times.push(t);
+    }
+    return times;
+  }
+
   setFrame(frame = 0, carryOverDelay = 0) {
     // Skill trigger frame (see useSkill): fire once when the stance reaches it
     if (
@@ -2082,9 +2104,15 @@ async executeSkillDamage(skillId: number, effect: any) {
   const mastery = this.skillManager?.getWeaponMastery?.(weaponType) ?? 0.1;
   const crit = this.skillManager?.getCritical?.(weaponType) ?? null;
 
+  // Every line is rolled now (Sacrifice drains off the total), but the hits
+  // land one body frame apart like the original client's, each with the
+  // mob's Damage thud and the skill's Hit clip, and the numbers stack up the
+  // column over the mob's head instead of printing on top of each other.
+  const plan: { monster: Monster; lines: { damage: number; crit: boolean }[] }[] = [];
   for (const monster of monsters) {
     try {
       const elemMult = monster.getElementalMultiplier?.(element) ?? 1;
+      const lines: { damage: number; crit: boolean }[] = [];
       for (let hit = 0; hit < attackCount; hit++) {
         let damage: number;
         let isCritical = false;
@@ -2124,27 +2152,46 @@ async executeSkillDamage(skillId: number, effect: any) {
           }
         }
 
-        const knockbackDirection = isCharacterFacingRight ? 1 : -1;
-        monster.hit(damage, knockbackDirection, this, isCritical, skillId);
+        lines.push({ damage, crit: isCritical });
         totalDealt += damage;
       }
-      // The skill's own impact art when it has one (Magic Claw, Energy Bolt's
-      // melee fallback); otherwise nothing, as before
-      if (effect.hitNode) {
-        spawnSkillHit(effect.hitNode, monster.hitCenter.x, monster.hitCenter.y, isCharacterFacingRight);
-      }
+      plan.push({ monster, lines });
     } catch (e) {
       console.error('Error processing skill hit:', e);
     }
+  }
+
+  const knockbackDirection = isCharacterFacingRight ? 1 : -1;
+  const mapAtCast = this.map;
+  const hitTimes = this.attackHitTimes(attackCount);
+  for (let h = 0; h < attackCount; h++) {
+    const land = () => {
+      if (this.map !== mapAtCast) return;
+      let landed = false;
+      for (const { monster, lines } of plan) {
+        const line = lines[h];
+        if (!line || monster.dying) continue;
+        let stackOffset = 0;
+        for (let i = 0; i < h; i++) stackOffset += Monster.damageRowHeight(lines[i].crit);
+        monster.hit(line.damage, knockbackDirection, this, line.crit, skillId, null, stackOffset);
+        landed = true;
+        // The skill's own impact art when it has one (Magic Claw, Energy
+        // Bolt's melee fallback), on the first line only
+        if (h === 0 && effect.hitNode) {
+          spawnSkillHit(effect.hitNode, monster.hitCenter.x, monster.hitCenter.y, isCharacterFacingRight);
+        }
+      }
+      // The skill's own Hit clip (generic weapon hit as fallback), once per line
+      if (landed) void playSkillSound(skillId, 'Hit');
+    };
+    if (hitTimes[h] > 0) setTimeout(land, hitTimes[h]);
+    else land();
   }
 
   // Sacrifice: `x`% of the damage dealt comes out of the caster's HP
   if (skillId === SACRIFICE_ID && effect.x > 0 && totalDealt > 0) {
     this.hp = Math.max(1, this.hp - Math.floor(totalDealt * effect.x / 100));
   }
-
-  // The skill's own Hit clip, falling back to the generic weapon hit
-  void playSkillSound(skillId, 'Hit');
 
   this.checkForItemDropPickup(true);
 }

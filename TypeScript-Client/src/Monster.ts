@@ -765,7 +765,11 @@ async addDrops() {
     skillId: number = 0,
     // Network id of the player this blow belongs to, set when the host is
     // applying a non-host's damage request on their behalf (null for local hits)
-    attackerNetId: string | null = null
+    attackerNetId: string | null = null,
+    // How far above the head this line's number starts: the n-th line of a
+    // multi-hit attack sits above the previous ones (24px a row, 36 after a
+    // critical), the column the original client builds over the mob
+    stackOffset: number = 0
   ) {
     const indicatorType = isCritical
       ? DamageIndicatorType.PlayerCritialHitMob
@@ -794,7 +798,7 @@ async addDrops() {
       // Show damage indicator locally for immediate feedback
       this.DamageIndicator.addDamageIndicator(
         indicatorType,
-        { x: this.getHitRect().x, y: this.getHitRect().y - 20 },
+        { x: this.getHitRect().x, y: this.getHitRect().y - 20 - stackOffset },
         damage
       );
       this.playAudio(MobSounds.Damage);
@@ -856,10 +860,15 @@ async addDrops() {
       indicatorType,
       {
         x: this.getHitRect().x,
-        y: this.getHitRect().y - 20,
+        y: this.getHitRect().y - 20 - stackOffset,
       },
       damage
     );
+  }
+
+  /** Height of a damage-number row in the column over a mob (original client: 24, 36 for a critical). */
+  static damageRowHeight(isCritical: boolean): number {
+    return isCritical ? 36 : 24;
   }
 
   // ---------------------------------------------------------------------

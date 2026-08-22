@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased] - 2026-08-22
 
 ### Fixed
+- **Multi-hit skills land hit by hit** — Spear Crusher, Brandish, Dragon Fury and every other `attackCount` skill applied all their lines in the same instant, so the numbers printed on top of each other and one thud played. Now the i-th line lands when the i-th body frame of the attack starts (the original client's timing), each with the mob's Damage sound and the skill's Hit clip, and the numbers stack up the column over the mob (24px a row, 36 after a critical).
 - **The "GPU crash" was a render-loop exception** — a damage value that was `NaN` or fractional reached the WZ digit sprites (`DamageIndicator.drawDamage`, the status bar's `drawNumbers`), which only ship 0-9; the throw aborted the rest of every frame and left the last good frame smeared across the screen. HP/MP/EXP are now floored at the source (`hp`/`mp` setters, `addExp`, `takeDamage`), both renderers skip glyphs they don't have, and a non-finite value logs a stack trace instead of propagating.
 - **Master Sergeant Fox's `#m211000000#`** — Say `#L` selection labels go through `resolveItemCodes()` like every other display site.
 - **21 invisible mobs** (Werewolf, Tauromacis, the Golems, King Clang, Rombot, Tae Roon, King Sage Cat...) — full-size all-transparent PNGs from the original conversion, repaired with `tools/fix-blank-sprites.py --deep`.
