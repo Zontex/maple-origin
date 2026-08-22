@@ -545,7 +545,10 @@ class InventoryMenuSprite extends DragableMenu {
             ? [info?.iconD, info?.iconRawD, info?.icon, info?.iconRaw]
             : [info?.icon, item.node?.icon, info?.iconRaw, item.node?.iconRaw];
           let iconNode: any = null;
-          for (const c of candidates) {
+          for (const c0 of candidates) {
+            // Scroll icons are `uol` links to another item's icon — follow them
+            let c = c0;
+            if (c?.nTagName === 'uol') { try { c = c.nResolveUOL(); } catch { c = null; } }
             if (c?.nTagName === 'canvas' && c.nGetImage) { iconNode = c; break; }
           }
           try { icon = iconNode?.nGetImage?.() ?? null; } catch { icon = null; }

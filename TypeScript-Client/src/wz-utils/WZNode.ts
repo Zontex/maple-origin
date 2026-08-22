@@ -94,6 +94,12 @@ class WZNode {
   }
 
   nGetImage() {
+    // A `uol` is a link to another node (737 items point info/icon at a
+    // sibling item's icon — every DEX/INT/LUK/... scroll shares one): the
+    // image is the target's
+    if (this.nTagName === "uol") {
+      try { return this.nResolveUOL()?.nGetImage?.(); } catch { return undefined; }
+    }
     if (typeof this.nBasedata === "string") {
       const img = new Image();
       img.src = `${BASE64_HEADERS.PNG}${this.nBasedata}`;
@@ -109,6 +115,9 @@ class WZNode {
    * no-op on non-canvas nodes and already-decoded images.
    */
   nPreloadImage(): Promise<void> {
+    if (this.nTagName === "uol") {
+      try { return this.nResolveUOL()?.nPreloadImage?.() ?? Promise.resolve(); } catch { return Promise.resolve(); }
+    }
     if (this.nTagName !== "canvas") return Promise.resolve();
     const img = this.nGetImage();
     if (img instanceof HTMLImageElement && !img.complete) {
