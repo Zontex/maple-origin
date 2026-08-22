@@ -1,4 +1,4 @@
-import SkillData, { SkillLevelEffect } from './SkillData';
+import SkillData, { SkillLevelEffect, emptyEffect } from './SkillData';
 import GameCanvas from '../GameCanvas';
 
 export interface ActiveBuff {
@@ -26,6 +26,8 @@ export default class BuffManager {
 
   private relay(skillId: number, durationMs: number, on: boolean) {
     if (!this.isLocal) return;
+    // Item buffs (negative ids) have no cast art and nothing a remote needs
+    if (skillId < 0) return;
     const level = (window as any).charecter?.skillManager?.getSkillLevel?.(skillId) ?? 1;
     (window as any).__mySocket?.sendBuff?.(skillId, durationMs, on, level);
   }
@@ -102,6 +104,39 @@ export default class BuffManager {
 
   hasBuff(skillId: number): boolean {
     return this.activeBuffs.has(skillId);
+  }
+
+  /**
+   * A consumable's timed `spec` as a buff, keyed by the NEGATIVE item id the
+   * way the original keys item sources: pad/mad/pdd/mdd/acc/eva/speed/jump
+   * feed the stat totals like a skill's, `thaw` is map protection (negative =
+   * underwater breathing: Air Bubble, Cassandra's Magic; positive = warmth:
+   * Soft White Bun). Using the same item again restarts the clock.
+   */
+  applyItemBuff(itemId: number, spec: Partial<SkillLevelEffect> & { thaw?: number }, durationMs: number, icon: HTMLImageElement | null): void {
+    if (durationMs <= 0) return;
+    const effect: any = {
+      ...emptyEffect(),
+      ...spec,
+      time: Math.floor(durationMs / 1000),
+    };
+    this.activeBuffs.set(-itemId, {
+      skillId: -itemId,
+      effect,
+      expiresAt: Date.now() + durationMs,
+      icon,
+    });
+    console.log(`[Buff] Applied item ${itemId} for ${Math.round(durationMs / 1000)}s`);
+    this.onChange?.();
+  }
+
+  /** Does an active item buff shield against the map's HP drain of this kind? */
+  hasMapProtection(kind: 'water' | 'cold'): boolean {
+    for (const buff of this.activeBuffs.values()) {
+      const thaw = Number((buff.effect as any).thaw || 0);
+      if (kind === 'water' ? thaw < 0 : thaw > 0) return true;
+    }
+    return false;
   }
 
   // Aggregate all active buff stat bonuses

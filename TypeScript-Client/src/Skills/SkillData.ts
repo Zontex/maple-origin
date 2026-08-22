@@ -98,7 +98,7 @@ const LEVEL_EFFECT_FIELDS: (keyof SkillLevelEffect)[] = [
   'hp', 'mp', 'damagepc', 'itemCon', 'itemConNo',
 ];
 
-function emptyEffect(): SkillLevelEffect {
+export function emptyEffect(): SkillLevelEffect {
   return {
     mpCon: 0, hpCon: 0, damage: 0, mastery: 0, time: 0, prop: 0,
     x: 0, y: 0, pad: 0, pdd: 0, mad: 0, mdd: 0, acc: 0, eva: 0,

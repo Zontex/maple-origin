@@ -205,6 +205,9 @@ class MapleCharacter {
   // Shadow Partner: the last SHADOW_PARTNER_LAG_MS of poses, replayed as a
   // dark translucent copy behind the player (see drawShadowPartner)
   shadowTrail: { t: number; x: number; y: number; stance: string; frame: number; flipped: boolean }[] = [];
+  // Map HP drain clock (info/decHP) — see updateMapHpDecrease
+  mapHpDecClock: number = 0;
+  mapHpDecMapId: number | string | null = null;
   afterimage: AfterimageState = new AfterimageState();
   _portalScriptEngine: any = null;
   pos: Physics;
@@ -755,6 +758,37 @@ class MapleCharacter {
       });
     }
     ctx.filter = prevFilter;
+  }
+
+  /**
+   * The map's HP drain (info/decHP): every decInterval (10s unless the map
+   * says otherwise) the local player loses decHP — drowning in Aqua Road (6),
+   * the cold of El Nath (10) — unless the map's protectItem is worn (Oxygen
+   * Tank / Cape of Warmness) or a `thaw` item buff of the right kind is up
+   * (Air Bubble, Cassandra's Magic underwater; Soft White Bun in the cold).
+   * Water is the map's own swim flag. Silent like the original: the bar
+   * drops, no number, no sound. It can kill.
+   */
+  updateMapHpDecrease(msPerTick: number) {
+    const map: any = this.map;
+    const dec = Number(map?.decHP || 0);
+    if (this.isRemote || this.isDead || !(dec > 0)) { this.mapHpDecClock = 0; return; }
+    if (map.id !== this.mapHpDecMapId) { this.mapHpDecMapId = map.id; this.mapHpDecClock = 0; }
+    this.mapHpDecClock += msPerTick;
+    const interval = Number(map.decInterval) > 0 ? Number(map.decInterval) : 10000;
+    if (this.mapHpDecClock < interval) return;
+    this.mapHpDecClock -= interval;
+    if (this.isMapProtected()) return;
+    void this.takeDamage(dec);
+  }
+
+  /** Worn protectItem, or a thaw item buff matching the map (water / cold). */
+  isMapProtected(): boolean {
+    const map: any = this.map;
+    const protect = Number(map?.protectItem || 0);
+    if (protect > 0 && Object.values(this.equippedItemIds || {}).some((id) => Number(id) === protect)) return true;
+    const kind = map?.isSwimMap ? 'water' : 'cold';
+    return !!this.buffManager?.hasMapProtection?.(kind);
   }
 
   /** Shadow Partner up on this character (own buff, or a remote's relayed one)? */
@@ -3606,6 +3640,7 @@ isCloseToMob = (inAllDirections = true) => {
     if (this.buffManager) {
       this.buffManager.update(msPerTick);
     }
+    this.updateMapHpDecrease(msPerTick);
 
     this.updateChair(msPerTick);
 

@@ -1269,6 +1269,25 @@ class InventoryMenuSprite extends DragableMenu {
 
     console.log(`[Inventory] Consumed item #${item.itemId}: +${hpRecover} HP, +${mpRecover} MP`);
 
+    // Timed specs are a buff (Ciders' pad/mad, Bubble Gum's jump, the map
+    // protection of Air Bubble / Soft White Bun) — see BuffManager.applyItemBuff
+    const specNum = (name: string): number => {
+      const n = spec[name] ?? spec.nGet?.(name);
+      const v = n?.nValue ?? n;
+      return typeof v === 'number' || typeof v === 'string' ? (parseInt(String(v)) || 0) : 0;
+    };
+    const timeMs = specNum('time');
+    if (timeMs > 0 && this.charecter.buffManager?.applyItemBuff) {
+      const buffSpec = {
+        pad: specNum('pad'), mad: specNum('mad'), pdd: specNum('pdd'), mdd: specNum('mdd'),
+        acc: specNum('acc'), eva: specNum('eva'), speed: specNum('speed'), jump: specNum('jump'),
+        thaw: specNum('thaw'),
+      };
+      let icon: HTMLImageElement | null = null;
+      try { icon = item.node?.info?.icon?.nGetImage?.() ?? null; } catch { icon = null; }
+      this.charecter.buffManager.applyItemBuff(item.itemId, buffSpec, timeMs, icon);
+    }
+
     // Play consumption sound
     if (this.consumeSound) {
       PLAY_AUDIO(this.consumeSound, 0.5, true);

@@ -63,6 +63,14 @@ export interface MapleMap {
   // info/fieldLimit bitflags (Constants/FieldLimit) and the test for one
   fieldLimit: number;
   forbids: (bit: number) => boolean;
+  // info/decHP — HP lost every `decInterval` ms (default 10s) by anyone not
+  // wearing `protectItem`: Aqua Road drowns for 6 (Oxygen Tank 1102061), El
+  // Nath's cold bites for 10 (Cape of Warmness 1102109). A timed `thaw`
+  // consumable (Air Bubble / Soft White Bun) protects too — see
+  // MapleCharacter.updateMapHpDecrease
+  decHP: number;
+  decInterval: number;
+  protectItem: number;
   setTaggedObjectsVisible: (tag: string, visible: boolean) => number;
   footholds: any;
   // Pre-flattened footholds. Physics scans every foothold per entity per
@@ -245,6 +253,9 @@ MapleMap.load = async function (id: number | string) {
   // Ice (info/fs, see Physics.groundFriction) and the map's fieldLimit bits
   this.fs = parseFloat(this.wzNode.info.nGet("fs").nGet("nValue", 1)) || 1;
   this.fieldLimit = Number(this.wzNode.info.nGet("fieldLimit").nGet("nValue", 0)) || 0;
+  this.decHP = Number(this.wzNode.info.nGet("decHP").nGet("nValue", 0)) || 0;
+  this.decInterval = Number(this.wzNode.info.nGet("decInterval").nGet("nValue", 0)) || 10000;
+  this.protectItem = Number(this.wzNode.info.nGet("protectItem").nGet("nValue", 0)) || 0;
   console.log(`is town: ${this.isTown}, swim: ${this.isSwimMap}, swimAreas: ${this.swimAreas.length}, fs: ${this.fs}, fieldLimit: 0x${this.fieldLimit.toString(16)}`);
   console.log("Map WZ Node:", this.wzNode);
 
