@@ -2,6 +2,7 @@ import WZManager from "./wz-utils/WZManager";
 import { FieldLimit, FIELD_LIMIT_MESSAGE, MOVEMENT_SKILL_IDS } from "./Constants/FieldLimit";
 import { preloadFrames } from "./wz-utils/WZNode";
 import { decodeImages, nextIdle } from "./wz-utils/SpriteWarmup";
+import KerningPQ from "./Events/KerningPQ";
 // Static, not the dynamic import the rest of SkillData uses here: skillReach
 // is needed inside a synchronous stance callback. Safe — SkillData imports
 // only WZManager, so this closes no cycle.
@@ -2783,6 +2784,8 @@ isCloseToMob = (inAllDirections = true) => {
    */
   async enterPortal(portal: Portal) {
     if (this.isInPortal) return;
+    // Kerning PQ: the stage exit stays shut until Nella clears the stage
+    if (!this.isRemote && KerningPQ.blocksPortal(portal.name)) return;
     this.isInPortal = true;
 
     try {

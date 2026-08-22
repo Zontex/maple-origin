@@ -31,6 +31,7 @@ import ShipObject from './Transport/ShipObject';
 import { _setMapleMap } from './Physics';
 import { drawSkillHits, clearSkillHits } from './Effects/SkillHitEffect';
 import HenesysPQ from './Events/HenesysPQ';
+import KerningPQ from './Events/KerningPQ';
 import PetManager from './Pet/PetManager';
 import MysticDoorManager from './Door/MysticDoor';
 import SummonManager from './Summon/SummonManager';
@@ -390,6 +391,7 @@ MapleMap.load = async function (id: number | string) {
 
   // Party quest lifecycle — leaving the event's map range ends the instance
   HenesysPQ.onMapChanged(Number(id));
+  KerningPQ.onMapChanged(Number(id));
 
   // Mystic Doors standing on this map (field side or town side)
   MysticDoorManager.onMapLoaded(this);

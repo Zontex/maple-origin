@@ -15,6 +15,7 @@
  * connection id changes, until the server answers with a party_update.
  */
 
+import { KPQ_RELAY_PREFIX } from '../Events/KerningPQ';
 import SkillData, { SkillLevelEffect } from '../Skills/SkillData';
 import { PARTY_BUFF_SKILLS } from '../Constants/CombatSkills';
 import { playSkillAffectedEffect } from '../Skills/SkillCastEffect';
@@ -283,6 +284,11 @@ class PartyManagerClass {
     const from = String(data?.from ?? '???');
     const message = String(data?.message ?? '').trim();
     if (!message) return;
+    // Event control lines (Kerning PQ stage clears) ride party chat unseen
+    if (message.startsWith(KPQ_RELAY_PREFIX)) {
+      import('../Events/KerningPQ').then(({ default: KerningPQ }) => KerningPQ.onPartyChat(message)).catch(() => {});
+      return;
+    }
     import('../UI/UIChatLog')
       .then(({ default: UIChatLog }) => UIChatLog.addMessage(`${from} : ${message}`, 'party'))
       .catch(() => {});

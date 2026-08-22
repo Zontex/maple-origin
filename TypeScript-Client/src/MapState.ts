@@ -87,6 +87,7 @@ import UIKeyConfig from "./UI/UIKeyConfig";
 import UIWorldMap from "./UI/UIWorldMap";
 import KeyBindings, { ACTIONS, BindableAction, FACE_EXPRESSIONS } from "./KeyBindings";
 import HenesysPQ from "./Events/HenesysPQ";
+import KerningPQ from './Events/KerningPQ';
 
 // Bound-key helpers. Everything below asks for an ACTION, never a letter, so
 // rebinding takes effect immediately and the edge-triggered checks keep
@@ -429,6 +430,7 @@ MapStateInstance.changeMap = async function (map = defaultMap, portalName?: stri
 HenesysPQ.changeMapFn = (mapId: number, portal?: number | string) => {
   void MapStateInstance.changeMap(mapId, portal);
 };
+KerningPQ.changeMapFn = HenesysPQ.changeMapFn;
 
 function isTouchDevice() {
   return "ontouchstart" in window || navigator.maxTouchPoints > 0;
@@ -725,6 +727,7 @@ MapStateInstance.doUpdate = function (
     // driven, so it belongs here rather than in any map-local timer
     TransportationManager.update(MapleMap, (m, p) => MapStateInstance.changeMap(m, p));
     HenesysPQ.update(msPerTick);
+    KerningPQ.update(msPerTick);
 
     // Update ShopUI
     if (ShopUI.isVisible) {
@@ -1207,6 +1210,7 @@ MapStateInstance.doRender = function (
 
     // Party quest overlays: event timer clock, map-effect banner, clear effect
     HenesysPQ.render(canvas);
+    KerningPQ.render(canvas);
 
     // On-screen joystick/buttons + mobile HUD (touch devices only) — topmost
     TouchControls.draw(canvas);

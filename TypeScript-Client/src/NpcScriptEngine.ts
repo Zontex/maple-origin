@@ -7,6 +7,7 @@ import ShopUI from './UI/ShopUI';
 import UIStorage from './UI/UIStorage';
 import TransportationManager from './Transport/TransportationManager';
 import HenesysPQ from './Events/HenesysPQ';
+import KerningPQ from './Events/KerningPQ';
 import PartyManager from './Party/PartyManager';
 
 export type ScriptDialogType =
@@ -138,7 +139,17 @@ export function createScriptJavaShim(cm?: any) {
       case 'java.awt.Point':
         return function (x: number, y: number) { return { x, y, getX: () => x, getY: () => y }; };
       case 'java.awt.Rectangle':
-        return function (x: number, y: number, w: number, h: number) { return { x, y, width: w, height: h }; };
+        // contains(Point) is what the PQ scripts call (Nella's rope/platform/barrel checks)
+        return function (x: number, y: number, w: number, h: number) {
+          return {
+            x, y, width: w, height: h,
+            contains(px: any, py?: number) {
+              const cx = typeof px === 'object' ? Number(px?.x ?? px?.getX?.()) : Number(px);
+              const cy = typeof px === 'object' ? Number(px?.y ?? px?.getY?.()) : Number(py);
+              return cx >= x && cx <= x + w && cy >= y && cy <= y + h;
+            },
+          };
+        };
       default:
         return makeChainableStub(`Java(${cls})`);
     }
@@ -326,6 +337,7 @@ export default class NpcScriptEngine {
   /** The live event instance, or the null-safe stand-in after a crash on one. */
   eventInstanceApi(): any {
     if (HenesysPQ.isRegistered()) return makeSafeScriptApi(HenesysPQ.getInstanceApi(), 'EventInstance:HenesysPQ');
+    if (KerningPQ.isRegistered()) return makeSafeScriptApi(KerningPQ.getInstanceApi(), 'EventInstance:KerningPQ');
     if (!this.eventStub) return null;
     return makeSafeScriptApi({
       isEventCleared() { return false; },
@@ -793,7 +805,7 @@ export default class NpcScriptEngine {
             getMembers() { return members; },
           }, 'Party');
         }
-        if (!HenesysPQ.NPC_IDS.includes(engine.npcId)) return null;
+        if (!HenesysPQ.NPC_IDS.includes(engine.npcId) && !KerningPQ.NPC_IDS.includes(engine.npcId)) return null;
         return makeSafeScriptApi({
           size() { return 1; },
           getLeader() { return playerObj; },
@@ -804,12 +816,15 @@ export default class NpcScriptEngine {
       isLeader() {
         return PartyManager.isInParty() ? PartyManager.isLeader() : true;
       },
-      isEventLeader() { return HenesysPQ.isEventLeader(); },
+      isEventLeader() { return HenesysPQ.isEventLeader() || KerningPQ.isEventLeader(); },
       getEventInstance() { return engine.eventInstanceApi(); },
       isUsingOldPqNpcStyle() { return false; },
       getEventManager(name: string) {
         if (name === 'HenesysPQ') {
           return makeSafeScriptApi(HenesysPQ.getManagerApi(), 'EventManager:HenesysPQ');
+        }
+        if (name === 'KerningPQ') {
+          return makeSafeScriptApi(KerningPQ.getManagerApi(), 'EventManager:KerningPQ');
         }
         // Transportation events (Boats/Trains/.../KerningTrain/Hak) are real —
         // backed by the wall-clock scheduler; everything else keeps the safe stub
