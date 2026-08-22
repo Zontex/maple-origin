@@ -130,6 +130,43 @@ def canvas(name, im, ox, oy, extra=()):
             "$$": [{"$vector": "origin", "x": str(ox), "y": str(oy)}] + list(extra)}
     return node
 
+# --- flame animation: the purple flames licking the base flicker ---------
+# Only the purple (aura/flame) pixels in the lower half move: each frame
+# displaces them with a travelling vertical wave and a brightness flicker;
+# everything else stays put, so the chair itself never wobbles.
+def flame_frames(base, count=6):
+    import math
+    w, h = base.size
+    src = base.load()
+    frames = []
+    for k in range(count):
+        im = base.copy(); dst = im.load()
+        # clear the flame pixels first, then re-place them displaced
+        moved = []
+        for y in range(int(h * 0.5), h):
+            for x in range(w):
+                r, g, b, a = src[x, y]
+                if a > 0 and b > 110 and b > g + 50 and r < 215:
+                    moved.append((x, y, (r, g, b, a)))
+                    dst[x, y] = (0, 0, 0, 0)
+        ph = k * 2 * math.pi / count
+        for x, y, (r, g, b, a) in moved:
+            dy = round(math.sin(x * 0.35 + ph) * 1.6 + math.sin(x * 0.11 - ph * 2) * 1.2)
+            # tips (lighter, higher) move more and flicker more
+            lift = 1 if b > 190 else 0
+            ny = y - max(0, dy) - lift * (1 if k % 2 else 0)
+            nx = x + (1 if (k + x // 7) % 3 == 0 else 0)
+            f = 1.0 + 0.18 * math.sin(ph + x * 0.5 + y * 0.2)
+            col = (min(255, int(r * f)), min(255, int(g * f)), min(255, int(b * f)), a)
+            if 0 <= nx < w and 0 <= ny < h and dst[nx, ny][3] == 0:
+                dst[nx, ny] = col
+        frames.append(im)
+    return frames
+
+FRAMES = flame_frames(OUT) if os.path.exists(SRC) else [OUT]
+for i, fr in enumerate(FRAMES):
+    fr.save(os.path.join(here, f"throne_frame{i}.png"))
+
 # --- the maker's cigar and its smoke (drawn at the mouth while seated) ----
 CIG = Image.new("RGBA", (11, 4), (0, 0, 0, 0)); cd = ImageDraw.Draw(CIG)
 cd.rectangle([0, 0, 8, 3], fill=(112, 66, 38, 255), outline=(52, 30, 18, 255))   # wrapper
@@ -158,7 +195,10 @@ overlay = {
                     {"$int": "tradeBlock", "value": "1"}, {"$int": "notSale", "value": "1"},
                     {"$int": "cash", "value": "0"}, {"$int": "devOnly", "value": "1"},
                 ]},
-                {"$imgdir": "effect", "$$": [canvas("0", OUT, W // 2, H)]},
+                {"$imgdir": "effect", "$$": [
+                    canvas(str(i), fr, W // 2, H, extra=[{"$int": "delay", "value": "120"}])
+                    for i, fr in enumerate(FRAMES)
+                ]},
             ]},
         ],
     },

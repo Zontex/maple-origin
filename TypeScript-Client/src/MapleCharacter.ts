@@ -225,6 +225,11 @@ class MapleCharacter {
   // (its `z` is -1), and info/recoveryHP is applied on a 10s tick.
   chairId: number = 0;
   chairFrame: any = null;
+  // Animated chairs: every `effect/N` frame with its delay (Dragon Chair has
+  // 19, the Developer Throne's flames 6); chairFrame is the one being shown
+  chairFrames: any[] = [];
+  chairFrameIdx: number = 0;
+  chairFrameClock: number = 0;
   chairRecoveryHP: number = 0;
   chairRecoveryTimer: number = 0;
   // Map-object seat (a town bench) being sat on — MapSeat id, null when not.
@@ -1364,6 +1369,10 @@ class MapleCharacter {
       }
       this.chairId = itemId;
       this.chairFrame = frame;
+      this.chairFrames = (item.effect.nChildren || []).filter((c: any) => c?.nTagName === 'canvas');
+      this.chairFrameIdx = 0;
+      this.chairFrameClock = 0;
+      void preloadFrames(this.chairFrames);
       this.chairRecoveryHP = item?.info?.recoveryHP?.nValue ?? 0;
       this.chairRecoveryTimer = 0;
       // Keep whichever way the character was already facing — sitting down
@@ -1379,6 +1388,7 @@ class MapleCharacter {
     clearDevThroneFx(this);
     this.chairId = 0;
     this.chairFrame = null;
+    this.chairFrames = [];
     this.chairRecoveryHP = 0;
     this.chairRecoveryTimer = 0;
   }
@@ -1447,6 +1457,17 @@ class MapleCharacter {
    * whole point of them in v83.
    */
   updateChair(msPerTick: number) {
+    // Frame animation runs for everyone seated, remotes included
+    if (this.chairFrames.length > 1) {
+      this.chairFrameClock += msPerTick;
+      const cur = this.chairFrames[this.chairFrameIdx];
+      const delay = Number(cur?.nGet?.('delay')?.nGet?.('nValue', 100) ?? 100) || 100;
+      if (this.chairFrameClock >= delay) {
+        this.chairFrameClock -= delay;
+        this.chairFrameIdx = (this.chairFrameIdx + 1) % this.chairFrames.length;
+        this.chairFrame = this.chairFrames[this.chairFrameIdx];
+      }
+    }
     if (this.isRemote) return; // their HP is theirs to recover
     if (!this.chairId || this.chairRecoveryHP <= 0) return;
     if (this.hp >= this.maxHp) {
