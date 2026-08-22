@@ -14,6 +14,7 @@ import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
 import { SINGLE_TARGET_REACH } from "../Skills/SkillData";
 import { playSkillSound } from "../Skills/SkillSound";
+import { SHADOW_PARTNER_LAG_MS } from "../Constants/CombatSkills";
 
 // bullets locations
 // Item.wz/Consume/206.img/ID/bullet - arrow
@@ -68,6 +69,8 @@ class Projectile {
   // no body frames to pace by, so it keeps its Hit art's frame delay
   attackCount: number = 1;
   hitCadenceMs: number = 90;
+  // Shadow Partner's share of each line (0 = no shadow), copied at launch
+  shadowRatio: number = 0;
   // Skill damage multiplier on a weapon shot (Double Shot: 0.61..0.80)
   damagePercent: number = 1;
   hitEffectActive: boolean = false;
@@ -97,11 +100,13 @@ class Projectile {
     maxDistance?: number;
     attackCount?: number;
     hitCadenceMs?: number;
+    shadowRatio?: number;
   }): Projectile {
     const p = new Projectile({});
     p.skillId = opts.skillId || 0;
     p.attackCount = Math.max(1, opts.attackCount || 1);
     p.hitCadenceMs = opts.hitCadenceMs || 90;
+    p.shadowRatio = opts.shadowRatio || 0;
     p.charecter = opts.charecter;
     p.pos = new ProjectilePhysics({
       x: opts.x,
@@ -186,6 +191,7 @@ class Projectile {
     this.hitNode = opts.hitNode || null;
     this.attackCount = Math.max(1, opts.attackCount || 1);
     this.hitCadenceMs = opts.hitCadenceMs || 90;
+    this.shadowRatio = opts.shadowRatio || 0;
     if (opts.ballNode?.nChildren?.length) {
       this.stance = opts.ballNode;
       this.setFrame(opts.ballNode, 0);
@@ -314,21 +320,39 @@ class Projectile {
    * print on a mob the first one killed.
    */
   landLines(target: Monster, knockbackDir: number) {
-    const first = this.finalDamangeAfterTargetDefense;
-    target.hit(first, knockbackDir, this.charecter, this.isCritical, this.skillId);
-    let stackOffset = Monster.damageRowHeight(this.isCritical);
+    // Every line is rolled now; the first is the one the flight already rolled
+    const lines: { damage: number; crit: boolean; at: number }[] = [
+      { damage: this.finalDamangeAfterTargetDefense, crit: this.isCritical, at: 0 },
+    ];
     for (let h = 1; h < this.attackCount; h++) {
+      lines.push({ ...this.rollLine(target), at: h * this.hitCadenceMs });
+    }
+    // Shadow Partner: the same set again at its share, a lag after the last
+    if (this.shadowRatio > 0) {
+      const lag = lines[lines.length - 1].at + SHADOW_PARTNER_LAG_MS;
+      for (let h = 0; h < this.attackCount; h++) {
+        const src = lines[h];
+        lines.push({
+          damage: src.damage > 0 ? Math.max(1, Math.floor(src.damage * this.shadowRatio)) : 0,
+          crit: src.crit,
+          at: lag + src.at,
+        });
+      }
+    }
+    let stackOffset = 0;
+    lines.forEach((line, i) => {
       const offset = stackOffset;
+      stackOffset += Monster.damageRowHeight(line.crit);
+      if (i === 0) {
+        target.hit(line.damage, knockbackDir, this.charecter, line.crit, this.skillId);
+        return;
+      }
       setTimeout(() => {
         if (target.destroyed) return;
-        const line = this.rollLine(target);
         target.hit(line.damage, 0, this.charecter, line.crit, this.skillId, null, offset);
         if (this.skillId) void playSkillSound(this.skillId, 'Hit');
-      }, h * this.hitCadenceMs);
-      // Row height is decided by the line's crit roll only when it lands;
-      // reserve a normal row here so the column never overlaps
-      stackOffset += Monster.damageRowHeight(false);
-    }
+      }, line.at);
+    });
   }
 
   checkIfFindTarget() {

@@ -294,7 +294,9 @@ const UIHotkeyBar = {
       // lives in its `effect` node, and only buffs were ever playing it
       this.playSkillEffect(skillId);
     } else if (info.isBuff) {
-      // Buff skill — apply buff
+      // Buff skill — apply buff, after the item it burns (Shadow Partner's
+      // Summoning Rock); no item, no cast and nothing charged
+      if (MyCharacter.consumeBuffItem && !MyCharacter.consumeBuffItem(effect)) return;
       if (MyCharacter.buffManager) {
         MyCharacter.buffManager.applyBuff(skillId, effect);
       }

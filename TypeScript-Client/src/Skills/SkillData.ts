@@ -1,5 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
-import { XY_STAT_SKILLS, MONSTER_MAGNET_IDS, ASSASSINATE_ID } from '../Constants/CombatSkills';
+import { XY_STAT_SKILLS, MONSTER_MAGNET_IDS, ASSASSINATE_ID, SOUL_ARROW_IDS } from '../Constants/CombatSkills';
 
 export interface SkillLevelEffect {
   mpCon: number;
@@ -325,9 +325,14 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   // Levels that spend MP to deal damage and carry no duration are attacks even
   // without root hit/ball art — Sacrifice, Power Crash, Rush, Dragon Fury's
   // pole arm twin. Passives with a damage% (Final Attack, Berserk) cost no MP.
-  const levelIsAttack = effects.some((e) => e.damage > 0 && e.mpCon > 0 && !(e.time > 0));
+  // A magic attack carries `mad` instead of `damage` (Explosion has neither
+  // hit nor ball art — only its box and a `magic3` stance)
+  const levelIsAttack = effects.some((e) => (e.damage > 0 || e.mad > 0) && e.mpCon > 0 && !(e.time > 0));
+  // Hit/ball art is an attack — except Soul Arrow, whose `ball` is the free
+  // arrow the buff grants (see SOUL_ARROW_IDS for why not a generic rule)
+  const artIsAttack = (hasHit || hasBall || levelHasBallOrHit) && !SOUL_ARROW_IDS.has(skillId);
   // Assassinate has no hit/ball art and its levels carry the stun `time`
-  const isAttack = hasHit || hasBall || levelHasBallOrHit || hasSummon || levelIsAttack || MONSTER_MAGNET_IDS.has(skillId) || skillId === ASSASSINATE_ID;
+  const isAttack = artIsAttack || hasSummon || levelIsAttack || MONSTER_MAGNET_IDS.has(skillId) || skillId === ASSASSINATE_ID;
   const isBuff = !isAttack && (hasAction || hasEffect);
   const isPassive = !isAttack && !isBuff && effects.length > 0;
 

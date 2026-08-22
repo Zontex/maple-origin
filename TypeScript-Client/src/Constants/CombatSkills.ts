@@ -49,6 +49,22 @@ export const ASSASSINATE_ID = 4221001;
 // when a skill ships no Hit art either.
 export const MULTI_HIT_FALLBACK_CADENCE_MS = 90;
 
+// Shadow Partner (Hermit 4111002, Night Walker 14111000): "summons a shadow of
+// oneself, repeating every move" for `time` seconds at the cost of a Summoning
+// Rock (`itemCon`). Every attack while it lasts is followed by the shadow's
+// copy of the same lines — `x`% of a basic attack's damage, `y`% of a skill's
+// (lv30 tooltip: "Attack 80%, Skill 50%"). The shadow trails the player by
+// SHADOW_PARTNER_LAG_MS and its lines land that much after the originals,
+// stacked on top of the same column. The lag is not in the WZ.
+export const SHADOW_PARTNER_IDS = new Set([4111002, 14111000]);
+
+// Soul Arrow (Hunter, Crossbowman, Wind Archer) is a timed buff whose `ball`
+// art is the free arrow it grants — the only buffs in Skill.wz whose art
+// reads as an attack. Kept as an explicit list: a generic "timed, no damage"
+// rule also swallows Arrow Bomb, Taunt and Hypnotize.
+export const SOUL_ARROW_IDS = new Set([3101004, 3201004, 13101003]);
+export const SHADOW_PARTNER_LAG_MS = 200;
+
 // Passive critical skills: chance = effect.prop / 100, damage = effect.damage / 100
 export const CRITICAL_SKILLS: Record<number, number[]> = {
   [WeaponType.BOW]: [3000001],                 // Critical Shot

@@ -34,7 +34,7 @@ import { AttackType } from "./Constants/AttackType";
 import Inventory from "./Inventory/Inventory";
 import Stats, { DamageRange } from "./Stats/Stats";
 import PlayerStatus from "./Status/PlayerStatus";
-import { ASSASSINATE_ID, MULTI_HIT_FALLBACK_CADENCE_MS,
+import { ASSASSINATE_ID, MULTI_HIT_FALLBACK_CADENCE_MS, SHADOW_PARTNER_IDS, SHADOW_PARTNER_LAG_MS,
   BOOSTER_SKILL_IDS,
   DASH_SKILL_ID,
   SKILL_BULLET_STAGGER_MS,
@@ -202,6 +202,9 @@ class MapleCharacter {
   // Remote characters only: buffs the server says are up on them
   // (skillId -> expiresAt), fed by player_buff / the join roster
   remoteBuffs: Map<number, number> = new Map();
+  // Shadow Partner: the last SHADOW_PARTNER_LAG_MS of poses, replayed as a
+  // dark translucent copy behind the player (see drawShadowPartner)
+  shadowTrail: { t: number; x: number; y: number; stance: string; frame: number; flipped: boolean }[] = [];
   afterimage: AfterimageState = new AfterimageState();
   _portalScriptEngine: any = null;
   pos: Physics;
@@ -714,6 +717,92 @@ class MapleCharacter {
     const frame = hitNode?.nChildren?.[0]?.nChildren?.[0];
     const d = Number(frame?.nGet?.("delay")?.nGet?.("nValue", 0) ?? 0);
     return d > 0 ? d : MULTI_HIT_FALLBACK_CADENCE_MS;
+  }
+
+  /**
+   * Shadow Partner's shadow: the player's own composed frames from
+   * SHADOW_PARTNER_LAG_MS ago, drawn black and translucent under the body —
+   * "a shadow of oneself, repeating every move".
+   */
+  drawShadowPartner(canvas: GameCanvas, camera: any) {
+    if (!this.shadowTrail.length || this.isDead) return;
+    const cutoff = Date.now() - SHADOW_PARTNER_LAG_MS;
+    let sample = this.shadowTrail[0];
+    for (const s of this.shadowTrail) { if (s.t <= cutoff) sample = s; else break; }
+    const frames = this.baseBody?.[sample.stance];
+    const imgdir = frames?.[sample.frame];
+    if (!imgdir) return;
+    const imgdirFlip = !!imgdir.nGet("flip").nGet("nValue", 0);
+    const frameIsFlipped = sample.flipped !== imgdirFlip;
+    let drawable: any[];
+    try { drawable = this.getDrawableFrames(sample.stance, sample.frame, frameIsFlipped) as any[]; } catch { return; }
+    const mx = imgdir.nGet("move").nGet("nX", 0);
+    const moveX = !sample.flipped ? mx : -mx;
+    const moveY = imgdir.nGet("move").nGet("nY", 0);
+    const ctx = canvas.context;
+    const prevFilter = ctx.filter;
+    ctx.filter = 'brightness(0)';
+    for (const frame of drawable || []) {
+      if (!frame?.img) continue;
+      canvas.drawImage({
+        img: frame.img,
+        dx: Math.floor(sample.x + frame.x - camera.x + moveX),
+        dy: Math.floor(sample.y + frame.y - camera.y + moveY),
+        flipped: frameIsFlipped,
+        rx: -frame.x,
+        ry: -frame.y,
+        alpha: 0.55,
+      });
+    }
+    ctx.filter = prevFilter;
+  }
+
+  /** Shadow Partner up on this character (own buff, or a remote's relayed one)? */
+  hasShadowPartner(): boolean {
+    const now = Date.now();
+    for (const id of SHADOW_PARTNER_IDS) {
+      if (this.buffManager?.hasBuff?.(id)) return true;
+      const until = this.remoteBuffs.get(id);
+      if (until && until > now) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The shadow's share of a blow — `x`% of a basic attack, `y`% of a skill —
+   * while Shadow Partner is up, else 0. Only the local player's buff carries
+   * the level's numbers.
+   */
+  shadowPartnerRatio(isSkill: boolean): number {
+    for (const id of SHADOW_PARTNER_IDS) {
+      const buff = this.buffManager?.activeBuffs?.get?.(id);
+      const eff = buff?.effect;
+      if (!eff) continue;
+      const pct = isSkill ? eff.y : eff.x;
+      return pct > 0 ? pct / 100 : 0;
+    }
+    return 0;
+  }
+
+  /**
+   * A buff that burns an item (Shadow Partner's Summoning Rock): refuse the
+   * cast without it, spend it otherwise. Summons and Mystic Door keep their
+   * own checks — they never reach the generic buff path.
+   */
+  consumeBuffItem(effect: any): boolean {
+    const itemId = Number(effect?.itemCon || 0);
+    if (!(itemId > 0)) return true;
+    const need = Math.max(1, Number(effect.itemConNo || 1));
+    let have = 0;
+    for (const tab of [this.inventory?.use, this.inventory?.etc, this.inventory?.setup, this.inventory?.cash]) {
+      for (const it of tab || []) if (it?.itemId === itemId) have += it.quantity ?? 1;
+    }
+    if (have < need) {
+      console.log(`[Buff] needs ${need}x item ${itemId} — not in inventory`);
+      return false;
+    }
+    this.inventory.removeFromInventory(itemId, need);
+    return true;
   }
 
   setFrame(frame = 0, carryOverDelay = 0) {
@@ -1720,6 +1809,17 @@ async executeAttackDamage() {
       // No impact art on a plain swing: v83 has none — the mob's own hit
       // stance is the feedback — so there is nothing to draw here
       monster.hit(damage, knockbackDirection, this, isCritical);
+      // Shadow Partner: the shadow's swing at `x`% lands a beat later, a row up
+      const shadowRatio = this.shadowPartnerRatio(false);
+      if (shadowRatio > 0) {
+        const shadowDamage = damage > 0 ? Math.max(1, Math.floor(damage * shadowRatio)) : 0;
+        const row = Monster.damageRowHeight(isCritical);
+        const mapAtSwing = this.map;
+        setTimeout(() => {
+          if (monster.destroyed || this.map !== mapAtSwing) return;
+          monster.hit(shadowDamage, 0, this, isCritical, 0, null, row);
+        }, SHADOW_PARTNER_LAG_MS);
+      }
     } catch (error) {
       console.error('Error processing monster hit:', error);
     }
@@ -1999,7 +2099,8 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
       this.beginSkillCooldown(skillId, effect);
       return true;
     }
-    // Buff — apply the buff effect
+    // Buff — apply the buff effect (after its item, if it burns one)
+    if (!this.consumeBuffItem(effect)) return false;
     if (this.buffManager) {
       this.buffManager.applyBuff(skillId, effect);
     }
@@ -2044,6 +2145,7 @@ fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverr
     maxDistance: skillReach(effect),
     attackCount: effect.attackCount || 1,
     hitCadenceMs: MapleCharacter.hitArtCadence(effect.hitNode),
+    shadowRatio: this.shadowPartnerRatio(true),
   });
   this.projectiles.push(projectile);
 }
@@ -2065,7 +2167,14 @@ async executeSkillDamage(skillId: number, effect: any) {
   const fixDamage = effect.fixdamage || 0;
   // Landing times are read off the stance NOW, on the trigger frame, before
   // anything below yields to the event loop
+  const shadowRatio = this.shadowPartnerRatio(true);
   const hitTimes = this.attackHitTimes(attackCount, MapleCharacter.hitArtCadence(effect.hitNode));
+  // The shadow's lines follow the originals after its lag, same spacing
+  if (shadowRatio > 0) {
+    const lag = hitTimes[hitTimes.length - 1] + SHADOW_PARTNER_LAG_MS;
+    for (let h = 0; h < attackCount; h++) hitTimes.push(lag + hitTimes[h]);
+  }
+  const lineCount = hitTimes.length;
 
   // No weapon swing sfx here: a skill's `Use` clip (played at cast) is its
   // attack sound, and its `Hit` clip lands below
@@ -2191,6 +2300,15 @@ async executeSkillDamage(skillId: number, effect: any) {
         lines.push({ damage, crit: isCritical });
         totalDealt += damage;
       }
+      // Shadow Partner repeats the whole set at `y`% a beat later
+      if (shadowRatio > 0) {
+        for (let hit = 0; hit < attackCount; hit++) {
+          const src = lines[hit];
+          const damage = src.damage > 0 ? Math.max(1, Math.floor(src.damage * shadowRatio)) : 0;
+          lines.push({ damage, crit: src.crit });
+          totalDealt += damage;
+        }
+      }
       plan.push({ monster, lines });
     } catch (e) {
       console.error('Error processing skill hit:', e);
@@ -2199,7 +2317,7 @@ async executeSkillDamage(skillId: number, effect: any) {
 
   const knockbackDirection = isCharacterFacingRight ? 1 : -1;
   const mapAtCast = this.map;
-  for (let h = 0; h < attackCount; h++) {
+  for (let h = 0; h < lineCount; h++) {
     const land = () => {
       if (this.map !== mapAtCast) return;
       let landed = false;
@@ -2313,6 +2431,7 @@ async fireProjectile(
       hitNode: skill?.hitNode ?? null,
       attackCount: skill?.attackCount ?? 1,
       hitCadenceMs: skill?.hitCadenceMs ?? MULTI_HIT_FALLBACK_CADENCE_MS,
+      shadowRatio: this.shadowPartnerRatio(!!skill),
     });
     this.projectiles.push(projectile);
   } catch (error) {
@@ -3457,6 +3576,15 @@ isCloseToMob = (inAllDirections = true) => {
       return;
     }
 
+    // Shadow Partner: remember the pose so the shadow can replay it late
+    if (this.hasShadowPartner()) {
+      const now = Date.now();
+      this.shadowTrail.push({ t: now, x: this.pos.x, y: this.pos.y, stance: this.stance, frame: this.frame, flipped: !!this.flipped });
+      while (this.shadowTrail.length && this.shadowTrail[0].t < now - SHADOW_PARTNER_LAG_MS * 2) this.shadowTrail.shift();
+    } else if (this.shadowTrail.length) {
+      this.shadowTrail = [];
+    }
+
     // Face emote: animate its frames while it lasts, then back to blink
     if (this.emoteUntil) {
       const now = Date.now();
@@ -4166,6 +4294,7 @@ isCloseToMob = (inAllDirections = true) => {
     // back to stand1 parts strewn across the ground.
     this.drawChair(canvas, camera);
     this.drawTombstone(canvas, camera);
+    this.drawShadowPartner(canvas, camera);
 
     const characterIsFlipped = !!this.flipped;
     const imgdir = this.baseBody[this.stance][this.frame];
