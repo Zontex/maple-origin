@@ -3,6 +3,7 @@ import config from '../Config';
 import PLAY_AUDIO from '../Audio/PlayAudio';
 import GameCanvas from '../GameCanvas';
 import PartyManager from '../Party/PartyManager';
+import { drawEventClock } from './EventClock';
 
 /**
  * Client-side port of Cosmic's HenesysPQ event (scripts/event/HenesysPQ.js) —
@@ -97,7 +98,6 @@ class HenesysPQEvent {
   // ---- on-screen extras ------------------------------------------------
   private banner: string | null = null;
   private bannerT = 0;
-  private clockDigits: Record<string, HTMLImageElement> | null = null;
   private clearEffect: { frames: EffectFrame[]; idx: number; t: number } | null = null;
 
   private get character(): any {
@@ -671,19 +671,6 @@ class HenesysPQEvent {
     } catch {}
   }
 
-  private async loadClockDigits(): Promise<void> {
-    if (this.clockDigits) return;
-    const digits: Record<string, HTMLImageElement> = {};
-    const node: any = await WZManager.get('Map.wz/Obj/etc.img');
-    const font = node?.clock?.fontTime;
-    if (!font) return;
-    for (const key of ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'comma']) {
-      const canvas = font[key];
-      if (canvas?.nGetImage) digits[key] = canvas.nGetImage();
-    }
-    this.clockDigits = digits;
-  }
-
   render(canvas: GameCanvas): void {
     // PQ clear effect — screen-centered
     if (this.clearEffect) {
@@ -711,34 +698,9 @@ class HenesysPQEvent {
       });
     }
 
-    // Countdown clock (red LCD digits from Map.wz/Obj/etc.img/clock/fontTime)
+    // Countdown clock — the "Time Left" plate with the red LCD digits (EventClock)
     if (this.timerEndsAt && this.isRegistered()) {
-      if (!this.clockDigits) {
-        void this.loadClockDigits().catch(() => {});
-        return;
-      }
-      const remaining = Math.max(0, this.timerEndsAt - Date.now());
-      const totalSec = Math.ceil(remaining / 1000);
-      const mm = Math.floor(totalSec / 60);
-      const ss = totalSec % 60;
-      const glyphs = `${mm}:${String(ss).padStart(2, '0')}`.split('');
-
-      let totalW = 0;
-      for (const g of glyphs) {
-        const img = this.clockDigits[g === ':' ? 'comma' : g];
-        totalW += img?.width || 26;
-      }
-      let x = Math.floor(config.width / 2 - totalW / 2);
-      const y = 28;
-      for (const g of glyphs) {
-        const img = this.clockDigits[g === ':' ? 'comma' : g];
-        if (img?.width) {
-          canvas.drawImage({ img, dx: x, dy: y });
-          x += img.width;
-        } else {
-          x += 26;
-        }
-      }
+      drawEventClock(canvas, this.timerEndsAt - Date.now());
     }
   }
 }

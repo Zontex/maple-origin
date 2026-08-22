@@ -3,6 +3,7 @@ import config from '../Config';
 import PLAY_AUDIO from '../Audio/PlayAudio';
 import GameCanvas from '../GameCanvas';
 import PartyManager from '../Party/PartyManager';
+import { drawEventClock } from './EventClock';
 
 /**
  * Client-side port of Cosmic's KerningPQ event (scripts/event/KerningPQ.js) —
@@ -116,7 +117,6 @@ class KerningPQEvent {
 
   changeMapFn: ((mapId: number, portal?: number | string) => void) | null = null;
 
-  private clockDigits: Record<string, HTMLImageElement> | null = null;
   private effect: { frames: EffectFrame[]; idx: number; t: number } | null = null;
 
   private get character(): any { return (window as any).charecter; }
@@ -418,19 +418,6 @@ class KerningPQEvent {
     }
   }
 
-  private async loadClockDigits(): Promise<void> {
-    if (this.clockDigits) return;
-    const digits: Record<string, HTMLImageElement> = {};
-    const node: any = await WZManager.get('Map.wz/Obj/etc.img');
-    const font = node?.clock?.fontTime;
-    if (!font) return;
-    for (const key of ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'comma']) {
-      const canvas = font[key];
-      if (canvas?.nGetImage) digits[key] = canvas.nGetImage();
-    }
-    this.clockDigits = digits;
-  }
-
   render(canvas: GameCanvas): void {
     if (this.effect) {
       const f = this.effect.frames[this.effect.idx];
@@ -439,16 +426,7 @@ class KerningPQEvent {
       }
     }
     if (!this.active || !this.timerEndsAt || !this.isRegistered()) return;
-    if (!this.clockDigits) { void this.loadClockDigits().catch(() => {}); return; }
-    const totalSec = Math.ceil(Math.max(0, this.timerEndsAt - Date.now()) / 1000);
-    const glyphs = `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')}`.split('');
-    let totalW = 0;
-    for (const g of glyphs) totalW += this.clockDigits[g === ':' ? 'comma' : g]?.width || 26;
-    let x = Math.floor(config.width / 2 - totalW / 2);
-    for (const g of glyphs) {
-      const img = this.clockDigits[g === ':' ? 'comma' : g];
-      if (img?.width) { canvas.drawImage({ img, dx: x, dy: 28 }); x += img.width; } else x += 26;
-    }
+    drawEventClock(canvas, this.timerEndsAt - Date.now());
   }
 }
 
