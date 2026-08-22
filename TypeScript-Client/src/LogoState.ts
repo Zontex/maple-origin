@@ -16,9 +16,11 @@ import { preloadFrames } from "./wz-utils/WZNode";
  *          MapleStory cut with the characters running across the logo;
  *          `NxLogo` is the bare 1.9s sting)
  *
- * The frames carry no `delay`, so each segment is paced to its clip. Both
- * cards are white, drawn centred by their origin on a white screen. A click
- * or Enter/Esc/Space skips the current logo; the login screen follows.
+ * The frames carry no `delay`, so each segment is paced to its clip. Nexon
+ * plays first, then Wizet. Both cards are white, drawn centred on a white
+ * screen — by the live canvas size, since the boot canvas may not yet match
+ * config. A click or Enter/Esc/Space skips the current logo; the login
+ * screen follows.
  */
 
 interface Segment {
@@ -61,11 +63,12 @@ const LogoState: LogoState = {
       const framesOf = (node: any) => (node?.nChildren || []).filter((c: any) => c.nTagName === "canvas");
       const wizet = framesOf(logo?.Wizet);
       const nexon = framesOf(logo?.Nexon);
-      if (wizet.length) this.segments.push({ frames: wizet, frameMs: WIZET_FRAME_MS, bgm: "BgmUI/WzLogo" });
+      // Nexon first, then Wizet — the order the v83 client opens with
       if (nexon.length) this.segments.push({ frames: nexon, frameMs: NEXON_FRAME_MS, bgm: "BgmUI/NxLogoMS" });
+      if (wizet.length) this.segments.push({ frames: wizet, frameMs: WIZET_FRAME_MS, bgm: "BgmUI/WzLogo" });
       // Decode ahead: a logo that strobes through its first play is no logo
-      await preloadFrames(wizet);
-      void preloadFrames(nexon);
+      await preloadFrames(nexon);
+      void preloadFrames(wizet);
     } catch (e) {
       console.warn("[Logo] UI.wz/Logo.img unavailable, skipping the logos", e);
     }
@@ -124,18 +127,19 @@ const LogoState: LogoState = {
   },
 
   doRender(canvas: GameCanvas): void {
-    canvas.drawRect({ x: 0, y: 0, width: config.width, height: config.height, color: "#ffffff" });
+    const W = canvas.game?.width || config.width;
+    const H = canvas.game?.height || config.height;
+    canvas.drawRect({ x: 0, y: 0, width: W, height: H, color: "#ffffff" });
     if (this.done || this.segments.length === 0) return;
     const seg = this.segments[this.seg];
     const node = seg.frames[Math.min(this.frame, seg.frames.length - 1)];
     const img = node?.nGetImage?.();
     if (!img?.width) return;
-    const ox = Number(node.origin?.nX ?? img.width / 2);
-    const oy = Number(node.origin?.nY ?? img.height / 2);
+    // Centre the card itself; the authored origins are the card centres anyway
     canvas.drawImage({
       img,
-      dx: Math.floor(config.width / 2 - ox),
-      dy: Math.floor(config.height / 2 - oy),
+      dx: Math.floor((W - img.width) / 2),
+      dy: Math.floor((H - img.height) / 2),
     });
   },
 };
