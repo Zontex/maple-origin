@@ -7,6 +7,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased] - 2026-08-22
 
+### Added
+- **Wizet and Nexon boot logos** — `UI.wz/Logo.img` plays on a cold boot with its `BgmUI` clips (WzLogo, NxLogoMS), skippable by click or key, then the login screen.
+
 ### Fixed
 - **Hitting Papulatus' Time Sphere crashed the update loop** — the mob ships only `stand` and `die1`, and `Monster.hit` switched it to a `hit1` it doesn't have; `setStance` now falls back to a stance the mob carries and a mob without flinch art simply keeps its pose.
 - **Sharp Eyes gives criticals** — the 4th-job archer party buff's `x`/`y` (+15% chance, 140% damage at 30) now reach the critical roll for everyone under it, the only way a non-archer/claw class crits in v83; it was relayed and shown but did nothing.
