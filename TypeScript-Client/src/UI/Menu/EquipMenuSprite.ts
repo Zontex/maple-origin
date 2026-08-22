@@ -317,7 +317,10 @@ class EquipMenuSprite extends DragableMenu {
       const sx = this.x + slot.x;
       const sy = this.y + slot.y;
       if (mouseX >= sx && mouseX < sx + SLOT_SIZE && mouseY >= sy && mouseY < sy + SLOT_SIZE) {
-        const itemId = this.charecter.equippedItemIds[slot.slot];
+        // A cash cover (slot+100) worn over an empty base slot still fills
+        // the cell — it is drawn there and must come off from there
+        const itemId = this.charecter.equippedItemIds[slot.slot + 100]
+          ?? this.charecter.equippedItemIds[slot.slot];
         if (!itemId) return true; // Empty slot, consume click
 
         const now = Date.now();

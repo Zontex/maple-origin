@@ -1103,6 +1103,15 @@ class InventoryMenuSprite extends DragableMenu {
     }
     const slot = asCash ? baseSlot + 100 : baseSlot;
 
+    // An id with no Character.wz data (not a v83 item) cannot be worn —
+    // and must not be half-equipped: the old rule pulled it out of the bag
+    // and took the worn piece off before the missing file threw
+    if (!item.node) {
+      console.warn(`[Inventory] ${itemId} has no equip data — cannot equip`);
+      import('../UIChatLog').then(({ default: UIChatLog }) => UIChatLog.system(`Item ${itemId} has no data and cannot be equipped.`)).catch(() => {});
+      return;
+    }
+
     // v83 requirement gate: level/stats/fame must meet the item's reqs
     // (like GMS, the double-click simply does nothing when unmet — the
     // tooltip shows the requirements)
@@ -1143,8 +1152,21 @@ class InventoryMenuSprite extends DragableMenu {
     }
 
     // Equip on character (loads visuals + tracks ID + loads icon) and carry
-    // the item instance's scroll data onto the worn slot
-    await this.charecter.attachEquip(slot, itemId);
+    // the item instance's scroll data onto the worn slot. A refusal puts the
+    // item back where it was and the old piece back on.
+    let attached: any = false;
+    try { attached = await this.charecter.attachEquip(slot, itemId); } catch { attached = false; }
+    if (attached === false) {
+      const back = idx !== -1 ? idx : equipArr.findIndex((it: any) => !it);
+      equipArr[back === -1 ? equipArr.length : back] = item;
+      if (currentItemId) {
+        const restored = equipArr.findIndex((it: any) => it && it.itemId === currentItemId && it !== item);
+        if (restored !== -1) equipArr[restored] = null;
+        try { await this.charecter.attachEquip(slot, currentItemId); } catch { /* keep it in the bag */ }
+        if (currentEquipData) this.charecter.equippedItemData[slot] = currentEquipData;
+      }
+      return;
+    }
     if (item.equipData) {
       this.charecter.equippedItemData[slot] = item.equipData;
       this.charecter.recalcLocalStats?.();

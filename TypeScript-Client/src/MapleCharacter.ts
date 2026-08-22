@@ -1009,7 +1009,8 @@ class MapleCharacter {
    * slot >= 100 is the v83 cash layer: slot 100+N covers base slot N. The
    * cover contributes pixels only — the base item underneath keeps its stats.
    */
-  async attachEquip(slot: number, id: number) {
+  /** Wears `id` in `slot`; false when the item has no WZ data (not equipped). */
+  async attachEquip(slot: number, id: number): Promise<boolean> {
     if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
     let realSlot = slot < 0 ? -(slot + 1) : slot;
     const isCashSlot = realSlot >= 100;
@@ -1059,11 +1060,19 @@ class MapleCharacter {
       170: { dir: "Weapon", slot: 10 },
     };
     const mapping = equipMap[firstThreeDigits];
-    if (!mapping || mapping.slot === undefined) return;
+    if (!mapping || mapping.slot === undefined) return false;
     const targetSlot = mapping.slot;
     if (baseSlot === targetSlot) {
       const dir = mapping.dir;
-      const equip = await WZManager.get(`Character.wz/${dir}/0${id}.img`);
+      let equip: any = null;
+      try {
+        equip = await WZManager.get(`Character.wz/${dir}/0${id}.img`);
+      } catch (e) {
+        // No such item in v83 (1052112 has no Longcoat file): refuse cleanly
+        // so callers can restore instead of being left half-way
+        console.warn(`[Equip] no WZ data for ${id} (Character.wz/${dir}) — not equipped`);
+        return false;
+      }
       this.equips[realSlot] = equip;
       this.equippedItemIds[realSlot] = id;
       this.scheduleSpriteWarmup();
@@ -1083,7 +1092,9 @@ class MapleCharacter {
       // Load item icon for equip window display
       this._loadEquipIcon(realSlot, id);
       this.recalcLocalStats();
+      return true;
     }
+    return false;
   }
 
   _loadEquipIcon(slot: number, itemId: number) {

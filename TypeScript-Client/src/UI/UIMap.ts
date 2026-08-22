@@ -384,9 +384,11 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
                 UIChatLog.system('Usage: !item <itemId> [count]');
                 break;
               }
-              import('../Quest/QuestData').then(async ({ ensureItemNames, getItemNameSync }) => {
+              import('../Quest/QuestData').then(async ({ ensureItemNames, itemNames }) => {
                 await ensureItemNames();
-                const name = getItemNameSync(itemId);
+                // getItemNameSync falls back to the word 'item' — look the
+                // map up directly so a v83-less id (1052112) is refused
+                const name = itemNames.get(itemId);
                 if (!name) {
                   UIChatLog.system(`No item with id ${itemId}.`);
                   return;
