@@ -716,7 +716,22 @@ async addDrops() {
     }
   }
 
+  /** Does this mob's WZ carry the stance at all? (Papulatus' Time Sphere has only stand + die1.) */
+  hasStance(stance: any): boolean {
+    return !!this.mobFile?.[String(stance)]?.nChildren;
+  }
+
   setStance(stance: any, frame = 0, onFinish = () => {}) {
+    // A stance the mob does not ship falls back to one it does — setting it
+    // anyway left `stances[stance]` undefined and update() threw on
+    // `.frames` the next tick (the "Cannot read properties of undefined
+    // (reading 'frames')" crash on hitting the Time Sphere)
+    if (!this.hasStance(stance)) {
+      const fallback = [MobStance.stand, MobStance.fly, MobStance.move].find((s) => this.hasStance(s))
+        ?? this.mobFile?.nChildren?.find((c: any) => c.nName !== 'info')?.nName;
+      if (!fallback) return;
+      stance = fallback;
+    }
     if (this.stance !== stance) {
       this.preloadStanceFrames(String(stance));
       this.stance = stance;
@@ -855,9 +870,14 @@ async addDrops() {
         if (knockBackDirection !== 0 && !this.isBoss && damage >= this.maxHp * 0.01) {
           this.pos.applyKnockbackX(knockBackDirection);
         }
-        this.setStance(MobStance.hit1, 0, () => {
+        if (this.hasStance(MobStance.hit1)) {
+          this.setStance(MobStance.hit1, 0, () => {
+            this.isInHit = false;
+          });
+        } else {
+          // No flinch art: the blow still lands, the mob just keeps its pose
           this.isInHit = false;
-        });
+        }
 
         if (this.afterHitShowHpBarTimer) {
           clearTimeout(this.afterHitShowHpBarTimer);

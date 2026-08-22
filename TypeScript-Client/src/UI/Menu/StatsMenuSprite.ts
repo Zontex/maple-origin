@@ -170,27 +170,28 @@ class StatsMenuSprite extends DragableMenu {
       align: "left",
     });
 
+    // Pre-BB format: total, then (base + gear/buff bonus) — "40 (35+5)"
     canvas.drawText({
-      text: this.charecter!.stats.str.toString(),
+      text: this.statText('str', 'localStr'),
       color: "#000000",
       x: this.x + 60,
       y: this.y + 248,
     });
     canvas.drawText({
-      text: this.charecter!.stats.dex.toString(),
+      text: this.statText('dex', 'localDex'),
       color: "#000000",
       x: this.x + 60,
       y: this.y + 266,
     });
     canvas.drawText({
-      text: this.charecter!.stats.int.toString(),
+      text: this.statText('int', 'localInt'),
       color: "#000000",
       x: this.x + 60,
       y: this.y + 284,
     });
 
     canvas.drawText({
-      text: this.charecter!.stats.luk.toString(),
+      text: this.statText('luk', 'localLuk'),
       color: "#000000",
       x: this.x + 60,
       y: this.y + 302,
@@ -348,6 +349,15 @@ class StatsMenuSprite extends DragableMenu {
     this.generalMenuSprites.forEach((generalMenuSprite) => {
       generalMenuSprite.update(msPerTick);
     });
+  }
+
+  /** "total (base+bonus)" for STR/DEX/INT/LUK — the pre-Big-Bang stat window's form. */
+  statText(stat: 'str' | 'dex' | 'int' | 'luk', local: 'localStr' | 'localDex' | 'localInt' | 'localLuk'): string {
+    const st: any = this.charecter!.stats;
+    const base = Number(st[stat]) || 0;
+    const total = Number.isFinite(Number(st[local])) ? Number(st[local]) : base;
+    const bonus = total - base;
+    return `${total} (${base}${bonus >= 0 ? '+' : '-'}${Math.abs(bonus)})`;
   }
 
   draw(
