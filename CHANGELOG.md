@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased] - 2026-08-22
 
 ### Fixed
+- **Inventory window scrolls** — the grid showed the first 24 slots only and the VScr thumb was painted in place ("no scroll functionality yet"), so an ETC tab past 24 items was unreachable. Wheel over the window, the arrows, or a click on the track scroll a row at a time; the thumb tracks the position; tab switches reset it.
 - **Swimming** — holding jump played the jump sound every frame (and re-kicked you up the moment you down-jumped through a submerged platform, so you could never drop through); a mob hit under water launched you like a jump. Now a press is one kick and a held key does nothing more (GMS tap-to-rise swimming), down+jump drops through, and an underwater hit is a sideways push only.
 - **Shadow Partner** (Hermit / Night Walker) — was not implemented at all; now every basic attack, melee skill and thrown star while it lasts is followed by the shadow's copy of the same lines (`x`% basic / `y`% skill per the tooltip, Lucky Seven 2→4, Triple Throw 3→6), a dark translucent replay of your own pose trails you, and the cast burns a Summoning Rock like the tooltip says — buffs with an `itemCon` are now gated on both cast paths.
 - **Explosion and Big Bang could not be cast as attacks** (they carry `mad`, no `damage`, and no hit/ball art); **Soul Arrow was cast as an attack** (its `ball` is the free arrow). Big Bang's hold-to-charge is not modelled — it fires once.

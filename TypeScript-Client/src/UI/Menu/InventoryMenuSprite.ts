@@ -74,6 +74,12 @@ class InventoryMenuSprite extends DragableMenu {
   consumeSound: any = null;
   // Scrollbar images
   _scrollbarImages: any = null;
+  // First visible grid row. The window shows 24 slots (4x6); a tab that holds
+  // items past them scrolls a row at a time — wheel, the VScr arrows, or a
+  // click on the track. Reset on a tab switch.
+  scrollRow: number = 0;
+  static readonly VISIBLE_ROWS = 6;
+  static readonly SLOT_COLS = 4;
   // Tab plates from UIWindow.img/Item/New: Tab1/0 pink (selected), Tab0/0 grey
   _tabPlateOn: HTMLImageElement | null = null;
   _tabPlateOff: HTMLImageElement | null = null;
@@ -356,6 +362,58 @@ class InventoryMenuSprite extends DragableMenu {
     }
   }
 
+  /**
+   * Rows the shown tab occupies: the 24-slot page at least, more when an item
+   * sits past it (v83 tabs expand in rows of four).
+   */
+  tabRowCount(): number {
+    const items = this.getCurrentTabArray() || [];
+    let last = -1;
+    for (let i = 0; i < items.length; i++) if (items[i]) last = i;
+    return Math.max(InventoryMenuSprite.VISIBLE_ROWS, Math.ceil((last + 1) / InventoryMenuSprite.SLOT_COLS));
+  }
+
+  maxScrollRow(): number {
+    return Math.max(0, this.tabRowCount() - InventoryMenuSprite.VISIBLE_ROWS);
+  }
+
+  scrollBy(rows: number) {
+    this.scrollRow = Math.max(0, Math.min(this.maxScrollRow(), this.scrollRow + rows));
+  }
+
+  /** Scrollbar geometry on the 175x289 background: column x=155, track y=51..252, 15x13 arrows. */
+  scrollbarRects() {
+    const arrowW = 15, arrowH = 13;
+    const sbX = this.x + 155;
+    const top = this.y + 51;
+    const bottom = this.y + 252;
+    return {
+      up: { x: sbX, y: top, w: arrowW, h: arrowH },
+      down: { x: sbX, y: bottom - arrowH, w: arrowW, h: arrowH },
+      track: { x: sbX, y: top + arrowH, w: arrowW, h: bottom - arrowH - (top + arrowH) },
+    };
+  }
+
+  /** Clicks on the arrows and the track; true when the click was the scrollbar's. */
+  handleScrollbarClick(mouseX: number, mouseY: number): boolean {
+    const r = this.scrollbarRects();
+    const inside = (b: { x: number; y: number; w: number; h: number }) =>
+      mouseX >= b.x && mouseX < b.x + b.w && mouseY >= b.y && mouseY < b.y + b.h;
+    if (inside(r.up)) { this.scrollBy(-1); return true; }
+    if (inside(r.down)) { this.scrollBy(1); return true; }
+    if (inside(r.track)) {
+      // Above the thumb pages up, below it pages down
+      const thumbH = this._scrollbarImages?.thumb?.height || 0;
+      const travel = r.track.h - thumbH;
+      const max = this.maxScrollRow();
+      const thumbY = r.track.y + (max > 0 ? Math.round(travel * (this.scrollRow / max)) : 0);
+      if (mouseY < thumbY) this.scrollBy(-InventoryMenuSprite.VISIBLE_ROWS);
+      else if (mouseY >= thumbY + thumbH) this.scrollBy(InventoryMenuSprite.VISIBLE_ROWS);
+      return true;
+    }
+    return false;
+  }
+
   // Grid slot index under the mouse, or -1 if not over a slot
   getSlotAtMouse(mouseX: number, mouseY: number): number {
     const colXs = [9, 45, 81, 117];
@@ -369,7 +427,7 @@ class InventoryMenuSprite extends DragableMenu {
           mouseX >= slotX && mouseX < slotX + slotSize &&
           mouseY >= slotY && mouseY < slotY + slotSize
         ) {
-          return row * colXs.length + col;
+          return (row + this.scrollRow) * colXs.length + col;
         }
       }
     }
@@ -437,7 +495,7 @@ class InventoryMenuSprite extends DragableMenu {
 
     for (let row = 0; row < slotRows; row++) {
       for (let col = 0; col < slotColumns; col++) {
-        const slotIndex = row * slotColumns + col;
+        const slotIndex = (row + this.scrollRow) * slotColumns + col;
         const slotX = this.x + colXs[col];
         const slotY = this.y + rowYs[row];
 
@@ -553,7 +611,7 @@ class InventoryMenuSprite extends DragableMenu {
     const mouseY = this.GameCanvas.mouseY;
     for (let row = 0; row < slotRows; row++) {
       for (let col = 0; col < slotColumns; col++) {
-        const slotIndex = row * slotColumns + col;
+        const slotIndex = (row + this.scrollRow) * slotColumns + col;
         const slotX = this.x + colXs[col];
         const slotY = this.y + rowYs[row];
         if (
@@ -634,10 +692,14 @@ class InventoryMenuSprite extends DragableMenu {
     // Down arrow
     if (next) canvas.drawImage({ img: next, dx: sbX, dy: sbBottomY - arrowH });
 
-    // Thumb (static position for now — no scroll functionality yet)
+    // Thumb at the proportional position (top when the tab fits the page)
     if (thumb) {
       const trackY = sbTopY + arrowH;
-      canvas.drawImage({ img: thumb, dx: sbX, dy: trackY });
+      const travel = sbHeight - 2 * arrowH - (thumb.height || 0);
+      const max = this.maxScrollRow();
+      if (this.scrollRow > max) this.scrollRow = max;
+      const ty = trackY + (max > 0 ? Math.round(travel * (this.scrollRow / max)) : 0);
+      canvas.drawImage({ img: thumb, dx: sbX, dy: ty });
     }
   }
 
@@ -657,6 +719,7 @@ class InventoryMenuSprite extends DragableMenu {
     for (let i = 0; i < tabs.length; i++) {
       const tabX = this.x + TAB_X0 + i * TAB_W;
       if (mouseX >= tabX && mouseX < tabX + TAB_W) {
+        if (this.currentTab !== tabs[i]) this.scrollRow = 0;
         this.currentTab = tabs[i];
         return true;
       }
@@ -669,6 +732,9 @@ class InventoryMenuSprite extends DragableMenu {
     
     // First check if a tab was clicked
     if (this.handleTabClick(mouseX, mouseY)) {
+      return true;
+    }
+    if (this.handleScrollbarClick(mouseX, mouseY)) {
       return true;
     }
     
@@ -700,7 +766,7 @@ class InventoryMenuSprite extends DragableMenu {
     
     for (let row = 0; row < slotRows; row++) {
       for (let col = 0; col < slotColumns; col++) {
-        const slotIndex = row * slotColumns + col;
+        const slotIndex = (row + this.scrollRow) * slotColumns + col;
         const slotX = this.x + colXs[col];
         const slotY = this.y + rowYs[row];
 
@@ -1552,6 +1618,12 @@ class InventoryMenuSprite extends DragableMenu {
     const rect = this.getRect(camera);
     UIDevTools.track('inventory', rect.x, rect.y, rect.width, rect.height, 'screen', 'UI.wz/UIWindow.img/Item');
     this.drawBackground(canvas);
+    // Wheel over the window scrolls the grid a row at a time
+    const mx = (canvas as any).mouseX ?? -1, my = (canvas as any).mouseY ?? -1;
+    if (mx >= rect.x && mx < rect.x + rect.width && my >= rect.y && my < rect.y + rect.height) {
+      if ((canvas as any).scrolledUp) this.scrollBy(-1);
+      if ((canvas as any).scrolledDown) this.scrollBy(1);
+    }
     this.drawItems(canvas);
     this.drawScrollbar(canvas);
     this.drawText(canvas);
