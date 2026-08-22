@@ -295,6 +295,7 @@ node tools/wz-to-json.js <input.wz> <output_dir>
 - **Water is not only `info/swim=1`.** Five maps (Nautilus Generator Room 120000301, Nautilus Harbor, 108010700, 140020300, the fishing pond) have `swim=0` plus `swimArea/<name>` rects; `MapleMap.isInWater(x, y)` covers both and Physics reads it per frame. The Generator Room's only way up is a ladder whose foot (y=-56) sits just above the waterline (y1=-45): swim kicks carry you out of the water and holding Up grabs it.
 - **Map objects with `hide=1` are invisible until toggled.** All 50 in v83 are `signboard/market/arrow` job-advancement guide arrows tagged `sordQuest`/`bowQuest`/`magicQuest`/`thiefQuest`/`pirateQuest` (the server's field-effect tag toggle shows a trail for one quest). `Obj.visible` honours it; `MapleMap.setTaggedObjectsVisible(tag, bool)` is the toggle. 21 tagged arrows ship without `hide` (Lith Harbor's `21705` trail, one each in Henesys Market and on the Nautilus) and are visible by design. The sprite points right; `f=1` flips it left.
 - **Mob-hit knockback is JourneyClient's, not invented**: `Physics.hitKnockback` = ±187.5 px/s back, 437.5 px/s hop (JourneyClient `Player::damage`: hspeed 1.5 / vforce 3.5 per 8ms tick). Hop only from the ground (airborne hits push sideways, no juggling); on a ladder/rope the damage lands but the grip holds. v83's Stance roll is not modelled yet.
+- **HP/MP/EXP and every damage number must be finite integers.** The status bar (`UIMap.drawNumbers`) and `DamageIndicator.drawDamage` render from WZ digit sprites that exist for 0-9 only; a `NaN` or fraction threw inside the render loop every frame and produced the "tiled GPU smear" crash. The `hp`/`mp` setters (`MapleCharacter.wholeVital`), `addExp` and `takeDamage` floor and reject non-finite values with a stack trace, and both renderers skip unknown glyphs — keep any new HP/EXP path going through them.
 - `drawImage` parameter `sw`/`sh` NOT `sWidth`/`sHeight` — wrong names silently ignored, draws full image
 - `nGetImage()` on non-canvas WZ nodes corrupts rendering — always verify node type
 - HTML inputs positioned in CSS pixels don't align with canvas-drawn elements when canvas is scaled
@@ -508,7 +509,7 @@ These are parsed into `\x01ITEM:id\x02` and `\x01QICON:id\x02` markers by the st
 ### Format Code Resolution Timing (Critical)
 - `#t` and `#c` codes are **deferred** — `stripFormatCodes()` in QuestData.ts preserves them as-is during construction (item names aren't loaded yet)
 - They are resolved at **display time** via `resolveItemCodes()` after `ensureItemNames()` has loaded the name cache
-- All display sites must call `resolveItemCodes()`: UIQuestDialog.buildPages(), accepted yes/no text, QuestLogMenuSprite description
+- All display sites must call `resolveItemCodes()`: UIQuestDialog.buildPages(), accepted yes/no text, the Say `#L` selection labels (`getStaticSelections`), QuestLogMenuSprite description
 - `#i` and `#v` codes are converted to `\x01ITEM:id\x02` markers at strip time and rendered as images at draw time
 
 ### Item Name Lookup

@@ -421,7 +421,10 @@ export default class UIQuestDialog {
     const dlg = this.getSayDialogue();
     const origIdx = this.sayOriginalIndices[this.messageIndex] ?? this.messageIndex;
     const sels = dlg?.messageSelections?.get(origIdx);
-    return sels ? sels.map(s => ({ index: s.index, label: s.label })) : [];
+    // Labels keep their #m/#t/#c codes from construction (names weren't
+    // loaded yet) — resolve them here at display time like the messages
+    const qm = (window as any).charecter?.questManager;
+    return sels ? sels.map(s => ({ index: s.index, label: resolveItemCodes(s.label, qm, this.questId) })) : [];
   }
 
   private buildPagesForCurrentMessage() {

@@ -480,6 +480,14 @@ UIMap.drawLevel = function (canvas, level) {
 };
 
 UIMap.drawNumbers = function (canvas, hp, maxHp, mp, maxMp, exp, maxExp) {
+  // The status bar ships digit sprites for 0-9 only. A NaN or fractional value
+  // (a bad roll, a % split) used to throw here every frame and smear the screen.
+  const whole = (v: unknown) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+  hp = whole(hp); maxHp = whole(maxHp); mp = whole(mp); maxMp = whole(maxMp);
+  exp = whole(exp); maxExp = Math.max(1, whole(maxExp));
   canvas.drawImage({
     img: this.numbers.Lbracket,
     dx: 234,
@@ -487,6 +495,7 @@ UIMap.drawNumbers = function (canvas, hp, maxHp, mp, maxMp, exp, maxExp) {
   });
 
   const hpX = [...`${hp}`, "slash", ...`${maxHp}`].reduce((x, digit) => {
+    if (!this.numbers[digit]) return x;
     canvas.drawImage({
       img: this.numbers[digit],
       dx: x,
@@ -509,6 +518,7 @@ UIMap.drawNumbers = function (canvas, hp, maxHp, mp, maxMp, exp, maxExp) {
   });
 
   const mpX = [...`${mp}`, "slash", ...`${maxMp}`].reduce((x, digit) => {
+    if (!this.numbers[digit]) return x;
     canvas.drawImage({
       img: this.numbers[digit],
       dx: x,

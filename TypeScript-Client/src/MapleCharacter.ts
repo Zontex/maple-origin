@@ -131,6 +131,7 @@ class MapleCharacter {
     return this._hp;
   }
   set hp(v: number) {
+    v = MapleCharacter.wholeVital(v, this._hp, 'hp');
     if (v === this._hp) return;
     this._hp = v;
     if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
@@ -141,6 +142,7 @@ class MapleCharacter {
     return this._mp;
   }
   set mp(v: number) {
+    v = MapleCharacter.wholeVital(v, this._mp, 'mp');
     if (v === this._mp) return;
     this._mp = v;
     if (!this.isRemote) (window as any).__mySocket?.requestSave?.();
@@ -148,6 +150,19 @@ class MapleCharacter {
   maxMp: number = 100;
   exp: number = 0;
   fame: number = 0;
+
+  /**
+   * HP/MP/EXP are integers everywhere in v83 and every digit renderer assumes
+   * it (the status bar and the damage indicators only ship 0-9 sprites — a
+   * NaN or a fraction threw inside the render loop every frame). Floor what
+   * comes in; a non-finite value keeps the old one and logs where it came from.
+   */
+  static wholeVital(v: number, previous: number, what: string): number {
+    const n = Math.floor(Number(v));
+    if (Number.isFinite(n)) return n;
+    console.warn(`[MapleCharacter] ignored ${what} = ${v}`, new Error().stack);
+    return previous;
+  }
   job: number = 0;
   stats: Stats;
   maxExp: number = 0;
@@ -1018,7 +1033,11 @@ class MapleCharacter {
   }
 
   addExp(exp: number, showEffect: boolean = false) {
-    exp = this.status.scaleExp(exp); // Curse: half EXP
+    exp = Math.floor(this.status.scaleExp(exp)); // Curse: half EXP; party shares are fractions
+    if (!Number.isFinite(exp)) {
+      console.warn(`[MapleCharacter] ignored exp gain ${exp}`, new Error().stack);
+      return;
+    }
     if (exp > 0 && showEffect) this.playIncExp();
     this.exp += exp;
     // Exp (and any level-up further down) persists soon
@@ -2984,6 +3003,8 @@ isCloseToMob = (inAllDirections = true) => {
   }
 
   async takeDamage(damage: number) {
+    damage = Math.floor(Number(damage));
+    if (!Number.isFinite(damage) || damage <= 0) return;
     console.log(`Player take ${damage} damage`);
 
     if (!this.isDead) {

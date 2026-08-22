@@ -21,6 +21,7 @@ export enum DamageIndicatorType {
 }
 
 export class DamageIndicator {
+  static _warnedBadNumber = false;
   noRed0Node = null;
   noRed1Node = null;
   noCri0Node = null;
@@ -65,6 +66,17 @@ export class DamageIndicator {
     damageNumber = 6000,
     alpha: number = 1
   ) => {
+    // The digit sprites only exist for 0-9: a NaN/float/negative here (a bad
+    // damage roll upstream) used to throw inside the render loop every frame,
+    // which aborted the rest of the frame and left the last good frame smeared
+    // across the screen. Sanitise, warn once, and draw a miss instead.
+    if (!Number.isFinite(damageNumber) || damageNumber !== Math.floor(damageNumber)) {
+      if (!DamageIndicator._warnedBadNumber) {
+        DamageIndicator._warnedBadNumber = true;
+        console.warn(`[DamageIndicator] non-integer damage ${damageNumber}`, new Error().stack);
+      }
+      damageNumber = Number.isFinite(damageNumber) ? Math.floor(damageNumber) : 0;
+    }
     if (damageNumber <= 0) {
       let image = otherNumberNode["Miss"].nGetImage();
       canvas.drawImage({
@@ -75,6 +87,7 @@ export class DamageIndicator {
       });
     } else {
       [...`${damageNumber}`].reduce((x, digit, index) => {
+        if (!otherNumberNode[digit] || (index === 0 && !firstNumberNode[digit])) return x;
         let image = otherNumberNode[digit].nGetImage();
         let y = position.y;
         if (index % 2 === 1) {

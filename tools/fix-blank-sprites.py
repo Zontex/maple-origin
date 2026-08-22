@@ -7,7 +7,7 @@ some images (failed inflate on chunk-encrypted picture data). This script
 finds those blank canvases and re-fetches the real pixels from the
 maplestory.io raw WZ API (GMS v83), patching basedata in place.
 
-Usage: python3 tools/fix-blank-sprites.py <wz_dir_name> [--dry-run]
+Usage: python3 tools/fix-blank-sprites.py <wz_dir_name> [--dry-run] [--deep] [--only id,id,...]
   e.g. python3 tools/fix-blank-sprites.py Mob.wz
 """
 import json, base64, glob, os, struct, sys, time, urllib.request, urllib.parse
@@ -20,7 +20,22 @@ def png_dims(data: bytes):
         return None
     return struct.unpack('>II', data[16:24])
 
-def find_blanks(doc):
+def is_transparent_png(b64: str) -> bool:
+    """Full-size PNG whose every pixel is alpha 0 — the converter's second
+    failure mode (Werewolf, Tauromacis, the golems): the data is there, the
+    pixels are not. Needs Pillow; decodes only when asked (--deep)."""
+    try:
+        from PIL import Image
+        import io
+        im = Image.open(io.BytesIO(base64.b64decode(b64)))
+        if im.mode not in ('RGBA', 'LA', 'P'):
+            return False
+        im = im.convert('RGBA')
+        return im.getextrema()[3][1] == 0
+    except Exception:
+        return False
+
+def find_blanks(doc, deep=False):
     """Yield (canvas_node, wz_path) for blank canvases."""
     out = []
     def walk(n, p):
@@ -32,29 +47,41 @@ def find_blanks(doc):
             if '$canvas' in c and c.get('basedata'):
                 w = int(c.get('width') or 0)
                 h = int(c.get('height') or 0)
-                if w * h >= 64 and len(c['basedata']) < 200:
+                if w * h >= 64 and (len(c['basedata']) < 200 or (deep and is_transparent_png(c['basedata']))):
                     out.append((c, path))
             walk(c, path)
     walk(doc, '')
     return out
 
-def fetch_node(img_name, node_path):
+def fetch_node(img_name, node_path, attempts=4):
     url = f'{API}/{urllib.parse.quote(img_name)}/{urllib.parse.quote(node_path)}'
     req = urllib.request.Request(url, headers={'User-Agent': 'maple-origin sprite repair'})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r)
+    last = None
+    for i in range(attempts):  # the API stalls now and then; a retry usually lands
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except Exception as e:
+            last = e
+            time.sleep(1.5 * (i + 1))
+    raise last
 
 def main():
     wz_dir = sys.argv[1] if len(sys.argv) > 1 else 'Mob.wz'
     dry = '--dry-run' in sys.argv
+    deep = '--deep' in sys.argv  # also catch full-size but fully transparent PNGs (slower: decodes every canvas)
     files = sorted(glob.glob(os.path.join(ROOT, wz_dir, '**', '*.img.json'), recursive=True))
+    # --only 7130200,7130100 restricts the pass to those .img names
+    if '--only' in sys.argv:
+        wanted = set(sys.argv[sys.argv.index('--only') + 1].split(','))
+        files = [f for f in files if os.path.basename(f).split('.')[0] in wanted]
     patched = failed = mismatched = 0
     failures = []
 
     for f in files:
         with open(f, encoding='utf-8') as fh:
             doc = json.load(fh)
-        blanks = find_blanks(doc)
+        blanks = find_blanks(doc, deep)
         if not blanks:
             continue
         # e.g. "Character.wz/Cap/01002140.img.json" -> API path "Character/Cap/01002140.img"
