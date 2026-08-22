@@ -30,5 +30,3 @@ backend/
 
 # Local debug screenshots (contain copyrighted game art — never commit)
 debug/
-/chair_reference_*.png
-/ChatGPT Image*.png

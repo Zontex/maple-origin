@@ -98,13 +98,6 @@ const WZManager: WZManager = {
     }
     tree[subtree.nName] = subtree;
     tree.nChildren.push(subtree);
-    // Our own assets (custom-items.json) ride in as if the file shipped them
-    try {
-      const { graftCustomNodes } = await import('../CustomWz');
-      await graftCustomNodes(filename, subtree);
-    } catch (e) {
-      console.warn('[WZManager] custom overlay failed for', filename, e);
-    }
     this._loadedFiles.add(filename);
   },
 

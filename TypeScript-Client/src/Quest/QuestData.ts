@@ -147,14 +147,6 @@ function ensureItemNames(): Promise<void> {
         const node: any = await WZManager.get(`String.wz/${file}.img`);
         extractItemNames(node);
       }
-      // Our own items (custom-items.json) name themselves
-      try {
-        const { customItemNames } = await import('../CustomWz');
-        for (const [id, n] of Object.entries(await customItemNames())) {
-          itemNames.set(Number(id), n.name);
-          if (n.desc) itemDescs.set(Number(id), n.desc);
-        }
-      } catch { /* optional */ }
     })().catch((e) => {
       console.error('[QuestData] item name load failed, will retry:', e);
       itemNamesPromise = null;

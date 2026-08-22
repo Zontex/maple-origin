@@ -2,7 +2,6 @@ import WZManager from "./wz-utils/WZManager";
 import { FieldLimit, FIELD_LIMIT_MESSAGE, MOVEMENT_SKILL_IDS } from "./Constants/FieldLimit";
 import { preloadFrames } from "./wz-utils/WZNode";
 import { decodeImages, nextIdle } from "./wz-utils/SpriteWarmup";
-import { DEV_THRONE_ID, drawDevThroneFx, clearDevThroneFx } from "./Effects/DevThroneFx";
 // Static, not the dynamic import the rest of SkillData uses here: skillReach
 // is needed inside a synchronous stance callback. Safe — SkillData imports
 // only WZManager, so this closes no cycle.
@@ -1385,7 +1384,6 @@ class MapleCharacter {
   /** Leave the chair. Safe to call when not sitting. */
   standUpFromChair() {
     if (!this.chairId) return;
-    clearDevThroneFx(this);
     this.chairId = 0;
     this.chairFrame = null;
     this.chairFrames = [];
@@ -4235,8 +4233,8 @@ isCloseToMob = (inAllDirections = true) => {
       drawableFrames.push({
         img: part.nGetImage(),
         z: this.zmap.indexOf(realZ),
-        // The layer's z name ('face', 'body', 'hair'...) so effects can find
-        // a part's drawn rectangle (the cigar sits on the face layer)
+        // The layer's z name ('face', 'body', 'hair'...) so an effect can
+        // find a part's drawn rectangle
         zName: realZ,
         x,
         y,
@@ -4501,11 +4499,6 @@ isCloseToMob = (inAllDirections = true) => {
       });
     });
     this.spriteBottomY = spriteBottomY;
-
-    // The maker's cigar while seated on the Developer Throne
-    if (this.chairId === DEV_THRONE_ID && !this.isDead) {
-      try { drawDevThroneFx(this, canvas, camera, drawableFrames, moveX, moveY, characterIsFlipped); } catch { /* cosmetic */ }
-    }
   
     this.bodyRects = [];
     let minX: number | null = null;
