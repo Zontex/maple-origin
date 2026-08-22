@@ -27,6 +27,12 @@ interface Segment {
   frames: any[];
   frameMs: number;
   bgm: string;
+  // How the card sits on the 800x600 screen: the Nexon art is centred within
+  // its 720x480 frame, but the Wizet card (550x420) carries its logo in the
+  // bottom-right with a blank top-left margin — it is authored for the
+  // screen's top-left corner (logo centre then lands at 395,313). Centring
+  // that card pushed the logo to the bottom-right of the screen.
+  anchor: 'centre' | 'topLeft';
 }
 
 const WIZET_FRAME_MS = 110; // 61 frames over the 6.7s clip
@@ -64,8 +70,8 @@ const LogoState: LogoState = {
       const wizet = framesOf(logo?.Wizet);
       const nexon = framesOf(logo?.Nexon);
       // Nexon first, then Wizet — the order the v83 client opens with
-      if (nexon.length) this.segments.push({ frames: nexon, frameMs: NEXON_FRAME_MS, bgm: "BgmUI/NxLogoMS" });
-      if (wizet.length) this.segments.push({ frames: wizet, frameMs: WIZET_FRAME_MS, bgm: "BgmUI/WzLogo" });
+      if (nexon.length) this.segments.push({ frames: nexon, frameMs: NEXON_FRAME_MS, bgm: "BgmUI/NxLogoMS", anchor: 'centre' });
+      if (wizet.length) this.segments.push({ frames: wizet, frameMs: WIZET_FRAME_MS, bgm: "BgmUI/WzLogo", anchor: 'topLeft' });
       // Decode ahead: a logo that strobes through its first play is no logo
       await preloadFrames(nexon);
       void preloadFrames(wizet);
@@ -135,12 +141,15 @@ const LogoState: LogoState = {
     const node = seg.frames[Math.min(this.frame, seg.frames.length - 1)];
     const img = node?.nGetImage?.();
     if (!img?.width) return;
-    // Centre the card itself; the authored origins are the card centres anyway
-    canvas.drawImage({
-      img,
-      dx: Math.floor((W - img.width) / 2),
-      dy: Math.floor((H - img.height) / 2),
-    });
+    if (seg.anchor === 'topLeft') {
+      canvas.drawImage({ img, dx: 0, dy: 0 });
+    } else {
+      canvas.drawImage({
+        img,
+        dx: Math.floor((W - img.width) / 2),
+        dy: Math.floor((H - img.height) / 2),
+      });
+    }
   },
 };
 
