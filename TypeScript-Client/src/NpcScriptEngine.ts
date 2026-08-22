@@ -1,4 +1,4 @@
-import { npcNames, mobNames, QuestState, ensureItemNames, ensureMapNames, getMapNameSync, collapseBlankLines, getItemNameSync } from './Quest/QuestData';
+import { itemNames, npcNames, mobNames, QuestState, ensureItemNames, ensureMapNames, getMapNameSync, collapseBlankLines, getItemNameSync } from './Quest/QuestData';
 import GuildManager, { getIncreaseGuildCost as guildIncreaseCost } from './Guild/GuildManager';
 import { cachedFetch } from './AssetDownloader';
 import { getItemName } from './Quest/QuestScriptEngine';
@@ -463,6 +463,14 @@ export default class NpcScriptEngine {
       // NimaKIN: one level per click, with the effect
       levelUp(_show?: boolean) { character?.levelUp?.(); },
       getGender() { return character?.gender || 0; },
+      // Current look — KIN's colour menus derive their candidate ids from
+      // these (hair base + 0..7, face base + 0..800); undefined read as 0
+      // and turned "Hair Color" into the skin list and "Eye Color" into
+      // eight faces that don't exist
+      getHair() { return character?.hair ?? 30030; },
+      getFace() { return character?.face ?? 20000; },
+      getSkinColor() { return character?.skinColor ?? 0; },
+      getSkin() { return character?.skinColor ?? 0; },
       getHp() { return character?.hp ?? 100; },
       getMp() { return character?.mp ?? 100; },
       getMaxHp() { return character?.maxHp ?? 100; },
@@ -719,7 +727,8 @@ export default class NpcScriptEngine {
         id = Number(id);
         if (!Number.isFinite(id)) return -1;
         if (id < 100) return id;
-        const exists = (v: number) => !!getItemNameSync(v);
+        // A real String.wz name — getItemNameSync's 'item' fallback is truthy
+        const exists = (v: number) => itemNames.has(v);
         if (exists(id)) return id;
         const base = id < 30000 ? Math.floor(id / 1000) * 1000 + (id % 100) : Math.floor(id / 10) * 10;
         return id !== base && exists(base) ? base : -1;

@@ -4,7 +4,7 @@ import { CameraInterface } from '../Camera';
 import ClickManager from './ClickManager';
 import { MapleStanceButton } from './MapleStanceButton';
 import MapleStandingCharacter from '../MapleStandingCharacter';
-import { getItemNameSync } from '../Quest/QuestData';
+import { getItemNameSync, ensureItemNames } from '../Quest/QuestData';
 import { drawSelectionBar } from './UISelectionBar';
 import Config from '../Config';
 
@@ -115,6 +115,8 @@ const UIAvatarStyleDialog: any = {
     };
 
     if (!this.loaded) await this.loadAssets();
+    // Style names come from String.wz/Eqp.img (Eqp/Hair, Eqp/Face)
+    try { await ensureItemNames(); } catch { /* labels fall back to ids */ }
     this.x = Math.floor((Config.width - BG_W) / 2);
     this.y = Math.floor((Config.height - BG_H) / 2);
     this.lines = this.wrap(this.text);

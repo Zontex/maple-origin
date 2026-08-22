@@ -1204,6 +1204,8 @@ class MapleCharacter {
   }
 
   levelUp() {
+    // v83 cap: 200 is the last level — no further level-ups, however earned
+    if (this.stats.level >= 200) return;
     this.stats.level += 1;
     this.maxExp = ExpTable.getExpNeededForLevel(this.stats.level);
     this.stats.addAbilityPoints();
@@ -1287,10 +1289,12 @@ class MapleCharacter {
       }).catch(() => {});
     }
     // Level up as many times as needed (handles multi-level gains)
-    while (this.exp >= this.maxExp && this.maxExp > 0) {
+    while (this.exp >= this.maxExp && this.maxExp > 0 && this.stats.level < 200) {
       this.exp -= this.maxExp;
       this.levelUp();
     }
+    // At the cap the bar stays full, not overflowing
+    if (this.stats.level >= 200 && this.maxExp > 0) this.exp = Math.min(this.exp, this.maxExp - 1);
   }
 
   async playLevelUp() {
