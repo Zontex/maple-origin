@@ -7,6 +7,18 @@ import PLAY_AUDIO from "../Audio/PlayAudio";
 import GameCanvas from "../GameCanvas";
 import { CameraInterface } from "../Camera";
 
+/**
+ * The drop's sprite node. 737 items (every stat scroll) link info/iconRaw
+ * to another item's via a `uol`; the link itself has no width, so a drop
+ * built on it drew at NaN and could never be picked up — it looked gone.
+ */
+function resolveIcon(node: any): any {
+  if (node?.nTagName === 'uol') {
+    try { return node.nResolveUOL() ?? node; } catch { return node; }
+  }
+  return node;
+}
+
 const AnimationStates = {
   None: "none",
   GoingUp: "goingUp",
@@ -138,8 +150,8 @@ class DropItemSprite {
         const path = getEquipWzPath(this.id);
         if (!path) throw new Error(`No Character.wz directory for equip ${this.id}`);
         this.itemFile = await WZManager.get(path);
-        this.frame = this.itemFile.info.iconRaw;
-        this.icon = this.itemFile.info.iconRaw.nGetImage();
+        this.frame = resolveIcon(this.itemFile.info.iconRaw);
+        this.icon = this.frame?.nGetImage?.();
         // Preserve scroll bonuses across the drop/pickup round-trip
         this.equipData = opts.equipData ?? null;
       } catch (e) {
@@ -157,8 +169,8 @@ class DropItemSprite {
           this.itemFile = await WZManager.get(
             `${WZFiles.Item}/${wzInventoryType}/${this.id}.img`
           );
-          this.frame = this.itemFile.info.iconRaw;
-          this.icon = this.itemFile.info.iconRaw.nGetImage();
+          this.frame = resolveIcon(this.itemFile.info.iconRaw);
+          this.icon = this.frame?.nGetImage?.();
         } else if (wzInventoryType === MapleInventory.WzInventoryType.Special) {
           let strId = `${this.id}`.padStart(8, "0");
           const idFirst4digits = strId.slice(0, 4);
@@ -176,9 +188,8 @@ class DropItemSprite {
             `${WZFiles.Item}/${wzInventoryType}/${idFirst4digits}.img/${strId}`
           );
           this.itemFile = itemFile;
-          this.frame = this.itemFile.info.iconRaw;
-
-          this.icon = this.itemFile.info.iconRaw.nGetImage();
+          this.frame = resolveIcon(this.itemFile.info.iconRaw);
+          this.icon = this.frame?.nGetImage?.();
         }
       } catch (e) {
         console.error("Error loading item:", e);
