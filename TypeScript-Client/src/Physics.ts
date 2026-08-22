@@ -77,9 +77,6 @@ class Physics {
   isClimbing: boolean = false;
   flying: boolean = false;
   swimming: boolean = false; // in a swim map — airborne physics become water physics
-  // Jump key HELD while swimming: a steady rise (MapState feeds it per frame).
-  // A press is a kick (jump()); holding down instead sinks faster.
-  swimUp: boolean = false;
   // The character's Speed/Jump stats as factors of the base (100 = 1.0) —
   // the `shoe_walk_speed` / `shoe_walk_jump` terms of the original formula.
   // Owned by the entity: MapleCharacter feeds them from its local stats,
@@ -187,9 +184,9 @@ class Physics {
       }
       fh = null;
     } else {
-      // In water: a press is a swim kick upward; holding the key afterwards
-      // keeps rising through `swimUp` (see the water branch of update), so
-      // this runs once per press — MapState edge-triggers it while swimming
+      // In water: a press is one swim kick upward and holding the key does
+      // nothing more — GMS swimming is tap-to-rise, you sink between kicks.
+      // MapState edge-triggers this while swimming.
       if (this.swimming) {
         vy = Math.min(vy, -shoe_swim_speed_v * swim_jump * 0.5);
       }
@@ -398,10 +395,6 @@ class Physics {
         const maxH = swim_speed * shoe_swim_speed_h;
         const waterGravity = 700;
         const sinkTerminal = 300;
-        // Holding jump swims up at a steady pace; holding down sinks faster
-        const riseMax = swim_speed * shoe_swim_speed_v;
-        const rising = this.swimUp && !this.down;
-        const sinkScale = this.down ? 2 : 1;
 
         this.vx = mleft
           ? vx < -maxH ? Math.min(-maxH, vx + drag) : Math.max(-maxH, vx - acc)
@@ -411,9 +404,7 @@ class Physics {
           ? Math.max(0, vx - drag)
           : Math.min(0, vx + drag);
 
-        this.vy = rising
-          ? Math.max(vy - acc, -riseMax)
-          : Math.min(vy + waterGravity * sinkScale * delta, sinkTerminal);
+        this.vy = Math.min(vy + waterGravity * delta, sinkTerminal);
       } else {
         let shoefloat = (float_drag_2 / shoe_mass) * delta;
         vy > 0

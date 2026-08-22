@@ -839,11 +839,10 @@ MapStateInstance.doUpdate = function (
         // the landed check in canJump, not the key edge — Physics.jump()
         // assigns vy outright, so anything that lets it run while the
         // character is still rising re-launches at full speed every frame.
-        // Swimming: the held key is a steady rise (Physics.swimUp) and only
-        // the press is a kick — polling jump() every frame played the jump
+        // Swimming is tap-to-rise: one kick per press, a held key does
+        // nothing more (GMS) — polling jump() every frame played the jump
         // sound each frame and re-kicked you up right after a down-jump
         // through a submerged platform
-        MyCharacter.pos.swimUp = MyCharacter.pos.swimming && actionDown(canvas, "jump");
         const jumpWanted = MyCharacter.pos.swimming
           ? actionPressed(canvas, "jump")
           : actionDown(canvas, "jump");
