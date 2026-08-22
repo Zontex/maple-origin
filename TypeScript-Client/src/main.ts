@@ -7,6 +7,7 @@ import Camera from "./Camera";
 import MySocket, { wasDisconnected } from "./mysocket";
 import StateManager from "./StateManager";
 import LoginState from "./LoginState";
+import LogoState from "./LogoState";
 import GameCanvas from "./GameCanvas";
 import ClickManager from "./UI/ClickManager";
 import { tryAutoLogin, hasDevSession, saveDevSnapshot } from "./DevAutoLogin";
@@ -93,7 +94,9 @@ const startGame = async () => {
   }
 
   if (!autoLoggedIn) {
-    await StateManager.setState(LoginState, canvas);
+    // A cold boot opens with the Wizet and Nexon logos (UI.wz/Logo.img),
+    // which hand over to the login screen; an HMR auto-login skips them
+    await StateManager.setState(LogoState, canvas);
   }
 
   let Loop = new GameLoop(canvas);
