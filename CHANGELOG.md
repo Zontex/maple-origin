@@ -9,6 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - **Hitting Papulatus' Time Sphere crashed the update loop** — the mob ships only `stand` and `die1`, and `Monster.hit` switched it to a `hit1` it doesn't have; `setStance` now falls back to a stance the mob carries and a mob without flinch art simply keeps its pose.
+- **Sharp Eyes gives criticals** — the 4th-job archer party buff's `x`/`y` (+15% chance, 140% damage at 30) now reach the critical roll for everyone under it, the only way a non-archer/claw class crits in v83; it was relayed and shown but did nothing.
 - **Stat window shows gear** — STR/DEX/INT/LUK read `896 (896+0)`: the total first, then base and the bonus from worn equips and buffs, the pre-Big-Bang form; the rows showed the base alone.
 - **Papulatus' summon beam drew over the player** (Origin of Clocktower) — the reactor took the layer of the floor beneath it instead of the platform its drop box is authored on; item-triggered reactors now take the platform under their box. No other reactor in the game moves.
 - **Phantom equips** — `!item` accepted ids v83 doesn't have (the name lookup's fallback word counted as a name), equipping one pulled it from the bag and took the worn piece off before the missing Character.wz file threw, and a cash costume cover worn over an emptied slot could not be clicked off (the equip window called the cell empty). Now `!item` refuses unnamed ids, `attachEquip` refuses cleanly and `equipItem` restores the bag and the old piece, and a cover-only cell unequips.

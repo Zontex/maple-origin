@@ -66,6 +66,11 @@ export const SOUL_ARROW_IDS = new Set([3101004, 3201004, 13101003]);
 export const SHADOW_PARTNER_LAG_MS = 200;
 
 // Passive critical skills: chance = effect.prop / 100, damage = effect.damage / 100
+// Sharp Eyes (Bowmaster 3121002 / Marksman 3221002): the v83 party buff that
+// gives EVERY class a critical — `x`% added to the chance, `y`% the critical
+// damage (lv30: +15%, 140%). A warrior never crits otherwise.
+export const SHARP_EYES_IDS = [3121002, 3221002];
+
 export const CRITICAL_SKILLS: Record<number, number[]> = {
   [WeaponType.BOW]: [3000001],                 // Critical Shot
   [WeaponType.CROSSBOW]: [3000001],

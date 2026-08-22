@@ -1,6 +1,6 @@
 import SkillData, { SkillInfo, SkillLevelEffect } from './SkillData';
 import type MapleCharacter from '../MapleCharacter';
-import { WEAPON_MASTERY_SKILLS, CRITICAL_SKILLS, FINAL_ATTACK_SKILLS } from '../Constants/CombatSkills';
+import { WEAPON_MASTERY_SKILLS, CRITICAL_SKILLS, SHARP_EYES_IDS, FINAL_ATTACK_SKILLS } from '../Constants/CombatSkills';
 
 export interface SkillEntry {
   level: number;
@@ -124,15 +124,29 @@ export default class SkillManager {
    * Returns null when no crit skill applies to this weapon.
    */
   getCritical(weaponType: number): { chance: number; damagePct: number } | null {
-    const candidates = CRITICAL_SKILLS[weaponType];
-    if (!candidates) return null;
-    for (const skillId of candidates) {
+    let chance = 0;
+    let damagePct = 1;
+    // The weapon's own passive (Critical Shot / Critical Throw)
+    for (const skillId of CRITICAL_SKILLS[weaponType] || []) {
       const effect = this.getSkillEffectSync(skillId);
       if (effect && effect.prop > 0) {
-        return { chance: effect.prop / 100, damagePct: (effect.damage || 100) / 100 };
+        chance += effect.prop / 100;
+        damagePct = Math.max(damagePct, (effect.damage || 100) / 100);
+        break;
       }
     }
-    return null;
+    // Sharp Eyes on the caster or received from a party member: `x` adds to
+    // the chance, `y` is the critical damage when no better passive applies
+    const bm: any = (this.character as any)?.buffManager;
+    for (const id of SHARP_EYES_IDS) {
+      const eff = bm?.activeBuffs?.get?.(id)?.effect;
+      if (eff && eff.x > 0) {
+        chance += eff.x / 100;
+        damagePct = Math.max(damagePct, (eff.y || 100) / 100);
+        break;
+      }
+    }
+    return chance > 0 ? { chance: Math.min(1, chance), damagePct } : null;
   }
 
   // Get all passive skill stat bonuses (aggregated)
