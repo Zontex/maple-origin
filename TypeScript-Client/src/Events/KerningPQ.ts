@@ -416,13 +416,12 @@ class KerningPQEvent {
       }
       if (frames.length > 0) this.effect = { frames, idx: 0, t: 0 };
     } catch { /* optional art */ }
-    if (kind === 'clear') {
-      // The party-quest "Clear!" voice, not the quest-completion jingle
-      try {
-        const snd: any = await WZManager.get('Sound.wz/Field.img/Party1/Clear');
-        if (snd?.nGetAudio) PLAY_AUDIO(snd.nGetAudio());
-      } catch { /* optional */ }
-    }
+    // The party-quest voices (Field.img/Party1): "Clear!" on a stage clear,
+    // "Failed" on a wrong answer — not the quest-completion jingle
+    try {
+      const snd: any = await WZManager.get(`Sound.wz/Field.img/Party1/${kind === 'clear' ? 'Clear' : 'Failed'}`);
+      if (snd?.nGetAudio) PLAY_AUDIO(snd.nGetAudio());
+    } catch { /* optional */ }
   }
 
   render(canvas: GameCanvas): void {
