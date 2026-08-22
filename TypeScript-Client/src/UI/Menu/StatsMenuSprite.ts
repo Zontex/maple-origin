@@ -2,7 +2,7 @@ import WZManager from "../../wz-utils/WZManager";
 import GUIUtil from "../../GuiUtils";
 import WZFiles from "../../Constants/enums/WZFiles";
 import GeneralMenuSprite from "./GeneralMenuSprite";
-import getEquipTypeById from "../../Constants/EquipType";
+import getEquipTypeById, { WeaponType } from "../../Constants/EquipType";
 import { AttackType } from "../../Constants/AttackType";
 import ClickManager from "../ClickManager";
 import { MapleStanceButton } from "../MapleStanceButton";
@@ -199,9 +199,11 @@ class StatsMenuSprite extends DragableMenu {
 
     // second menu
     const weaponType = getEquipTypeById(this.charecter!.weaponEquipId);
+    // The window shows the weapon's best multiplier (HeavenClient's
+    // get_multiplier: spear 5.0 = stab, everything else swing or equal)
     const attackRange = this.charecter!.stats.getAttackRange(
       weaponType,
-      AttackType.Swing,
+      weaponType === WeaponType.SPEAR ? AttackType.Stab : AttackType.Swing,
       this.charecter!.skillManager?.getWeaponMastery?.(weaponType) ?? 0.1
     );
 
