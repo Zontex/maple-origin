@@ -1,5 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
-import { XY_STAT_SKILLS, MONSTER_MAGNET_IDS } from '../Constants/CombatSkills';
+import { XY_STAT_SKILLS, MONSTER_MAGNET_IDS, ASSASSINATE_ID } from '../Constants/CombatSkills';
 
 export interface SkillLevelEffect {
   mpCon: number;
@@ -326,7 +326,8 @@ function parseSkillNode(skillNode: any, skillId: number): SkillInfo {
   // without root hit/ball art — Sacrifice, Power Crash, Rush, Dragon Fury's
   // pole arm twin. Passives with a damage% (Final Attack, Berserk) cost no MP.
   const levelIsAttack = effects.some((e) => e.damage > 0 && e.mpCon > 0 && !(e.time > 0));
-  const isAttack = hasHit || hasBall || levelHasBallOrHit || hasSummon || levelIsAttack || MONSTER_MAGNET_IDS.has(skillId);
+  // Assassinate has no hit/ball art and its levels carry the stun `time`
+  const isAttack = hasHit || hasBall || levelHasBallOrHit || hasSummon || levelIsAttack || MONSTER_MAGNET_IDS.has(skillId) || skillId === ASSASSINATE_ID;
   const isBuff = !isAttack && (hasAction || hasEffect);
   const isPassive = !isAttack && !isBuff && effects.length > 0;
 

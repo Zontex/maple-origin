@@ -63,6 +63,11 @@ class Projectile {
   // Skill that fired this projectile (0 = plain weapon shot) — carried so a
   // killing blow can be credited to the right skill-tutorial quest
   skillId: number = 0;
+  // Damage lines per impact (Wind Shot 3, Combo Penril 2) and the cadence the
+  // later lines follow — see MapleCharacter.attackHitTimes; a projectile has
+  // no body frames to pace by, so it keeps its Hit art's frame delay
+  attackCount: number = 1;
+  hitCadenceMs: number = 90;
   // Skill damage multiplier on a weapon shot (Double Shot: 0.61..0.80)
   damagePercent: number = 1;
   hitEffectActive: boolean = false;
@@ -90,9 +95,13 @@ class Projectile {
     magicAttack?: { spellAttack: number; mastery: number; element: string | null } | null;
     targetMonsters: Monster[];
     maxDistance?: number;
+    attackCount?: number;
+    hitCadenceMs?: number;
   }): Projectile {
     const p = new Projectile({});
     p.skillId = opts.skillId || 0;
+    p.attackCount = Math.max(1, opts.attackCount || 1);
+    p.hitCadenceMs = opts.hitCadenceMs || 90;
     p.charecter = opts.charecter;
     p.pos = new ProjectilePhysics({
       x: opts.x,
@@ -175,6 +184,8 @@ class Projectile {
     this.skillId = opts.skillId || 0;
     this.damagePercent = opts.damagePercent ?? 1;
     this.hitNode = opts.hitNode || null;
+    this.attackCount = Math.max(1, opts.attackCount || 1);
+    this.hitCadenceMs = opts.hitCadenceMs || 90;
     if (opts.ballNode?.nChildren?.length) {
       this.stance = opts.ballNode;
       this.setFrame(opts.ballNode, 0);
@@ -251,13 +262,72 @@ class Projectile {
 
     this.willHitkill = this.target!.willHitkill(this.finalDamangeAfterTargetDefense);
     if (this.willHitkill) {
-      this.target!.hit(
-        this.finalDamangeAfterTargetDefense,
-        this.pos!.x < this.target!.centerPosition.x ? 1 : -1,
-        this.charecter,
-        false,
-        this.skillId
-      );
+      this.landLines(this.target!, this.pos!.x < this.target!.centerPosition.x ? 1 : -1);
+    }
+  }
+
+  /**
+   * One fresh damage line against `target` — the formula the first line used
+   * (magic / fixed / weapon ammo), rolled again for the later lines of a
+   * multi-line impact.
+   */
+  rollLine(target: Monster): { damage: number; crit: boolean } {
+    const stats = this.charecter!.stats;
+    const monsterLevel = target.mobFile?.info?.level?.nValue ?? 1;
+    if (this.magicAttack) {
+      const rawRange = stats.getMagicAttackRange(this.magicAttack.spellAttack, this.magicAttack.mastery);
+      const monsterMdd = target.mobFile?.info?.MDDamage?.nValue ?? 0;
+      const defRange = stats.getMagicDamageAfterMonsterDefense(rawRange, monsterMdd, monsterLevel);
+      if (stats.getRandomIsMiss(monsterLevel, target.eva ?? 0)) return { damage: 0, crit: false };
+      const elemMult = target.getElementalMultiplier?.(this.magicAttack.element) ?? 1;
+      const baseDmg = Math.max(1, Stats.getRandomAttackDamageFromAttackRange(defRange));
+      return { damage: Math.max(1, Math.floor(baseDmg * elemMult)), crit: false };
+    }
+    if (this.fixedDamage > 0 || !(this.weaponAttackRange?.max > 0)) {
+      return { damage: this.fixedDamage, crit: false };
+    }
+    const attackRange = stats.getAttackDamageRangeAfterMonsterDefense(
+      this.weaponAttackRange,
+      target.mobFile?.info?.PDDamage?.nValue ?? 0,
+      monsterLevel
+    );
+    if (stats.getRandomIsMiss(monsterLevel, target.mobFile?.info?.eva?.nValue ?? 0)) {
+      return { damage: 0, crit: false };
+    }
+    let damage = Math.floor(Stats.getRandomAttackDamageFromAttackRange(attackRange) * this.damagePercent);
+    let crit = false;
+    if (damage > 0) {
+      const weaponType = getEquipTypeById((this.charecter as any).weaponEquipId);
+      const c = (this.charecter as any).skillManager?.getCritical?.(weaponType) ?? null;
+      if (c && Math.random() < c.chance) {
+        damage = Math.floor(damage * c.damagePct);
+        crit = true;
+      }
+    }
+    return { damage, crit };
+  }
+
+  /**
+   * Land this projectile's damage on `target`: the rolled first line now,
+   * then one more line per `attackCount` at the Hit art's cadence, each
+   * stacked a row higher and without a second knockback. Later lines still
+   * print on a mob the first one killed.
+   */
+  landLines(target: Monster, knockbackDir: number) {
+    const first = this.finalDamangeAfterTargetDefense;
+    target.hit(first, knockbackDir, this.charecter, this.isCritical, this.skillId);
+    let stackOffset = Monster.damageRowHeight(this.isCritical);
+    for (let h = 1; h < this.attackCount; h++) {
+      const offset = stackOffset;
+      setTimeout(() => {
+        if (target.destroyed) return;
+        const line = this.rollLine(target);
+        target.hit(line.damage, 0, this.charecter, line.crit, this.skillId, null, offset);
+        if (this.skillId) void playSkillSound(this.skillId, 'Hit');
+      }, h * this.hitCadenceMs);
+      // Row height is decided by the line's crit roll only when it lands;
+      // reserve a normal row here so the column never overlaps
+      stackOffset += Monster.damageRowHeight(false);
     }
   }
 
@@ -306,13 +376,7 @@ class Projectile {
       );
 
       if (this.willHitkill) {
-        this.target!.hit(
-          this.finalDamangeAfterTargetDefense,
-          this.pos!.x < this.target!.centerPosition.x ? 1 : -1,
-          this.charecter,
-          this.isCritical,
-          this.skillId
-        );
+        this.landLines(this.target!, this.pos!.x < this.target!.centerPosition.x ? 1 : -1);
       } else {
         // will happen when projectile hits the mob
       }
@@ -379,7 +443,9 @@ class Projectile {
       if (!isPositionInsideRect(this.pos!, rect)) continue;
 
       const knockbackDir = this.pos!.vx > 0 ? 1 : -1;
-      monster.hit(this.fixedDamage, knockbackDir, this.charecter, false, this.skillId);
+      this.finalDamangeAfterTargetDefense = this.fixedDamage;
+      this.isCritical = false;
+      this.landLines(monster, knockbackDir);
       this.startHitEffect();
       this.isMovementEnabled = false;
       this.destroy();
@@ -407,13 +473,7 @@ class Projectile {
 
     if (isHit) {
       if (!this.willHitkill) {
-        this.target.hit(
-          this.finalDamangeAfterTargetDefense,
-          this.pos!.x < this.target.centerPosition.x ? 1 : -1,
-          this.charecter,
-          this.isCritical,
-          this.skillId
-        );
+        this.landLines(this.target, this.pos!.x < this.target.centerPosition.x ? 1 : -1);
       }
       // Start skill hit effect animation if available
       this.startHitEffect();

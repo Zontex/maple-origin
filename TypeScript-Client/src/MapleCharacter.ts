@@ -34,7 +34,7 @@ import { AttackType } from "./Constants/AttackType";
 import Inventory from "./Inventory/Inventory";
 import Stats, { DamageRange } from "./Stats/Stats";
 import PlayerStatus from "./Status/PlayerStatus";
-import {
+import { ASSASSINATE_ID, MULTI_HIT_FALLBACK_CADENCE_MS,
   BOOSTER_SKILL_IDS,
   DASH_SKILL_ID,
   SKILL_BULLET_STAGGER_MS,
@@ -676,25 +676,44 @@ class MapleCharacter {
   }
 
   /**
-   * When each damage line of a multi-hit attack lands, relative to the first:
-   * the original client applies the i-th line when the i-th body frame after
-   * the trigger frame starts, so the hits follow the animation (Spear
-   * Crusher's thrusts, Brandish's two slashes). Past the last frame the last
-   * frame's delay repeats.
+   * When each damage line of a multi-hit attack lands, relative to the first.
+   * The original client applies line i at the start of the i-th ATTACK FRAME
+   * after the trigger — a body frame whose delay is not negative (negative
+   * delays mark wind-up frames; HeavenClient's `isattackframe`). Spear
+   * Crusher's own art proves the rule: `burster2` is -300/-300/150/150/150 and
+   * its effect1/2/3 slashes are staggered exactly 600/750/900 ms.
+   *
+   * When the stance runs out of frames — Demolition holds one 2670 ms frame
+   * for 8 hits, Vampire's frames are all wind-up, Double Stab's `stabO1` has
+   * nothing past the last frame it fires on — the remaining lines follow at
+   * `cadenceMs`, the frame delay of the skill's own Hit art (the only cadence
+   * the WZ carries for them). Never the frame's own delay: that put
+   * Demolition's eight punches 2.7 s apart.
    */
-  attackHitTimes(count: number): number[] {
+  attackHitTimes(count: number, cadenceMs = MULTI_HIT_FALLBACK_CADENCE_MS): number[] {
     const frames = this.baseBody?.[this.stance];
+    const delayOf = (f: any): number => Number(f?.nGet?.("delay")?.nGet?.("nValue", 100) ?? 100);
     const times = [0];
-    let t = 0;
-    let last = 100;
-    for (let h = 1, i = this.frame; h < count; h++, i++) {
-      const f = frames?.[i];
-      const d = f ? Math.abs(f.nGet("delay").nGet("nValue", last)) : last;
-      if (d > 0) last = d;
-      t += last;
-      times.push(t);
+    // Time runs from the start of the trigger frame
+    let t = Math.abs(delayOf(frames?.[this.frame]));
+    for (let i = this.frame + 1; times.length < count && frames?.[i]; i++) {
+      const d = delayOf(frames[i]);
+      if (d >= 0) times.push(t);
+      t += Math.abs(d);
     }
+    const cadence = cadenceMs > 0 ? cadenceMs : MULTI_HIT_FALLBACK_CADENCE_MS;
+    while (times.length < count) times.push(times[times.length - 1] + cadence);
     return times;
+  }
+
+  /**
+   * Frame delay of a skill's Hit art (`hit/0/0/delay`), the cadence lines of
+   * a multi-hit attack keep once the body's attack frames are used up.
+   */
+  static hitArtCadence(hitNode: any): number {
+    const frame = hitNode?.nChildren?.[0]?.nChildren?.[0];
+    const d = Number(frame?.nGet?.("delay")?.nGet?.("nValue", 0) ?? 0);
+    return d > 0 ? d : MULTI_HIT_FALLBACK_CADENCE_MS;
   }
 
   setFrame(frame = 0, carryOverDelay = 0) {
@@ -1911,6 +1930,9 @@ async useSkill(skillId: number, effect: any): Promise<boolean> {
         range: effect.range || 0,
         ballNode: effect.ballNode,
         hitNode: effect.hitNode,
+        // Wind Shot: one arrow, three lines on impact
+        attackCount: effect.attackCount || 1,
+        hitCadenceMs: MapleCharacter.hitArtCadence(effect.hitNode),
       };
       fire = () => {
         // Anything beyond one per round comes off the stack up front
@@ -2020,6 +2042,8 @@ fireSkillProjectile(effect: any, element: string | null = null, fixedDamageOverr
       : null,
     targetMonsters: this.map?.monsters?.filter((m: Monster) => !m.dying && !m.isFake) || [],
     maxDistance: skillReach(effect),
+    attackCount: effect.attackCount || 1,
+    hitCadenceMs: MapleCharacter.hitArtCadence(effect.hitNode),
   });
   this.projectiles.push(projectile);
 }
@@ -2034,9 +2058,14 @@ async executeSkillDamage(skillId: number, effect: any) {
   // carries no range at all in the WZ)
   const skillRange = effect.range > 0 ? effect.range : SINGLE_TARGET_REACH;
   const mobCount = effect.mobCount || 1;
-  const attackCount = effect.attackCount || 1;
+  // Assassinate's fourth, lethal strike is not in attackCount (see the id)
+  const lethalStrike = skillId === ASSASSINATE_ID;
+  const attackCount = (effect.attackCount || 1) + (lethalStrike ? 1 : 0);
   const damagePercent = (effect.damage || 100) / 100;
   const fixDamage = effect.fixdamage || 0;
+  // Landing times are read off the stance NOW, on the trigger frame, before
+  // anything below yields to the event loop
+  const hitTimes = this.attackHitTimes(attackCount, MapleCharacter.hitArtCadence(effect.hitNode));
 
   // No weapon swing sfx here: a skill's `Use` clip (played at cast) is its
   // attack sound, and its `Hit` clip lands below
@@ -2149,6 +2178,13 @@ async executeSkillDamage(skillId: number, effect: any) {
               damage = Math.floor(damage * crit.damagePct);
               isCritical = true;
             }
+            // Assassinate's last strike: `prop`% to land at `criticalDamage`%
+            // instead (GMS: "can be lethal with a given success rate")
+            if (lethalStrike && hit === attackCount - 1 && effect.criticalDamage > 0 &&
+                Math.random() * 100 < (effect.prop || 0)) {
+              damage = Math.floor(baseDmg * effect.criticalDamage / 100);
+              isCritical = true;
+            }
           }
         }
 
@@ -2163,17 +2199,20 @@ async executeSkillDamage(skillId: number, effect: any) {
 
   const knockbackDirection = isCharacterFacingRight ? 1 : -1;
   const mapAtCast = this.map;
-  const hitTimes = this.attackHitTimes(attackCount);
   for (let h = 0; h < attackCount; h++) {
     const land = () => {
       if (this.map !== mapAtCast) return;
       let landed = false;
       for (const { monster, lines } of plan) {
         const line = lines[h];
-        if (!line || monster.dying) continue;
+        // A mob an earlier line killed still prints the rest of its column
+        // (Monster.hit only draws the number on a dying mob); one that is
+        // gone entirely does not
+        if (!line || monster.destroyed) continue;
         let stackOffset = 0;
         for (let i = 0; i < h; i++) stackOffset += Monster.damageRowHeight(lines[i].crit);
-        monster.hit(line.damage, knockbackDirection, this, line.crit, skillId, null, stackOffset);
+        // Knockback is once per attack, on the first line (0 = no shove)
+        monster.hit(line.damage, h === 0 ? knockbackDirection : 0, this, line.crit, skillId, null, stackOffset);
         landed = true;
         // The skill's own impact art when it has one (Magic Claw, Energy
         // Bolt's melee fallback), on the first line only
@@ -2218,6 +2257,9 @@ async fireProjectile(
     ballNode?: any;
     hitNode?: any;
     consumeAmmo?: boolean;
+    // Damage lines per impact (Wind Shot 3) and their cadence
+    attackCount?: number;
+    hitCadenceMs?: number;
   } | null = null
 ) {
   // A skill's Use clip is normally its gunshot, so only a plain shot plays the
@@ -2269,6 +2311,8 @@ async fireProjectile(
       damagePercent: skill?.damagePercent ?? 1,
       ballNode: skill?.ballNode ?? null,
       hitNode: skill?.hitNode ?? null,
+      attackCount: skill?.attackCount ?? 1,
+      hitCadenceMs: skill?.hitCadenceMs ?? MULTI_HIT_FALLBACK_CADENCE_MS,
     });
     this.projectiles.push(projectile);
   } catch (error) {

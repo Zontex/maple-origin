@@ -789,11 +789,23 @@ async addDrops() {
     // A fake (Zakum body behind its arms) shrugs everything off silently
     if (this.isFake) return;
 
+    // A later line of a multi-hit attack on a mob an earlier line already
+    // killed still prints its number — the original shows the whole column
+    // on a kill — and does nothing else (no second death, no thud, no request)
+    if (this.dying) {
+      this.DamageIndicator.addDamageIndicator(
+        indicatorType,
+        { x: this.getHitRect().x, y: this.getHitRect().y - 20 - stackOffset },
+        damage
+      );
+      return;
+    }
+
     // Remote mob (non-host client): send damage request to host, show visual only
     if (this.isRemote) {
       // Send damage request to host via server
       try {
-        MySocket.sendMobDamageRequest(this.oId, damage, knockBackDirection, skillId);
+        MySocket.sendMobDamageRequest(this.oId, damage, knockBackDirection, skillId, stackOffset);
       } catch {}
       // Show damage indicator locally for immediate feedback
       this.DamageIndicator.addDamageIndicator(
@@ -837,8 +849,10 @@ async addDrops() {
         this.pos.right = false;
         this.pos.left = false;
 
-        // v83 knockback: requires damage >= 1% of max HP; bosses never budge
-        if (!this.isBoss && damage >= this.maxHp * 0.01) {
+        // v83 knockback: requires damage >= 1% of max HP; bosses never budge.
+        // Direction 0 = a later line of a multi-hit attack, which only shoves
+        // on its first line
+        if (knockBackDirection !== 0 && !this.isBoss && damage >= this.maxHp * 0.01) {
           this.pos.applyKnockbackX(knockBackDirection);
         }
         this.setStance(MobStance.hit1, 0, () => {

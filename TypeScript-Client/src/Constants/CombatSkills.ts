@@ -38,6 +38,17 @@ export const FINAL_ATTACK_SKILLS: Record<number, number[]> = {
 // `mobCount` mobs within `range` in front of you to your feet, `prop`% each
 export const MONSTER_MAGNET_IDS = new Set([1121001, 1221001, 1321001]);
 
+// Assassinate (Shadower). GMS: "Strikes an unsuspecting monster at its vital
+// spots 4 times. The last strike can be lethal with a given success rate." The
+// WZ carries attackCount=3 plus `criticalDamage`/`prop` for that fourth,
+// lethal strike, and a `time` (the stun) that would otherwise read as a buff.
+export const ASSASSINATE_ID = 4221001;
+
+// Lines of a multi-hit attack past the body's attack frames follow at the
+// frame delay of the skill's own Hit art; this is the last-resort cadence
+// when a skill ships no Hit art either.
+export const MULTI_HIT_FALLBACK_CADENCE_MS = 90;
+
 // Passive critical skills: chance = effect.prop / 100, damage = effect.damage / 100
 export const CRITICAL_SKILLS: Record<number, number[]> = {
   [WeaponType.BOW]: [3000001],                 // Critical Shot

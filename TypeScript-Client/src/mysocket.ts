@@ -1937,19 +1937,22 @@ class MySocket {
     // id rides along so a killing blow is credited back to them.
     mob.hit(
       data.damage,
-      data.knockbackDir || 1,
+      // 0 = a later line of the requester's multi-hit attack (no shove);
+      // older clients send no direction at all
+      data.knockbackDir === 0 ? 0 : (data.knockbackDir || 1),
       null,
       false,
       Number(data.skillId) || 0,
-      data.sourcePlayerId || null
+      data.sourcePlayerId || null,
+      Number(data.stackOffset) || 0
     );
   }
 
   // Non-host sends damage request to host (via server)
-  sendMobDamageRequest(oId: number, damage: number, knockbackDir: number, skillId: number = 0) {
+  sendMobDamageRequest(oId: number, damage: number, knockbackDir: number, skillId: number = 0, stackOffset: number = 0) {
     this.sendMessage({
       type: 'mob_damage_request',
-      data: { oId, damage, knockbackDir, skillId, mapId: Number(MapleMap.id) }
+      data: { oId, damage, knockbackDir, skillId, stackOffset, mapId: Number(MapleMap.id) }
     });
   }
 
