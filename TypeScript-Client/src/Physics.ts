@@ -77,6 +77,9 @@ class Physics {
   isClimbing: boolean = false;
   flying: boolean = false;
   swimming: boolean = false; // in a swim map — airborne physics become water physics
+  // Jump key HELD while swimming: a steady rise (MapState feeds it per frame).
+  // A press is a kick (jump()); holding down instead sinks faster.
+  swimUp: boolean = false;
   // The character's Speed/Jump stats as factors of the base (100 = 1.0) —
   // the `shoe_walk_speed` / `shoe_walk_jump` terms of the original formula.
   // Owned by the entity: MapleCharacter feeds them from its local stats,
@@ -184,11 +187,11 @@ class Physics {
       }
       fh = null;
     } else {
-      // In water: jump key gives a small upward swim kick (flappy-bird feel —
-      // each kick hops up, gravity pulls back down). The vy gate paces
-      // re-kicks while the key is held instead of stacking every frame.
-      if (this.swimming && vy > -80) {
-        vy = -shoe_swim_speed_v * swim_jump * 0.5;
+      // In water: a press is a swim kick upward; holding the key afterwards
+      // keeps rising through `swimUp` (see the water branch of update), so
+      // this runs once per press — MapState edge-triggers it while swimming
+      if (this.swimming) {
+        vy = Math.min(vy, -shoe_swim_speed_v * swim_jump * 0.5);
       }
     }
     this.fh = fh;
@@ -253,6 +256,15 @@ class Physics {
     if (this.isClimbing) return false;
 
     this.vx = directionX * hit_knockback_vx;
+
+    // In water there is no hop — the push is sideways and the water's own
+    // gravity settles you. Standing on a submerged floor still has to leave
+    // it for the push to apply (same reason as below). The ground hop under
+    // water gravity (700 vs 2000) read as a full jump.
+    if (this.swimming) {
+      if (this.fh) { this.fh = null; this.vy = 0; }
+      return true;
+    }
 
     if (this.fh) {
       this.vy = -hit_knockback_vy;
@@ -386,6 +398,10 @@ class Physics {
         const maxH = swim_speed * shoe_swim_speed_h;
         const waterGravity = 700;
         const sinkTerminal = 300;
+        // Holding jump swims up at a steady pace; holding down sinks faster
+        const riseMax = swim_speed * shoe_swim_speed_v;
+        const rising = this.swimUp && !this.down;
+        const sinkScale = this.down ? 2 : 1;
 
         this.vx = mleft
           ? vx < -maxH ? Math.min(-maxH, vx + drag) : Math.max(-maxH, vx - acc)
@@ -395,7 +411,9 @@ class Physics {
           ? Math.max(0, vx - drag)
           : Math.min(0, vx + drag);
 
-        this.vy = Math.min(vy + waterGravity * delta, sinkTerminal);
+        this.vy = rising
+          ? Math.max(vy - acc, -riseMax)
+          : Math.min(vy + waterGravity * sinkScale * delta, sinkTerminal);
       } else {
         let shoefloat = (float_drag_2 / shoe_mass) * delta;
         vy > 0

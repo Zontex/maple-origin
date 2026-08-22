@@ -839,11 +839,19 @@ MapStateInstance.doUpdate = function (
         // the landed check in canJump, not the key edge — Physics.jump()
         // assigns vy outright, so anything that lets it run while the
         // character is still rising re-launches at full speed every frame.
-        if (actionDown(canvas, "jump")) {
+        // Swimming: the held key is a steady rise (Physics.swimUp) and only
+        // the press is a kick — polling jump() every frame played the jump
+        // sound each frame and re-kicked you up right after a down-jump
+        // through a submerged platform
+        MyCharacter.pos.swimUp = MyCharacter.pos.swimming && actionDown(canvas, "jump");
+        const jumpWanted = MyCharacter.pos.swimming
+          ? actionPressed(canvas, "jump")
+          : actionDown(canvas, "jump");
+        if (jumpWanted) {
           MyCharacter.tryJump(
             canvas.isKeyDown("left") || canvas.isKeyDown("right")
           );
-        } else {
+        } else if (!actionDown(canvas, "jump")) {
           // Letting go re-arms the rope push-off. Catching a rope disarms it,
           // so a jump key that was already held when the rope was caught
           // cannot launch until it has been released and pressed again.
