@@ -285,6 +285,7 @@ node tools/wz-to-json.js <input.wz> <output_dir>
 - Fix pattern: `wz-utils/SpriteWarmup.ts` (`collectNodeImages` + `decodeImages`, sliced with `nextIdle`). `MapleCharacter.warmSprites()` composes every stance/frame through `getDrawableFrames` and decodes the parts (scheduled after `load`, `attachEquip`, `setHair`, `setFace`, debounced, generation-guarded). `Skills/SkillWarmup.ts` warms a skill's art + Use/Hit clips when it lands on the hotkey bar; `SkillCastEffect` still `preloadFrames` what it arms for unbound/remote casts; `MapleMap.load` prefetches the skill sound bank. `preloadFrames()` remains the tool for one-shot effects. In `npm run dev` the first `await import()` of a module also costs a Vite transform — that part is dev-only.
 
 ## Debugging Tips
+- **Dev chat commands** (`UIMap.ts`, `!` prefix, checked before guild chat): `!level <n>`, `!map <id>`, `!item <id> [count]` (refused when String.wz has no name for the id).
 - **F9 key** toggles DebugDrag mode — shows green boxes around registered UI elements, click to select (turns red), drag to reposition, offset logged to console
 - When positioning UI elements, use DebugDrag to find correct offsets, then hardcode them
 - Check browser console for errors

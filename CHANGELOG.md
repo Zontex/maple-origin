@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased] - 2026-08-22
 
 ### Fixed
+- **`!item <id> [count]`** dev chat command (beside `!level` and `!map`) — gives yourself any item String.wz names, up to 1000 at a time.
 - **First-use flicker and lag** — every sprite was created and decoded the first time it was drawn, and an image that has not loaded draws nothing: the character blinked blank through its first walk/jump/attack cycle after login or an equip change, a skill's first cast strobed through its effect and stalled on the 2.7MB skill sound bank. Characters now warm every stance's parts in idle time after loading or changing gear, bound skills warm their art and clips when placed on the hotkey bar, and the sound bank loads with the map.
 - **Drowning and cold** — Aqua Road takes 6 HP and El Nath 10 HP every 10 seconds (the maps' `decHP`), stopped by the Oxygen Tank / Cape of Warmness the maps name, or by an Air Bubble, Cassandra's Magic (underwater) or Soft White Bun (cold) — those timed consumables are now real buffs on the buff bar, and so are every other potion's timed stats (Ciders, Bubble Gum), which were silently dropped before.
 - **Inventory window scrolls** — the grid showed the first 24 slots only and the VScr thumb was painted in place ("no scroll functionality yet"), so an ETC tab past 24 items was unreachable. Wheel over the window, the arrows, or a click on the track scroll a row at a time; the thumb tracks the position; tab switches reset it.

@@ -375,6 +375,32 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
               MapleMap.load(mapId);
               break;
             }
+            case "!item": {
+              // Dev: "!item <id> [count]" — any item by id, refused when
+              // String.wz has no name for it (so a typo can't forge an item)
+              const itemId = Number(commandArgs[0]);
+              const count = Math.max(1, Math.min(1000, Number(commandArgs[1]) || 1));
+              if (!Number.isInteger(itemId) || itemId < 1000000) {
+                UIChatLog.system('Usage: !item <itemId> [count]');
+                break;
+              }
+              import('../Quest/QuestData').then(async ({ ensureItemNames, getItemNameSync }) => {
+                await ensureItemNames();
+                const name = getItemNameSync(itemId);
+                if (!name) {
+                  UIChatLog.system(`No item with id ${itemId}.`);
+                  return;
+                }
+                const ok = await MyCharacter.inventory.addToInventory(itemId, count);
+                UIChatLog.system(ok === false
+                  ? `Could not add ${name} (${itemId}) — tab full?`
+                  : `Gained ${name} (${itemId}) x${count}.`);
+              }).catch((e: any) => {
+                console.error('[!item] failed', e);
+                UIChatLog.system(`Could not add item ${itemId}.`);
+              });
+              break;
+            }
             default: {
               // Not a dev command: "!text" is guild chat (delivered to every
               // online member by the server, echoed back to us too)
