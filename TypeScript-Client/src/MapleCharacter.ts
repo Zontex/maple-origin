@@ -3465,6 +3465,41 @@ isCloseToMob = (inAllDirections = true) => {
     }
   };
 
+  /**
+   * Damaging map objects (Map.wz/Obj/trap.img: `obstacle=1`, `damage`, an
+   * lt/rb box per frame — the Pig Park thorns, steam, saws, javelins). A
+   * trap always connects (no accuracy roll), costs its flat `damage`, shoves
+   * you away and starts the same i-frames a mob touch does. Shown as the
+   * purple number like any damage taken; relayed so others see the flinch.
+   */
+  checkForObstacleHit = () => {
+    if (!this.map || this.isRemote || this.isDead) return;
+    const now = Date.now();
+    if (now - this.lastHitTime < this.hitCooldownTimeInMS) return;
+    const body = { x: this.pos.x - TOUCH_HALF_W, y: this.pos.y - TOUCH_H, width: TOUCH_HALF_W * 2, height: TOUCH_H };
+    for (const obj of this.map.objects || []) {
+      if (!obj?.obstacleDamage) continue;
+      const rect = obj.getObstacleRect?.();
+      if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+      if (!areAnyRectanglesOverlapping([body], rect, 1)) continue;
+
+      this.lastHitTime = now;
+      this.lastDamagedTime = now;
+      const centre = rect.x + rect.width / 2;
+      this.pos.hitKnockback(this.pos.x >= centre ? 1 : -1);
+      const damage = Math.max(1, Math.floor(obj.obstacleDamage));
+      const minXY = findMinXY(this.bodyRects);
+      this.DamageIndicator.addDamageIndicator(
+        DamageIndicatorType.MobHitPlayer,
+        { x: (minXY.minX + this.pos.x) / 2, y: minXY.minY - 20 },
+        damage
+      );
+      void this.takeDamage(damage);
+      try { (window as any).__mySocket?.sendPlayerHitByMob?.(-1, damage, false); } catch { /* relay is best-effort */ }
+      return;
+    }
+  };
+
   checkForMobsHit = () => {
     try {
     if (!this.map || this.isRemote) return;
@@ -3933,8 +3968,9 @@ isCloseToMob = (inAllDirections = true) => {
     // Speed/Jump scales so a map change takes effect at once.
     this.pos.groundFriction = this.map?.fs ?? 1;
 
-    // check if hit by mob
+    // check if hit by mob, then by the map's damaging obstacles
     this.checkForMobsHit();
+    this.checkForObstacleHit();
 
     // Stun / seduce / reverse-input own the direction flags from here on
     this.status.applyToPhysics(this.pos);

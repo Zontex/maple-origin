@@ -36,6 +36,11 @@ class Obj {
   // log, the rim of a fountain), relative to the object's position. World
   // coordinates are resolved by MapleMap once x/y/flip are known.
   seats: Array<{ x: number; y: number }> = [];
+  // Map.wz/Obj/trap.img (and any object definition with `obstacle=1`):
+  // touching the frame's lt/rb box costs `damage` HP — the Pig Park thorns
+  // (nature/7, 40), Kerning's steam, the jump quests' saws and javelins
+  obstacleDamage: number = 0;
+  obstacleBox: { left: number; top: number; right: number; bottom: number } | null = null;
 
   static async fromWzNode(wzNode: any) {
     const obj = new Obj(wzNode);
@@ -45,6 +50,15 @@ class Obj {
   constructor(wzNode: any) {
     this.wzNode = wzNode;
   }
+
+  /** World-space contact rectangle of a damaging obstacle (mirrored when flipped), or null. */
+  getObstacleRect(): { x: number; y: number; width: number; height: number } | null {
+    const b = this.obstacleBox;
+    if (!b || this.obstacleDamage <= 0 || !this.visible) return null;
+    const x1 = this.flipped ? -b.right : b.left;
+    const x2 = this.flipped ? -b.left : b.right;
+    return { x: this.x + Math.min(x1, x2), y: this.y + b.top, width: Math.abs(x2 - x1), height: b.bottom - b.top };
+  }
   async load() {
     const wzNode = this.wzNode;
     const oS = wzNode.oS.nValue;
@@ -53,6 +67,9 @@ class Obj {
     const spriteNode: any = objFile[l0][l1][l2];
 
     this.spriteNode = spriteNode;
+    if (Number(spriteNode.nGet?.('obstacle')?.nValue) === 1) {
+      this.obstacleDamage = Number(spriteNode.nGet?.('damage')?.nValue) || 0;
+    }
     this.frames = [];
     spriteNode.nChildren.forEach((frame: any) => {
       if (frame.nTagName === "canvas" || frame.nTagName === "uol") {
@@ -74,6 +91,12 @@ class Obj {
     // forget: awaiting every decode blocks map load for seconds. Frames can
     // be undefined when a UOL fails to resolve.
     for (const f of this.frames) void f?.nPreloadImage?.();
+    // Contact box, authored on the first frame relative to the object's position
+    const lt = this.frames[0]?.nGet?.('lt');
+    const rb = this.frames[0]?.nGet?.('rb');
+    if (this.obstacleDamage > 0 && lt?.nTagName === 'vector' && rb?.nTagName === 'vector') {
+      this.obstacleBox = { left: Number(lt.nX) || 0, top: Number(lt.nY) || 0, right: Number(rb.nX) || 0, bottom: Number(rb.nY) || 0 };
+    }
 
     this.setFrame(0);
 
