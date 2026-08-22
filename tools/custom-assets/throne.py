@@ -97,9 +97,23 @@ os.makedirs(os.path.dirname(os.path.abspath(__file__)), exist_ok=True)
 here = os.path.dirname(os.path.abspath(__file__))
 OUT.save(os.path.join(here, "throne.png"))
 
+# If a hand-made/AI-made sprite is provided (throne_source.png, transparent
+# PNG at 1x, feet at the bottom edge, seat ~22px above it), it replaces the
+# drawn one. throne_ai_original.png is the untouched source it was cut from.
+SRC = os.path.join(here, "throne_source.png")
+if os.path.exists(SRC):
+    OUT = Image.open(SRC).convert("RGBA")
+    W, H = OUT.size
+    print("using", SRC, OUT.size)
+
 # icon: the top of the backrest (crown + R) scaled into 32x32, with the
 # inventory's 2px drop shadow baked like a Nexon `icon`
-crop = OUT.crop((8, 0, 64, 56)).resize((32, 32), Image.NEAREST)
+if os.path.exists(SRC):
+    # the throne's upper centre (crown, backrest, lion heads) as the icon
+    cw = int(W * 0.5); cx0 = (W - cw) // 2
+    crop = OUT.crop((cx0, 0, cx0 + cw, cw)).resize((32, 32), Image.LANCZOS)
+else:
+    crop = OUT.crop((8, 0, 64, 56)).resize((32, 32), Image.NEAREST)
 icon_raw = Image.new("RGBA", (32, 32), (0, 0, 0, 0)); icon_raw.paste(crop, (0, 0), crop)
 icon = Image.new("RGBA", (34, 34), (0, 0, 0, 0))
 sh = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
