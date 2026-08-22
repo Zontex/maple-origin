@@ -383,6 +383,9 @@ MapleMap.load = async function (id: number | string) {
   // Update minimap for the new map
   UIMiniMap.loadMapData();
 
+  // Skill sound bank (2.7MB) fetched off the first cast's critical path
+  import('./Skills/SkillWarmup').then((m) => m.prefetchSkillSounds()).catch(() => {});
+
   // Party quest lifecycle — leaving the event's map range ends the instance
   HenesysPQ.onMapChanged(Number(id));
 

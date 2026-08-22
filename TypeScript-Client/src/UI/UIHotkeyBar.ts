@@ -6,6 +6,7 @@ import { skillHpCost } from '../Skills/SkillData';
 import { playSkillSound as playSkillSoundClip } from '../Skills/SkillSound';
 import { usesWeaponSound } from '../Constants/CombatSkills';
 import { playSkillCastEffect } from '../Skills/SkillCastEffect';
+import { warmSkill } from '../Skills/SkillWarmup';
 import WZManager from '../wz-utils/WZManager';
 import PLAY_AUDIO from '../Audio/PlayAudio';
 import { FACE_COUPON_EXPRESSIONS } from '../Shop/CashShopData';
@@ -144,6 +145,8 @@ const UIHotkeyBar = {
       icon: info?.icon || null,
     };
     console.log(`[HotkeyBar] Assigned skill ${info?.name || skillId} to slot ${slotIndex} (${this.slots[slotIndex].label})`);
+    // Decode its art and fetch its clips now, not inside the first cast
+    void warmSkill(skillId);
     // Bindings are part of the save payload — persist soon, like every
     // other gameplay change (they used to ride only the 30s backstop)
     (window as any).__mySocket?.requestSave?.();

@@ -1,4 +1,5 @@
 import WZManager from '../wz-utils/WZManager';
+import { preloadFrames } from '../wz-utils/WZNode';
 
 /** WZ `weapon` class of a gun: item prefix 149 minus 100 */
 const GUN_WEAPON_CLASS = 49;
@@ -29,6 +30,9 @@ async function playSkillArt(character: any, skillId: number, nodeName: 'effect' 
     const weaponClass = Number(weaponNode?.nValue);
     character.skillEffectAnchor =
       nodeName === 'effect' && weaponClass === GUN_WEAPON_CLASS ? 'muzzle' : 'feet';
+    // Frames not warmed yet (a remote's cast, a skill cast straight from the
+    // menu) decode now rather than strobing through their first play
+    void preloadFrames(artNode.nChildren);
     character.skillEffectFrames = artNode.nChildren;
     character.skillEffectFrame = 0;
     character.skillEffectDelay = 0;
@@ -42,6 +46,7 @@ async function playSkillArt(character: any, skillId: number, nodeName: 'effect' 
       const layers: any[] = [];
       for (const child of skillRoot?.nChildren || []) {
         if (/^effect\d+$/.test(String(child.nName)) && child.nChildren?.length) {
+          void preloadFrames(child.nChildren);
           layers.push({ frames: child.nChildren, frame: 0, delay: 0 });
         }
       }

@@ -1,6 +1,7 @@
 import WZManager from "./wz-utils/WZManager";
 import { FieldLimit, FIELD_LIMIT_MESSAGE, MOVEMENT_SKILL_IDS } from "./Constants/FieldLimit";
 import { preloadFrames } from "./wz-utils/WZNode";
+import { decodeImages, nextIdle } from "./wz-utils/SpriteWarmup";
 // Static, not the dynamic import the rest of SkillData uses here: skillReach
 // is needed inside a synchronous stance callback. Safe — SkillData imports
 // only WZManager, so this closes no cycle.
@@ -205,6 +206,9 @@ class MapleCharacter {
   // Shadow Partner: the last SHADOW_PARTNER_LAG_MS of poses, replayed as a
   // dark translucent copy behind the player (see drawShadowPartner)
   shadowTrail: { t: number; x: number; y: number; stance: string; frame: number; flipped: boolean }[] = [];
+  // Sprite warm-up bookkeeping — see warmSprites
+  _warmGen: number = 0;
+  _warmTimer: any = null;
   // Map HP drain clock (info/decHP) — see updateMapHpDecrease
   mapHpDecClock: number = 0;
   mapHpDecMapId: number | string | null = null;
@@ -541,7 +545,64 @@ class MapleCharacter {
     this.DamageIndicator = new DamageIndicator();
     this.DamageIndicator.initialize();
     this.recalcLocalStats();
+    this.scheduleSpriteWarmup();
   }
+
+  /**
+   * Create and decode every sprite this look can draw — all stances, all
+   * frames, every part, every face expression — off the draw path.
+   * getDrawableFrames creates a part's HTMLImageElement the first time it
+   * composes it, and drawImage draws nothing until that image has loaded,
+   * so each stance/frame blinked blank the first time it came up (the
+   * "flicker while walking" after login or an equip change). Sliced across
+   * idle time; a newer request (equip change mid-run) supersedes the run.
+   */
+  scheduleSpriteWarmup() {
+    if (this._warmTimer) clearTimeout(this._warmTimer);
+    this._warmTimer = setTimeout(() => { this._warmTimer = null; void this.warmSprites(); }, 60);
+  }
+
+  async warmSprites() {
+    const gen = ++this._warmGen;
+    if (!this.baseBody?.nChildren) return;
+    // The poses seen first, first; then everything else the body knows
+    const priority = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'fly', 'alert', 'prone',
+      'proneStab', 'ladder', 'rope', 'sit', 'dead', 'swingO1', 'swingO2', 'swingO3', 'swingT1',
+      'swingT2', 'swingT3', 'stabO1', 'stabO2', 'stabT1', 'stabT2', 'swingP1', 'swingP2', 'shoot1',
+      'shoot2', 'shootF', 'shot', 'swingOF', 'stabOF', 'stabTF', 'swingPF', 'swingTF', 'alert2',
+      'heal', 'fly2', 'prone2', 'magic1', 'magic2', 'magic3'];
+    const all = (this.baseBody.nChildren as any[]).map((c: any) => String(c.nName));
+    const stances = [...priority.filter((s) => all.includes(s)), ...all.filter((s) => !priority.includes(s))];
+    let batch: any[] = [];
+    let since = 0;
+    for (const stance of stances) {
+      if (gen !== this._warmGen || !this.baseBody?.[stance]?.[0]) continue;
+      for (let i = 0; this.baseBody[stance][i]; i++) {
+        let frames: any[] = [];
+        try { frames = this.getDrawableFrames(stance, i, false) as any[]; } catch { continue; }
+        for (const f of frames || []) if (f?.img) batch.push(f.img);
+        if (++since >= 6) {
+          since = 0;
+          const imgs = batch; batch = [];
+          void decodeImages(imgs);
+          await nextIdle();
+          if (gen !== this._warmGen) return;
+        }
+      }
+    }
+    // Face expressions blink in lazily too (their first blink was blank)
+    try {
+      for (const expr of this.Face?.nChildren || []) {
+        const frames = expr?.nChildren || [];
+        for (const fr of frames) {
+          const face = fr?.nTagName === 'canvas' ? fr : fr?.nGet?.('face');
+          if (face?.nTagName === 'canvas') batch.push(face.nGetImage());
+        }
+      }
+    } catch { /* optional */ }
+    void decodeImages(batch);
+  }
+
   async setSkinColor(sc = 0) {
     this.head = await WZManager.get(`Character.wz/0001200${sc}.img`);
     this.body = await WZManager.get(`Character.wz/0000200${sc}.img`);
@@ -907,6 +968,7 @@ class MapleCharacter {
   async setFace(face = 20000) {
     this.Face = await WZManager.get(`Character.wz/Face/000${face}.img`);
     this.face = face;
+    this.scheduleSpriteWarmup();
   }
   setFaceExpr(faceExpr = "blink", faceFrame = 0) {
     if (!!this.Face[faceExpr]) {
@@ -940,6 +1002,7 @@ class MapleCharacter {
   async setHair(hair = 30030) {
     this.Hair = await WZManager.get(`Character.wz/Hair/000${hair}.img`);
     this.hair = hair;
+    this.scheduleSpriteWarmup();
   }
 
   /**
@@ -1003,6 +1066,7 @@ class MapleCharacter {
       const equip = await WZManager.get(`Character.wz/${dir}/0${id}.img`);
       this.equips[realSlot] = equip;
       this.equippedItemIds[realSlot] = id;
+      this.scheduleSpriteWarmup();
       console.log("Adding equip", id, "to slot", realSlot);
       if (targetSlot === 10) {
         this._refreshWeaponVisual();
