@@ -296,7 +296,20 @@ const commands: Record<string, Command> = {
       say(`${n} mobs killed.`);
     },
   },
-  kill: { usage: '!kill', help: 'Alias of !killall.', run: (a) => commands.killall.run(a) },
+  kill: {
+    usage: '!kill [playerName]',
+    help: 'Kill a player (yourself with no name). Mobs: !killall.',
+    run: ([name]) => {
+      if (!name) {
+        void MyCharacter.takeDamage(Math.max(1, Math.floor(MyCharacter.hp)));
+        say('You died.');
+        return;
+      }
+      const sock = (window as any).__mySocket;
+      if (!sock?.sendMessage) { say('Not connected.'); return; }
+      sock.sendMessage({ type: 'gm_kill', data: { name } });
+    },
+  },
 
   spawn: {
     usage: '!spawn <mobId> [count]',
@@ -371,12 +384,34 @@ const commands: Record<string, Command> = {
   },
 };
 
+let socketHooked = false;
+/**
+ * Server replies for the commands that go through it (!kill <name>), and
+ * being killed by a GM — installed for EVERY client at map load (a target
+ * never runs a command itself), idempotent.
+ */
+export function installGmHooks() {
+  hookSocket();
+}
+function hookSocket() {
+  if (socketHooked) return;
+  const sock = (window as any).__mySocket;
+  if (!sock?.on) return;
+  socketHooked = true;
+  sock.on('gm_result', (msg: any) => { if (msg?.data?.message) say(msg.data.message); });
+  sock.on('gm_killed', (msg: any) => {
+    say(`You were killed by ${msg?.data?.by || 'a GM'}.`);
+    void MyCharacter.takeDamage(Math.max(1, Math.floor(MyCharacter.hp)));
+  });
+}
+
 /** Run a "!command" line; false when it is not a known command. */
 export function runDevCommand(line: string): boolean {
   const [raw, ...args] = line.trim().split(/\s+/);
   const name = raw.replace(/^!/, '').toLowerCase();
   const cmd = commands[name];
   if (!cmd) return false;
+  hookSocket();
   Promise.resolve()
     .then(() => cmd.run(args))
     .catch((e) => { console.error(`[!${name}] failed`, e); say(`!${name} failed: ${e?.message || e}`); });

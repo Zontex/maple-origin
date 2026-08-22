@@ -385,6 +385,8 @@ MapleMap.load = async function (id: number | string) {
 
   // Skill sound bank (2.7MB) fetched off the first cast's critical path
   import('./Skills/SkillWarmup').then((m) => m.prefetchSkillSounds()).catch(() => {});
+  // GM messages (being killed by "!kill <name>") — every client listens
+  import('./DevCommands').then((m) => m.installGmHooks()).catch(() => {});
 
   // Party quest lifecycle — leaving the event's map range ends the instance
   HenesysPQ.onMapChanged(Number(id));
