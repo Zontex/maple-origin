@@ -451,7 +451,17 @@ export default class NpcScriptEngine {
     const questManager = character?.questManager;
     const mapNameResolver = (id: number) => engine.mapNameCache.get(id) || `Map ${id}`;
 
+    const isSuperuser = () => !!(window as any).__mySocket?.isSuperuser;
     const playerObjBase = {
+      // GM rank for the scripts that gate on it (KIN / NimaKIN in the GM map
+      // 180000000, a few event NPCs): the account's superuser flag, as the
+      // highest rank Cosmic's scripts check for
+      gmLevel() { return isSuperuser() ? 6 : 0; },
+      isGM() { return isSuperuser(); },
+      isMale() { return (character?.gender || 0) === 0; },
+      isFemale() { return (character?.gender || 0) === 1; },
+      // NimaKIN: one level per click, with the effect
+      levelUp(_show?: boolean) { character?.levelUp?.(); },
       getGender() { return character?.gender || 0; },
       getHp() { return character?.hp ?? 100; },
       getMp() { return character?.mp ?? 100; },

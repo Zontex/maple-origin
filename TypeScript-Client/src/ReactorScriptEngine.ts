@@ -371,7 +371,7 @@ export default class ReactorScriptEngine {
       getParty() { return null; },
       getGuild() { return null; },
       getGuildId() { return 0; },
-      isGM() { return false; },
+      isGM() { return !!(window as any).__mySocket?.isSuperuser; },
       gainExp(amount: number) { character?.addExp?.(Number(amount) || 0, true); },
       gainMeso(amount: number) { if (character?.inventory) character.inventory.mesos = Math.max(0, (character.inventory.mesos || 0) + (Number(amount) || 0)); },
       message(text: string) { showMessage(text); },
