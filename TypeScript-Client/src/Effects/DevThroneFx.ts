@@ -32,17 +32,27 @@ const PUFF_LIFE_MS = 1800;
 
 /**
  * Draw the cigar and advance the smoke for `ch` (a MapleCharacter), given the
- * composed frames' map points. Call right after the body is drawn.
+ * composed frames (each carries its layer's zName and drawn rect). The mouth
+ * is read off the FACE layer's rectangle: v83 faces are 26x16 with the lips
+ * in the bottom rows, a few px toward the way the character looks. Call
+ * right after the body is drawn.
  */
-export function drawDevThroneFx(ch: any, canvas: any, camera: any, mapPoints: any, facingRight: boolean) {
+export function drawDevThroneFx(ch: any, canvas: any, camera: any, frames: any[], moveX: number, moveY: number, facingRight: boolean) {
   ensureArt();
   if (!cigar) return;
-  const brow = mapPoints?.brow;
-  // Mouth: a little below and to the facing side of the brow; without map
-  // data fall back to the seated head's usual place
-  const mx = ch.pos.x + (brow ? brow.x : 0) + (facingRight ? 5 : -5);
-  const my = ch.pos.y + (brow ? brow.y + 14 : -46);
+  const face = (frames || []).find((f: any) => f?.zName === 'face');
   const dir = facingRight ? 1 : -1;
+  let mx: number, my: number;
+  if (face) {
+    const w = Number(face.width) || face.img?.width || 26;
+    const h = Number(face.height) || face.img?.height || 16;
+    mx = ch.pos.x + face.x + moveX + w / 2 + dir * 4;
+    my = ch.pos.y + face.y + moveY + h - 3;
+  } else {
+    // No face layer composed (shouldn't happen seated): the usual seated head
+    mx = ch.pos.x + dir * 4;
+    my = ch.pos.y - 40;
+  }
 
   // Cigar: anchored at the lips, pointing out of the mouth, ember outward
   if (cigar.complete && cigar.width > 0) {

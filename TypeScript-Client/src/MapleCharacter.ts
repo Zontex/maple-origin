@@ -4214,8 +4214,13 @@ isCloseToMob = (inAllDirections = true) => {
       drawableFrames.push({
         img: part.nGetImage(),
         z: this.zmap.indexOf(realZ),
+        // The layer's z name ('face', 'body', 'hair'...) so effects can find
+        // a part's drawn rectangle (the cigar sits on the face layer)
+        zName: realZ,
         x,
         y,
+        width: part.nWidth,
+        height: part.nHeight,
       });
     };
 
@@ -4478,7 +4483,7 @@ isCloseToMob = (inAllDirections = true) => {
 
     // The maker's cigar while seated on the Developer Throne
     if (this.chairId === DEV_THRONE_ID && !this.isDead) {
-      try { drawDevThroneFx(this, canvas, camera, (drawableFrames as any).mapPoints, characterIsFlipped); } catch { /* cosmetic */ }
+      try { drawDevThroneFx(this, canvas, camera, drawableFrames, moveX, moveY, characterIsFlipped); } catch { /* cosmetic */ }
     }
   
     this.bodyRects = [];
