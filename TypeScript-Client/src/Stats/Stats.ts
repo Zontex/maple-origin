@@ -244,7 +244,7 @@ class Stats {
    * The tier ids for a job, mirroring SkillData.getJobTierFileIds. Duplicated
    * rather than imported so Stats stays free of the skill layer.
    */
-  private static tiersFor(jobId: number): number[] {
+  static tiersFor(jobId: number): number[] {
     const base = Math.floor(jobId / 1000) * 1000;
     const tiers = [base];
     if (jobId === base) return tiers;

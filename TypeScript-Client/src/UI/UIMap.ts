@@ -13,6 +13,7 @@ import GameCanvas from "../GameCanvas";
 import UIDevTools from "./UIDevTools";
 import UIHotkeyBar from "./UIHotkeyBar";
 import UIChatLog from "./UIChatLog";
+import { runDevCommand } from "../DevCommands";
 import UIGameMenu from "./UIGameMenu";
 import UIChannelSelect from "./UIChannelSelect";
 import UISystemOption from "./UISystemOption";
@@ -352,65 +353,13 @@ UIMap.doUpdate = function (msPerTick, camera, canvas) {
         }
       } else if (msg.trim()) {
         if (msg[0] === "!") {
-          // Handle command inputs
-          const [command, ...commandArgs] = msg.split(" ");
-          console.log(command, commandArgs);
-          switch (command) {
-            case "!level": {
-              const level = Number(commandArgs[0]);
-              if (!Number.isInteger(level) || level > 250 || level < 1) {
-                break;
-              }
-              if (level > MyCharacter.stats.level) {
-                MyCharacter.playLevelUp();
-              }
-              MyCharacter.stats.level = level;
-              break;
-            }
-            case "!map": {
-              const mapId = Number(commandArgs[0]);
-              if (!Number.isInteger(mapId)) {
-                break;
-              }
-              MapleMap.load(mapId);
-              break;
-            }
-            case "!item": {
-              // Dev: "!item <id> [count]" — any item by id, refused when
-              // String.wz has no name for it (so a typo can't forge an item)
-              const itemId = Number(commandArgs[0]);
-              const count = Math.max(1, Math.min(1000, Number(commandArgs[1]) || 1));
-              if (!Number.isInteger(itemId) || itemId < 1000000) {
-                UIChatLog.system('Usage: !item <itemId> [count]');
-                break;
-              }
-              import('../Quest/QuestData').then(async ({ ensureItemNames, itemNames }) => {
-                await ensureItemNames();
-                // getItemNameSync falls back to the word 'item' — look the
-                // map up directly so a v83-less id (1052112) is refused
-                const name = itemNames.get(itemId);
-                if (!name) {
-                  UIChatLog.system(`No item with id ${itemId}.`);
-                  return;
-                }
-                const ok = await MyCharacter.inventory.addToInventory(itemId, count);
-                UIChatLog.system(ok === false
-                  ? `Could not add ${name} (${itemId}) — tab full?`
-                  : `Gained ${name} (${itemId}) x${count}.`);
-              }).catch((e: any) => {
-                console.error('[!item] failed', e);
-                UIChatLog.system(`Could not add item ${itemId}.`);
-              });
-              break;
-            }
-            default: {
-              // Not a dev command: "!text" is guild chat (delivered to every
-              // online member by the server, echoed back to us too)
-              import('../Guild/GuildManager').then(({ default: GuildManager }) => {
-                GuildManager.chat(msg.slice(1));
-              }).catch(() => {});
-              break;
-            }
+          // GM / dev commands (DevCommands.ts: !help lists them); anything
+          // else with a leading "!" is guild chat (delivered to every online
+          // member by the server, echoed back to us too)
+          if (!runDevCommand(msg)) {
+            import('../Guild/GuildManager').then(({ default: GuildManager }) => {
+              GuildManager.chat(msg.slice(1));
+            }).catch(() => {});
           }
         } else if (BuddyManager.handleChatCommand(msg)) {
           // /w, /r, /find and @name — whispers never go out as map chat
